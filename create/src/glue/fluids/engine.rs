@@ -151,20 +151,7 @@ pub(super) fn tick(lv: &mut ServerLevel<'_>) {
 /// `SteamEngineBlockEntity.getShaft().hasSource()`: another source turns the shaft in front
 /// of the engine at `pos` (its value box is then inactive).
 pub(crate) fn engine_sourced(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
-    let Some((Block::SteamEngine, info)) = super::info_at(lv, pos) else {
-        return false;
-    };
-    let (Some(face), Some(f)) = (info.face, info.facing) else {
-        return false;
-    };
-    let shaft =
-        create_engine::steam::shaft_pos(pos, create_engine::steam::connected_direction(face, f));
-    if super::info_at(lv, shaft).map(|(b, _)| b) != Some(Block::PoweredShaft) {
-        return false;
-    }
-    let dim = lv.dim;
-    super::super::world::with_world(|w| w.dims[dim].kinetics.driven_elsewhere(shaft, 0))
-        == Some(true)
+    super::super::world::with_world(|w| !w.value_box_active(lv.dim, pos)) == Some(true)
 }
 
 /// The shaft speed an engine's data shows.

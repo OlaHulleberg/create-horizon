@@ -6,6 +6,33 @@
 
 use crate::kinetics::{Axis, Dir};
 
+/// The suppliers installed with `ScrollValueBehaviour.onlyActiveWhen` and
+/// `FilteringBehaviour.onlyActiveWhen`. Activity belongs to the behaviour, not its geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Activity {
+    Always,
+    IdleValve,
+    UndrivenSteamShaft,
+    DistributingTunnel,
+    BrassFilter,
+}
+
+impl Activity {
+    /// Create's `addBehaviours` declarations on valve handles, steam engines, tunnels and funnels.
+    pub fn of(block: crate::Block) -> Self {
+        use crate::Block as B;
+        match block {
+            b if crate::dye::is_valve_handle(b) => Self::IdleValve,
+            B::SteamEngine => Self::UndrivenSteamShaft,
+            B::BrassTunnel => Self::DistributingTunnel,
+            B::AndesiteFunnel | B::AndesiteBeltFunnel | B::BrassFunnel | B::BrassBeltFunnel => {
+                Self::BrassFilter
+            }
+            _ => Self::Always,
+        }
+    }
+}
+
 /// `ValueSettingsBehaviour.ValueSettings`: a row of the board and a column on it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Settings {

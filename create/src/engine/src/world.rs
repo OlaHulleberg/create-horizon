@@ -2299,6 +2299,41 @@ impl CreateWorld {
         true
     }
 
+    /// `ValueSettingsBehaviour.isActive`: evaluate the behaviour's `onlyActiveWhen`
+    /// supplier against current block-entity state, independently of its hit transform.
+    pub fn value_box_active(&self, dim: usize, pos: [i32; 3]) -> bool {
+        let d = &self.dims[dim];
+        let Some((block, info)) = d.states.get(&pos).and_then(|s| self.table.get(*s)) else {
+            return true;
+        };
+        match crate::board::Activity::of(block) {
+            crate::board::Activity::Always => true,
+            crate::board::Activity::IdleValve => !d.cranks.contains_key(&pos),
+            crate::board::Activity::UndrivenSteamShaft => {
+                let Some(connected) = engine_facing(info) else {
+                    return true;
+                };
+                let shaft = crate::steam::shaft_pos(pos, connected);
+                let available = self.block_at(dim, shaft) == Some(Block::PoweredShaft)
+                    && d.shaft_engine.get(&shaft).is_none_or(|e| *e == pos);
+                !available || !d.kinetics.driven_elsewhere(shaft, 0)
+            }
+            crate::board::Activity::DistributingTunnel => match (info.axis, info.tunnel) {
+                (Some(axis), Some(shape)) => crate::tunnel::distributes(axis, shape, |side| {
+                    let o = side.offset();
+                    matches!(
+                        self.block_at(dim, [pos[0] + o[0], pos[1], pos[2] + o[2]]),
+                        Some(Block::AndesiteTunnel | Block::BrassTunnel)
+                    )
+                }),
+                _ => false,
+            },
+            crate::board::Activity::BrassFilter => {
+                matches!(block, Block::BrassFunnel | Block::BrassBeltFunnel)
+            }
+        }
+    }
+
     /// A player uses the valve handle at `pos` (`ValveHandleBlockEntity.activate`): not while
     /// something else turns it (`getTheoreticalSpeed`), while it turns or for its cooldown;
     /// else it turns at 32 RPM, for as many ticks as its angle `value` (its value box's,
@@ -5062,7 +5097,9 @@ mod tests {
         w.block_changed(0, [0, 0, 0], 0, 10);
         w.block_changed(0, [1, 0, 0], 0, 11);
         w.tick(0, &mut Vec::new());
+        assert!(w.value_box_active(0, [0, 0, 0]));
         assert!(w.use_valve(0, [0, 0, 0], false, 45));
+        assert!(!w.value_box_active(0, [0, 0, 0]));
         assert!(!w.use_valve(0, [0, 0, 0], false, 45), "not while it turns");
         w.tick(0, &mut Vec::new());
         // HandCrankBlockEntity.getGeneratedSpeed: 32 in its facing's direction.
@@ -5080,6 +5117,10 @@ mod tests {
         w.tick_cranks(0);
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [1, 0, 0]), Some(0.0), "stopped after 7");
+        assert!(
+            w.value_box_active(0, [0, 0, 0]),
+            "cooldown does not hide the box"
+        );
         // The cooldown: 4, counted from the tick it stopped.
         for _ in 0..3 {
             assert!(!w.use_valve(0, [0, 0, 0], true, 45), "cooling down");

@@ -740,7 +740,7 @@ impl BlockEntityPart for KineticEntity {
     ) -> Option<Compound> {
         // The speeds, and what other subsystems keep in the same block entity for its clients:
         // every synced key, `absent()` for one the block entity doesn't hold (`synced`).
-        let mut shown: Compound = [SPEEDS, THEORY, OVER, BRACKET]
+        let mut shown: Compound = [SPEEDS, THEORY, OVER, BRACKET, SAVED_KINETICS]
             .into_iter()
             .chain(
                 super::SUBSYSTEMS

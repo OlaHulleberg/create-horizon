@@ -140,6 +140,7 @@ pub(crate) fn draw(host: &dyn ClientHost, pos: [i32; 3], draw: &mut dyn BlockEnt
             crate::glue::logistics::client::ejector_charged,
             pos,
             side,
+            values::client_active(host, pos),
         )
     })
     .flatten() else {

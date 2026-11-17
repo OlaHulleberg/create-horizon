@@ -78,6 +78,11 @@ fn use_of(data: &Compound) -> Option<(i64, u8, i32, bool)> {
     ))
 }
 
+/// `ValveHandleBlockEntity.showValue`: the box returns exactly when `inUse` ends.
+pub(crate) fn value_active(data: &Compound) -> bool {
+    use_of(data).is_none_or(|(start, ticks, ..)| NOW.get() >= start + i64::from(ticks))
+}
+
 /// A crank's handle on a client: its angle, the speed it chases at, and the ticks left of its
 /// use as this client knows it (`inUse`: 10 from its own player's click, else while it generates).
 #[derive(Clone, Copy, Default)]

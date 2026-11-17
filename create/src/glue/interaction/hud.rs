@@ -598,6 +598,7 @@ pub(super) fn value_box_outline(
                 crate::glue::logistics::client::ejector_charged,
                 pos,
                 side,
+                super::values::client_active(host, pos),
             )
         })
         .flatten();

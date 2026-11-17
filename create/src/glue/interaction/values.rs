@@ -63,6 +63,75 @@ pub(crate) fn may_use_value_box(host: &dyn Host, player: PlayerRef) -> bool {
         )
 }
 
+/// Read the behaviour's activity from the current client block entity.
+pub(crate) fn client_active(host: &dyn mod_api::ClientHost, pos: [i32; 3]) -> bool {
+    let block = super::super::client_table(host, |t| {
+        t.get(super::board::block_at(host, pos)).map(|(b, _)| b)
+    })
+    .flatten();
+    let data = host
+        .level(host.dimension())
+        .and_then(|l| host.block_entity(l, pos))
+        .and_then(|e| e.data(host));
+    match block.map(board::Activity::of) {
+        Some(board::Activity::IdleValve) => data
+            .as_ref()
+            .is_none_or(super::super::sources::handles::value_active),
+        Some(board::Activity::UndrivenSteamShaft) => super::super::client_table(host, |t| {
+            let Some((_, info)) = t.get(super::board::block_at(host, pos)) else {
+                return true;
+            };
+            let Some(connected) = info
+                .face
+                .zip(info.facing)
+                .map(|(face, facing)| create_engine::steam::connected_direction(face, facing))
+            else {
+                return true;
+            };
+            let shaft = create_engine::steam::shaft_pos(pos, connected);
+            if t.get(super::board::block_at(host, shaft)).map(|(b, _)| b) != Some(B::PoweredShaft) {
+                return true;
+            }
+            host.level(host.dimension())
+                .and_then(|l| host.block_entity(l, shaft))
+                .and_then(|e| e.data(host))
+                .is_none_or(|d| {
+                    let Some(mod_api::Tag::Compound(ports)) = d.get(&"KineticState".into()) else {
+                        return true;
+                    };
+                    let Some(mod_api::Tag::Compound(port)) = ports.get(&"0".into()) else {
+                        return true;
+                    };
+                    !port.contains_key(&"Source".into())
+                })
+        })
+        .unwrap_or(true),
+        Some(board::Activity::DistributingTunnel) => super::super::client_table(host, |t| {
+            let Some((_, info)) = t.get(super::board::block_at(host, pos)) else {
+                return false;
+            };
+            match (info.axis, info.tunnel) {
+                (Some(axis), Some(shape)) => {
+                    create_engine::tunnel::distributes(axis, shape, |side| {
+                        let o = side.offset();
+                        t.get(super::board::block_at(
+                            host,
+                            [pos[0] + o[0], pos[1], pos[2] + o[2]],
+                        ))
+                        .is_some_and(|(b, _)| matches!(b, B::AndesiteTunnel | B::BrassTunnel))
+                    })
+                }
+                _ => false,
+            }
+        })
+        .unwrap_or(false),
+        Some(board::Activity::BrassFilter) => {
+            matches!(block, Some(B::BrassFunnel | B::BrassBeltFunnel))
+        }
+        _ => true,
+    }
+}
+
 /// Whether a hit at `local` (in the block) on its face `side` lands on the active value box of
 /// the block at `pos` (`ValueSettingsInputHandler.onBlockActivated`: `isActive`,
 /// `Sided.isSideActive`, `testHit`): a creative motor's speed, a brass diode's delay, a
@@ -73,11 +142,15 @@ pub(crate) fn value_box_hit(
     charged: impl Fn([i32; 3]) -> bool,
     pos: [i32; 3],
     side: Dir,
+    active: bool,
     local: [f64; 3],
 ) -> bool {
     let Some((block, info)) = table.get(block_at(pos)) else {
         return false;
     };
+    if !active {
+        return false;
+    }
     // Boxes tested by their own reach.
     if create_engine::dye::is_valve_handle(block) {
         return info
@@ -92,7 +165,8 @@ pub(crate) fn value_box_hit(
             d2.sqrt() < r
         });
     }
-    value_box_slot(table, block_at, charged, pos, side).is_some_and(|s| board::hits_box(s, local))
+    value_box_slot(table, block_at, charged, pos, side, active)
+        .is_some_and(|s| board::hits_box(s, local))
 }
 
 /// The centre of the active value box on `side` of the block at `pos`, in the block's own
@@ -103,7 +177,11 @@ pub(crate) fn value_box_slot(
     charged: impl Fn([i32; 3]) -> bool,
     pos: [i32; 3],
     side: Dir,
+    active: bool,
 ) -> Option<[f64; 3]> {
+    if !active {
+        return None;
+    }
     let (block, info) = table.get(block_at(pos))?;
     if create_engine::dye::is_valve_handle(block) {
         return info.facing.and_then(|f| board::valve_slot(f, side));
@@ -157,19 +235,7 @@ pub(crate) fn value_box_slot(
         (B::WeightedEjector, ..) => info
             .facing
             .and_then(|f| board::ejector_slot(f, side, charged(pos))),
-        // `selectionMode.onlyActiveWhen(this::hasDistributionBehaviour)`.
-        (B::BrassTunnel, Some(axis), Some(shape)) => {
-            let tunnel = |d: Dir| {
-                let o = d.offset();
-                let s = block_at([pos[0] + o[0], pos[1], pos[2] + o[2]]);
-                table
-                    .get(s)
-                    .is_some_and(|(b, _)| matches!(b, B::AndesiteTunnel | B::BrassTunnel))
-            };
-            create_engine::tunnel::distributes(axis, shape, tunnel)
-                .then(|| board::tunnel_mode_slot(side))
-                .flatten()
-        }
+        (B::BrassTunnel, ..) => board::tunnel_mode_slot(side),
         _ => None,
     }
 }
@@ -285,7 +351,15 @@ pub(super) fn right_click(host: &mut dyn ServerHost, event: &mut RightClickBlock
     );
     let hit = with_world(|w| {
         wrench_fits(&w.table, lv.block(pos), wrench)
-            && value_box_hit(&w.table, |p| lv.block(p), charged, pos, side, local)
+            && value_box_hit(
+                &w.table,
+                |p| lv.block(p),
+                charged,
+                pos,
+                side,
+                w.value_box_active(dim, pos),
+                local,
+            )
     });
     if hit != Some(true) {
         return Flow::Continue;
@@ -602,5 +676,52 @@ pub(crate) fn direction(d: Dir) -> Direction {
         Dir::South => Direction::South,
         Dir::West => Direction::West,
         Dir::East => Direction::East,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inactive_value_boxes_pass_centred_clicks() {
+        create_engine::states::set_range(10, 2);
+        let table = StateTable::new(
+            10,
+            [
+                ("create:copper_valve_handle", vec![("facing", "up")]),
+                (
+                    "create:steam_engine",
+                    vec![("face", "wall"), ("facing", "north")],
+                ),
+            ]
+            .into_iter()
+            .map(|(name, props)| (name, props.into_iter())),
+        );
+        for state in [10, 11] {
+            let block_at = |_| state;
+            for side in Dir::ALL {
+                assert!(!value_box_hit(
+                    &table,
+                    block_at,
+                    |_| false,
+                    [0; 3],
+                    side,
+                    false,
+                    [0.5; 3]
+                ));
+                assert!(value_box_slot(&table, block_at, |_| false, [0; 3], side, false).is_none());
+            }
+        }
+        assert!(value_box_hit(
+            &table,
+            |_| 10,
+            |_| false,
+            [0; 3],
+            Dir::Up,
+            true,
+            [0.5; 3]
+        ));
+        create_engine::states::clear_range();
     }
 }

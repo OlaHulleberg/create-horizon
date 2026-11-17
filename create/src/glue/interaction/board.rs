@@ -216,6 +216,7 @@ pub(super) fn hovered_slot(host: &dyn ClientHost) -> Option<([i32; 3], Dir, [f64
             crate::glue::logistics::client::ejector_charged,
             pos,
             side,
+            values::client_active(host, pos),
         )
     })
     .flatten()?;
@@ -237,6 +238,7 @@ fn hits_value_box(host: &dyn ClientHost, pos: [i32; 3], face: [i32; 3], point: [
                 crate::glue::logistics::client::ejector_charged,
                 pos,
                 side,
+                values::client_active(host, pos),
                 local,
             )
     }) == Some(true)
