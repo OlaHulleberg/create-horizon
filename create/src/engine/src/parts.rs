@@ -180,9 +180,6 @@ pub struct Settings {
     pub sequence: i8,
     /// What drives a powered shaft: its steam engine's direction and efficiency.
     pub steam: crate::steam::Output,
-    /// The sequence context a valve handle in use or a sequenced gearshift's running turn hands
-    /// on (`sequenceContext`).
-    pub context: Option<crate::kinetics::Context>,
 }
 
 impl Default for Settings {
@@ -196,7 +193,6 @@ impl Default for Settings {
             signal: 0,
             sequence: 0,
             steam: crate::steam::Output::default(),
-            context: None,
         }
     }
 }
@@ -302,12 +298,12 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         Block::SequencedGearshift => s.axis.map_or([None, None], |a| {
             let a = if s.vertical { Axis::Y } else { a };
             let first = Part {
-                context: crate::kinetics::SequenceContextSource::Owned(None),
+                context: crate::kinetics::SequenceContextSource::Owned,
                 ..Part::half(Dir::from_axis(a, false))
             };
             let second = Part {
                 couple: Some(Couple::Relay(f32::from(settings.sequence))),
-                context: crate::kinetics::SequenceContextSource::Owned(settings.context),
+                context: crate::kinetics::SequenceContextSource::Owned,
                 ..Part::half(Dir::from_axis(a, true))
             };
             [Some(with_stress(first)), Some(with_stress(second))]
@@ -339,7 +335,7 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
                     generated: convert_to_direction(f32::from(settings.crank) * CRANK_RPM, f),
                     impact: Block::CopperValveHandle.impact(),
                     capacity: Block::CopperValveHandle.capacity(),
-                    context: crate::kinetics::SequenceContextSource::Owned(settings.context),
+                    context: crate::kinetics::SequenceContextSource::Owned,
                     ..Part::half(f.opposite())
                 }),
                 None,

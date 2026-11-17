@@ -2542,21 +2542,14 @@ impl CreateWorld {
         };
         let old = d.settings.get(&pos).copied().unwrap_or_default();
         // `SequenceContext.fromGearshift(TURN_ANGLE, rotationSpeed, target)`.
-        let context = Some(crate::kinetics::Context {
+        let context = crate::kinetics::Context {
             distance: false,
             value: value.unsigned_abs() as f32,
             run: 0,
-        });
-        self.set_settings(
-            dim,
-            pos,
-            state,
-            Settings {
-                crank,
-                context,
-                ..old
-            },
-        );
+        };
+        d.kinetics
+            .set_sequence_context(pos, 0, Some((context, context.value / 32.0)));
+        self.set_settings(dim, pos, state, Settings { crank, ..old });
         true
     }
 
@@ -2585,16 +2578,8 @@ impl CreateWorld {
             let d = &mut self.dims[dim];
             if let (Some(&state), Some(old)) = (d.states.get(&pos), d.settings.get(&pos).copied()) {
                 // `HandCrankBlockEntity.tick`: the context goes when it stops.
-                self.set_settings(
-                    dim,
-                    pos,
-                    state,
-                    Settings {
-                        crank: 0,
-                        context: None,
-                        ..old
-                    },
-                );
+                d.kinetics.set_sequence_context(pos, 0, None);
+                self.set_settings(dim, pos, state, Settings { crank: 0, ..old });
             }
         }
     }
@@ -2646,20 +2631,7 @@ impl CreateWorld {
             .handles
             .insert(pos, crate::valve::Handle { saved, cooldown: 0 });
         // HandCrankBlockEntity.read restores fields without updateGeneratedRotation.
-        // ValveHandleBlockEntity.read retains the use's SequenceContext. Keep
-        // the owned input alongside it so later speed changes do not clear it.
-        let context = (crate::dye::is_valve_handle(self.block_at(dim, pos).unwrap())
-            && saved.in_use > 0)
-            .then_some(crate::kinetics::Context {
-                distance: false,
-                value: saved.angle.unsigned_abs() as f32,
-                run: 0,
-            });
-        let settings = Settings {
-            crank,
-            context,
-            ..old
-        };
+        let settings = Settings { crank, ..old };
         self.dims[dim].settings.insert(pos, settings);
         if let Some((block, info)) = self.table.get(state) {
             let [a, b] = parts(block, info, &settings);
@@ -3013,7 +2985,9 @@ impl CreateWorld {
             .sequencers
             .get_mut(&pos)?
             .redstone(powered, running);
-        self.sequencer_stepped(dim, pos);
+        if step.is_some() {
+            self.sequencer_stepped(dim, pos);
+        }
         step
     }
 
@@ -3041,7 +3015,6 @@ impl CreateWorld {
         s.overstressed = overstressed;
         // read restores fields; it does not run an instruction or detach kinetics.
         let modifier = s.modifier() as i8;
-        let context = s.context();
         let ticks = s.ticks();
         let d = &mut self.dims[dim];
         d.sequencing.retain(|p| *p != pos);
@@ -3050,7 +3023,6 @@ impl CreateWorld {
         }
         let settings = d.settings.entry(pos).or_default();
         settings.sequence = modifier;
-        settings.context = context;
         if let Some((block, info)) = d.states.get(&pos).and_then(|state| self.table.get(*state)) {
             for (sub, part) in parts(block, info, settings).into_iter().enumerate() {
                 if let Some(part) = part {
@@ -3135,8 +3107,10 @@ impl CreateWorld {
         };
         if let Some(step) = s.speed_changed(speed, overstressed) {
             self.dims[dim].sequencer_steps.push((pos, step));
+            // onSpeedChanged only assigns a new context when it actually runs
+            // an instruction. In particular, load notifications preserve read's Sequence.
+            self.sequencer_stepped(dim, pos);
         }
-        self.sequencer_stepped(dim, pos);
     }
 
     /// After a sequenced gearshift's step: it ticks while an instruction runs, and its far half
@@ -3152,19 +3126,31 @@ impl CreateWorld {
             d.sequencing.push(pos);
         }
         let old = d.settings.get(&pos).copied().unwrap_or_default();
-        if (old.sequence != modifier || old.context != context)
+        let previous = d
+            .kinetics
+            .saved_state(pos, 1)
+            .and_then(|s| s.sequence)
+            .map(|s| s.0);
+        if (old.sequence != modifier || previous != context)
             && let Some(&state) = d.states.get(&pos)
         {
+            let speed = d.kinetics.theoretical(pos, 0).map_or(0.0, |s| s.0) * f32::from(modifier);
+            let sequence = context.map(|c| (c, if speed == 0.0 { 0.0 } else { c.value / speed }));
+            if old.sequence == modifier {
+                d.kinetics.restart_sequence_output(pos);
+            }
             self.set_settings(
                 dim,
                 pos,
                 state,
                 Settings {
                     sequence: modifier,
-                    context,
                     ..old
                 },
             );
+            self.dims[dim]
+                .kinetics
+                .set_sequence_context(pos, 1, sequence);
         }
     }
 
@@ -6396,7 +6382,6 @@ mod tests {
         w.dims[0].kinetics.restore_state(p, 0, kinetic);
         w.tick_cranks(0);
         w.tick(0, &mut Vec::new());
-        assert_eq!(w.dims[0].settings[&p].context.unwrap().value, 180.0);
         assert_eq!(
             w.dims[0]
                 .kinetics
@@ -6408,6 +6393,69 @@ mod tests {
                 .value,
             180.0
         );
+        states::clear_range();
+    }
+
+    #[test]
+    fn valve_load_uses_serialized_sequence_even_when_it_disagrees_with_angle() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        states::set_range(10, 3);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            [
+                ("create:copper_valve_handle", [("facing", "up")].into_iter()),
+                ("create:red_valve_handle", [("facing", "up")].into_iter()),
+                ("create:creative_motor", [("facing", "up")].into_iter()),
+            ]
+            .into_iter(),
+        ));
+        let p = [0, 8, 0];
+        w.block_changed(0, p, 0, 10);
+        w.tick(0, &mut Vec::new());
+        assert!(w.use_valve(0, p, false, 180));
+        let handle = w.saved_handle(0, p).unwrap();
+        let mut kinetic = w.dims[0].kinetics.saved_state(p, 0).unwrap();
+        // KineticBlockEntity.read reads Sequence independently of angleInput/InUse.
+        for sequence in [
+            Some((
+                crate::kinetics::Context {
+                    distance: true,
+                    value: 73.0,
+                    run: 9,
+                },
+                -2.5,
+            )),
+            None,
+        ] {
+            kinetic.sequence = sequence;
+            w.column_unloaded(0, 0, 0);
+            w.block_loaded(0, p, 10);
+            w.restore_handle(0, p, handle);
+            assert!(w.dims[0].kinetics.restore_state(p, 0, kinetic));
+            w.tick_cranks(0);
+            w.tick(0, &mut Vec::new());
+            w.block_changed(0, p, 10, 11);
+            w.tick_cranks(0);
+            w.tick(0, &mut Vec::new());
+            // An external source changes this owner's speed; Java setSpeed does
+            // not recalculate the saved Sequence from the valve's angleInput.
+            w.block_changed(0, [0, 7, 0], 0, 12);
+            w.set_settings(
+                0,
+                [0, 7, 0],
+                12,
+                Settings {
+                    motor_rpm: 64.0,
+                    ..Default::default()
+                },
+            );
+            w.tick(0, &mut Vec::new());
+            assert_eq!(w.speed(0, p), Some(64.0));
+            assert_eq!(
+                w.dims[0].kinetics.saved_state(p, 0).unwrap().sequence,
+                sequence
+            );
+        }
         states::clear_range();
     }
 

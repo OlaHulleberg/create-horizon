@@ -131,21 +131,8 @@ impl Kinetics {
         // KineticBlockEntity.setSpeed/onSpeedChanged do not enroll members.
         // switchToBlockState detaches while the old network id is still present.
         // Membership belongs to setNetwork/add and generator stress updates.
-        self.sync_owned_context(id);
         if changed {
             self.mark_changed(id);
-        }
-    }
-
-    /// Apply the context owned by run/use, including explicit clearing.
-    pub(super) fn sync_owned_context(&mut self, id: u32) {
-        let n = &mut self.nodes[id as usize];
-        if matches!(n.part.context, super::SequenceContextSource::Owned(_)) {
-            let seq = n.part.context.at_speed(n.state.theoretical);
-            if n.state.seq != seq {
-                n.state.seq = seq;
-                self.mark_changed(id);
-            }
         }
     }
 

@@ -187,9 +187,8 @@ pub struct Part {
     /// A speed set across to another part instead of a ratio: a rotation speed controller's, or a
     /// sequenced gearshift's second half.
     pub couple: Option<Couple>,
-    /// The sequence context it hands the parts it turns (`KineticBlockEntity.sequenceContext`):
-    /// a valve handle's use, on its part; a sequenced gearshift's running instruction, on its
-    /// second half (for whichever half it turns).
+    /// Whether copySequenceContextFrom inherits or is overridden with a no-op.
+    /// The context value itself lives only in KineticState.seq (and its saved record).
     pub context: SequenceContextSource,
     /// A gantry shaft or carriage, which a powered shaft and the carriage on it join across
     /// (`GantryShaftBlockEntity.isCustomConnection`, `propagateRotationTo`).
@@ -239,18 +238,7 @@ pub struct Context {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SequenceContextSource {
     Inherited,
-    Owned(Option<Context>),
-}
-
-impl SequenceContextSource {
-    fn at_speed(self, speed: f32) -> Option<(Context, f32)> {
-        match self {
-            Self::Owned(context) => {
-                context.map(|c| (c, if speed == 0.0 { 0.0 } else { c.value / speed }))
-            }
-            Self::Inherited => None,
-        }
-    }
+    Owned,
 }
 
 /// The chain of an encased chain drive or adjustable chain gearshift: the axis it runs along
@@ -642,6 +630,42 @@ impl Kinetics {
         true
     }
 
+    /// Explicit assignment to KineticBlockEntity.sequenceContext by activate/run/tick.
+    /// read restores the same field through restore_state; part settings never replace it.
+    pub fn set_sequence_context(
+        &mut self,
+        pos: [i32; 3],
+        sub: u8,
+        sequence: Option<(Context, f32)>,
+    ) {
+        let Some(id) = self
+            .at
+            .get(&pos)
+            .map(|ids| ids[sub as usize])
+            .filter(|&id| id != NONE)
+        else {
+            return;
+        };
+        if self.nodes[id as usize].state.seq != sequence {
+            self.nodes[id as usize].state.seq = sequence;
+            self.mark_changed(id);
+        }
+    }
+
+    /// SequencedGearshiftBlockEntity.run detaches its output even when the next
+    /// instruction has the same modifier. The input half retains its source/network.
+    pub(crate) fn restart_sequence_output(&mut self, pos: [i32; 3]) {
+        let Some(id) = self.at.get(&pos).map(|ids| ids[1]).filter(|&id| id != NONE) else {
+            return;
+        };
+        let mut events = Vec::new();
+        self.handle_removed(id, &mut events);
+        self.remove_source(id);
+        self.nodes[id as usize].state.update_speed = true;
+        self.dirty.push(id);
+        self.pending_events.extend(events);
+    }
+
     /// Effects of synchronous RotationPropagator calls (including destroyBlock).
     /// Hosts apply these before publishing an accepted interaction, without ticking.
     pub fn take_pending_events(&mut self) -> Vec<Event> {
@@ -740,13 +764,11 @@ impl Kinetics {
             // detach the old state before installing the new state (GearshiftBlock).
             if old.generated != part.generated {
                 self.nodes[existing as usize].part = part;
-                self.sync_owned_context(existing);
                 self.update_generated_rotation(existing, &mut events);
             } else {
                 self.handle_removed(existing, &mut events);
                 self.remove_source(existing);
                 self.nodes[existing as usize].part = part;
-                self.sync_owned_context(existing);
                 self.nodes[existing as usize].state.update_speed = true;
             }
             self.pending_events.extend(events);
@@ -2757,10 +2779,11 @@ mod tests {
             1,
             Part {
                 couple: Some(Couple::Relay(2.0)),
-                context: SequenceContextSource::Owned(Some(ctx(false, 90.0))),
+                context: SequenceContextSource::Owned,
                 ..Part::half(Dir::East)
             },
         );
+        k.set_sequence_context([0, 0, 0], 1, Some((ctx(false, 90.0), 90.0 / 24.0)));
         k.set([1, 0, 0], 0, Part::cog(Axis::X, false));
         k.set([1, 1, 1], 0, Part::cog(Axis::X, true));
         solve(&mut k);
@@ -2779,12 +2802,21 @@ mod tests {
             1,
             Part {
                 couple: Some(Couple::Relay(2.0)),
-                context: SequenceContextSource::Owned(Some(Context {
-                    run: 2,
-                    ..ctx(false, 90.0)
-                })),
+                context: SequenceContextSource::Owned,
                 ..Part::half(Dir::East)
             },
+        );
+        k.detach_transmission([0, 0, 0]);
+        k.set_sequence_context(
+            [0, 0, 0],
+            1,
+            Some((
+                Context {
+                    run: 2,
+                    ..ctx(false, 90.0)
+                },
+                90.0 / 24.0,
+            )),
         );
         let e = solve(&mut k);
         assert!(
@@ -2798,10 +2830,11 @@ mod tests {
             [0, 0, 0],
             0,
             Part {
-                context: SequenceContextSource::Owned(Some(ctx(false, 45.0))),
+                context: SequenceContextSource::Owned,
                 ..motor(Dir::East, 32.0)
             },
         );
+        k.set_sequence_context([0, 0, 0], 0, Some((ctx(false, 45.0), 45.0 / 32.0)));
         k.set([1, 0, 0], 0, Part::shaft(Axis::X));
         solve(&mut k);
         assert_eq!(k.sequence_limit([1, 0, 0], 0, false), Some(45.0));
@@ -2816,19 +2849,27 @@ mod tests {
             [-1, 0, 0],
             0,
             Part {
-                context: SequenceContextSource::Owned(Some(Context {
+                context: SequenceContextSource::Owned,
+                ..motor(Dir::East, 32.0)
+            },
+        );
+        k.set_sequence_context(
+            [-1, 0, 0],
+            0,
+            Some((
+                Context {
                     distance: false,
                     value: 90.0,
                     run: 1,
-                })),
-                ..motor(Dir::East, 32.0)
-            },
+                },
+                90.0 / 32.0,
+            )),
         );
         k.set(
             [0, 0, 0],
             0,
             Part {
-                context: SequenceContextSource::Owned(None),
+                context: SequenceContextSource::Owned,
                 ..Part::shaft(Axis::X)
             },
         );

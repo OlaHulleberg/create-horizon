@@ -211,7 +211,6 @@ impl Kinetics {
             let n = &mut self.nodes[root as usize];
             n.state.theoretical = n.part.generated;
             n.state.net = Some(network_id(n.pos));
-            n.state.seq = n.part.context.at_speed(n.part.generated);
             reached.insert(root);
             queue.push_front(root);
         }
