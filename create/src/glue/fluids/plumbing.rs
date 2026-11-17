@@ -286,9 +286,9 @@ fn tick_valves(lv: &mut ServerLevel<'_>) {
         })
         .collect();
     let changes = with_world(|w| {
-        w.dims[dim]
-            .plumbing
-            .tick_valves(|p| open.iter().find(|(q, _)| *q == p).and_then(|(_, e)| *e))
+        w.tick_valves(dim, |p| {
+            open.iter().find(|(q, _)| *q == p).and_then(|(_, e)| *e)
+        })
     })
     .unwrap_or_default();
     for (pos, open) in changes {

@@ -75,13 +75,18 @@ impl Plumbing {
     pub fn tick_valves(
         &mut self,
         open: impl Fn([i32; 3]) -> Option<bool>,
+        mut changed: impl FnMut([i32; 3]),
     ) -> Vec<([i32; 3], bool)> {
         let mut out = Vec::new();
         for (pos, pointer) in &mut self.valves {
-            if let Some(enabled) = open(*pos)
-                && let Some(next) = pointer.tick(enabled)
-            {
-                out.push((*pos, next));
+            if let Some(enabled) = open(*pos) {
+                let before = *pointer;
+                if let Some(next) = pointer.tick(enabled) {
+                    out.push((*pos, next));
+                }
+                if *pointer != before {
+                    changed(*pos);
+                }
             }
         }
         out
@@ -149,8 +154,8 @@ mod tests {
         let mut p = Plumbing::default();
         p.valve_placed(pos);
         assert_eq!(p.valves[&pos], Pointer::default());
-        assert_eq!(p.tick_valves(|_| Some(true)), [(pos, false)]);
-        assert!(p.tick_valves(|_| Some(false)).is_empty());
+        assert_eq!(p.tick_valves(|_| Some(true), |_| {}), [(pos, false)]);
+        assert!(p.tick_valves(|_| Some(false), |_| {}).is_empty());
     }
 
     #[test]
@@ -160,16 +165,16 @@ mod tests {
         p.valve_placed(pos);
         p.valve_speed(pos, 64.0);
         for expected in [0.2, 0.4, 0.6, 0.8] {
-            assert!(p.tick_valves(|_| Some(false)).is_empty());
+            assert!(p.tick_valves(|_| Some(false), |_| {}).is_empty());
             assert!((p.valves[&pos].value - expected).abs() < 1e-6);
         }
-        assert_eq!(p.tick_valves(|_| Some(false)), [(pos, true)]);
+        assert_eq!(p.tick_valves(|_| Some(false), |_| {}), [(pos, true)]);
         p.valve_speed(pos, 0.0);
         p.valve_placed(pos);
         assert_eq!(p.valves[&pos].value, 1.0);
-        assert_eq!(p.tick_valves(|_| Some(false)), [(pos, true)]);
+        assert_eq!(p.tick_valves(|_| Some(false), |_| {}), [(pos, true)]);
         p.valve_speed(pos, -320.0);
-        assert_eq!(p.tick_valves(|_| Some(true)), [(pos, false)]);
+        assert_eq!(p.tick_valves(|_| Some(true), |_| {}), [(pos, false)]);
         assert!(!p.removed(pos));
         assert!(p.valves.is_empty());
     }

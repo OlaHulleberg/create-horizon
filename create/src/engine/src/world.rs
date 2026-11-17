@@ -2254,7 +2254,11 @@ impl CreateWorld {
             // Valves chase their pointer, hoses move (`onSpeedChanged`).
             if let Event::Speed { pos, speed, .. } = *e {
                 if d.plumbing.valves.contains_key(&pos) {
+                    let before = d.plumbing.valves[&pos];
                     d.plumbing.valve_speed(pos, speed);
+                    if d.plumbing.valves[&pos] != before {
+                        d.kinetics.mark_saved_changed(pos);
+                    }
                 }
                 if d.plumbing.hoses.contains_key(&pos) {
                     d.plumbing.hose_speeds.push((pos, speed));
@@ -4693,6 +4697,35 @@ impl CreateWorld {
 
 /// Valves, smart pipes, hose pulleys, creative tanks and whistles.
 impl CreateWorld {
+    /// FluidValveBlockEntity.write / LerpedFloat.writeNBT: value, chase target and speed.
+    pub fn saved_valve_pointer(&self, dim: usize, pos: [i32; 3]) -> Option<crate::fluids::Pointer> {
+        self.dims[dim].plumbing.valves.get(&pos).copied()
+    }
+
+    /// FluidValveBlockEntity.read / LerpedFloat.readNBT, before the first entity tick.
+    pub fn restore_valve_pointer(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        saved: crate::fluids::Pointer,
+    ) {
+        if let Some(pointer) = self.dims[dim].plumbing.valves.get_mut(&pos) {
+            *pointer = saved;
+            self.dims[dim].kinetics.mark_saved_changed(pos);
+        }
+    }
+
+    /// FluidValveBlockEntity.tick, journalling only changes to its saved Pointer.
+    pub fn tick_valves(
+        &mut self,
+        dim: usize,
+        open: impl Fn([i32; 3]) -> Option<bool>,
+    ) -> Vec<([i32; 3], bool)> {
+        let d = &mut self.dims[dim];
+        d.plumbing
+            .tick_valves(open, |pos| d.kinetics.mark_saved_changed(pos))
+    }
+
     /// A valve, smart pipe, hose pulley, creative tank, whistle or extension placed, loaded or
     /// changed.
     fn plumbing_placed(&mut self, dim: usize, pos: [i32; 3], block: Block, info: &StateInfo) {
@@ -6435,6 +6468,54 @@ mod tests {
         assert!(w.dims[0].boilers.is_empty());
         assert!(w.dims[0].plumbing.whistles.is_empty());
         assert!(w.dims[0].plumbing.extension_checks.contains(&[0, 2, 0]));
+        states::clear_range();
+    }
+
+    #[test]
+    fn valve_pointer_cold_load_and_saved_change_journal() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        states::set_range(10, 1);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            [(
+                "create:fluid_valve",
+                [("facing", "up"), ("enabled", "true")].into_iter(),
+            )]
+            .into_iter(),
+        ));
+        let pos = [0, 8, 0];
+        w.block_changed(0, pos, 0, 10);
+        let saved = crate::fluids::Pointer {
+            value: 0.3,
+            target: 1.0,
+            speed: 0.1,
+        };
+        w.restore_valve_pointer(0, pos, saved);
+        assert_eq!(w.saved_valve_pointer(0, pos), Some(saved));
+        w.dims[0].kinetics.take_saved_changes();
+        w.column_unloaded(0, 0, 0);
+        w.block_loaded(0, pos, 10);
+        w.restore_valve_pointer(0, pos, saved);
+        w.dims[0].kinetics.take_saved_changes();
+        assert!(w.tick_valves(0, |_| Some(true)).is_empty());
+        assert_eq!(w.saved_valve_pointer(0, pos).unwrap().value, 0.4);
+        assert_eq!(w.dims[0].kinetics.take_saved_changes(), [pos].into());
+        assert!(w.dims[0].kinetics.take_saved_changes().is_empty());
+        // onSpeedChanged(0) freezes a fully open pointer while targeting zero.
+        let stopped = crate::fluids::Pointer {
+            value: 1.0,
+            target: 0.0,
+            speed: 0.0,
+        };
+        w.restore_valve_pointer(0, pos, stopped);
+        w.dims[0].kinetics.take_saved_changes();
+        w.column_unloaded(0, 0, 0);
+        w.block_loaded(0, pos, 10);
+        w.restore_valve_pointer(0, pos, stopped);
+        w.dims[0].kinetics.take_saved_changes();
+        assert!(w.tick_valves(0, |_| Some(true)).is_empty());
+        assert_eq!(w.saved_valve_pointer(0, pos), Some(stopped));
+        assert!(w.dims[0].kinetics.take_saved_changes().is_empty());
         states::clear_range();
     }
 

@@ -564,6 +564,11 @@ impl Kinetics {
             .filter(|&id| id != NONE)
     }
 
+    /// An engine-owned field of a kinetic block entity changed (Java write/sendData).
+    pub fn mark_saved_changed(&mut self, pos: [i32; 3]) {
+        self.saved_dirty.insert(pos);
+    }
+
     /// Positions whose persistent kinetic fields changed, without scanning idle parts.
     pub fn take_saved_changes(&mut self) -> HashSet<[i32; 3]> {
         std::mem::take(&mut self.saved_dirty)

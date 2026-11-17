@@ -262,6 +262,26 @@ fn loading_legacy_save(data: &Compound) -> bool {
         && (data.contains_key(&SPEEDS.into()) || data.contains_key(&THEORY.into()))
 }
 
+/// FluidValveBlockEntity.write/read delegates Pointer to LerpedFloat's three float fields.
+fn valve_pointer_to_nbt(pointer: create_engine::fluids::Pointer) -> Compound {
+    Compound::from([
+        ("Value".into(), Tag::Float(pointer.value.to_bits())),
+        ("Target".into(), Tag::Float(pointer.target.to_bits())),
+        ("Speed".into(), Tag::Float(pointer.speed.to_bits())),
+    ])
+}
+fn valve_pointer_from_nbt(data: &Compound) -> create_engine::fluids::Pointer {
+    let float = |key: &str| match data.get(&key.into()) {
+        Some(Tag::Float(bits)) => f32::from_bits(*bits),
+        _ => 0.0,
+    };
+    create_engine::fluids::Pointer {
+        value: float("Value"),
+        target: float("Target"),
+        speed: float("Speed"),
+    }
+}
+
 /// Java hand crank / valve use data, independent of the kinetic ports.
 fn handle_to_nbt(h: create_engine::valve::SavedHandle) -> Compound {
     Compound::from([
@@ -564,6 +584,9 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
     }
     let changed = with_world(|w| w.dims[dim].kinetics.take_saved_changes()).unwrap_or_default();
     for pos in changed {
+        if let Some(pointer) = with_world(|w| w.saved_valve_pointer(dim, pos)).flatten() {
+            lv.write_entity_field(pos, "Pointer", valve_pointer_to_nbt(pointer));
+        }
         let Some(states) = with_world(|w| {
             (!w.dims[dim].kinetics.awaiting_legacy_load(pos)).then(|| {
                 [
@@ -823,6 +846,9 @@ impl BlockEntityPart for KineticEntity {
             if let Some(Tag::Compound(handle)) = data.get(&"HandleState".into()) {
                 w.restore_handle(dim, pos, handle_from_nbt(handle));
             }
+            if let Some(Tag::Compound(pointer)) = data.get(&"Pointer".into()) {
+                w.restore_valve_pointer(dim, pos, valve_pointer_from_nbt(pointer));
+            }
             if let Some(ports) = saved {
                 for sub in 0..2 {
                     if let Some(Tag::Compound(data)) = ports.get(&["0", "1"][sub as usize].into())
@@ -1060,6 +1086,19 @@ pub fn draw_turning(
 
 #[cfg(test)]
 mod saved_state_tests {
+    #[test]
+    fn valve_pointer_nbt_round_trip_preserves_all_fields() {
+        let pointer = create_engine::fluids::Pointer {
+            value: 0.3,
+            target: 1.0,
+            speed: 0.1,
+        };
+        assert_eq!(
+            super::valve_pointer_from_nbt(&super::valve_pointer_to_nbt(pointer)),
+            pointer
+        );
+    }
+
     #[test]
     fn handle_use_nbt_roundtrip() {
         let saved = create_engine::valve::SavedHandle {
