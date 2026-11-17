@@ -1646,6 +1646,22 @@ mod tests {
     }
 
     #[test]
+    fn detached_member_speed_change_does_not_enroll_it_again() {
+        // switchToBlockState removes membership before detachKinetics. The entity
+        // still has its old network id during the removal callbacks.
+        let mut k = Kinetics::new();
+        k.set([0, 8, 0], 0, motor(Dir::East, 32.0));
+        k.set([1, 8, 0], 0, Part::shaft(Axis::X));
+        k.set([2, 8, 0], 0, Part::shaft(Axis::X));
+        solve(&mut k);
+        let id = k.at[&[2, 8, 0]][0];
+        let net = k.nodes[id as usize].state.net;
+        k.networks.remove(net, id);
+        k.change_speed(id, 0.0);
+        assert_eq!(k.networks.figures(net).2, 2);
+    }
+
+    #[test]
     fn a_loop_that_disagrees_breaks_only_once_it_turns() {
         // Two small and two large cogs, each small on a large one's shaft and meshing with the
         // other large one: round the loop the speed doubles twice. In Create nothing breaks

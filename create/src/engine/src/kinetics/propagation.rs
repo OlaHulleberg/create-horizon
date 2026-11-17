@@ -131,13 +131,9 @@ impl Kinetics {
         if let Some(c) = n.part.context {
             n.state.seq = Some((c, if speed == 0.0 { 0.0 } else { c.value / speed }));
         }
-        let net = n.state.net;
-        if net.is_some() {
-            self.networks
-                .get_or_create_network_for(net)
-                .update_stress_for(id, self.nodes[id as usize].part.impact, &self.nodes);
-            self.networks.mark_dirty(net);
-        }
+        // KineticBlockEntity.setSpeed/onSpeedChanged do not enroll members.
+        // switchToBlockState detaches while the old network id is still present.
+        // Membership belongs to setNetwork/add and generator stress updates.
         if changed {
             self.mark_changed(id);
         }

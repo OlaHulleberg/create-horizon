@@ -4482,6 +4482,59 @@ mod tests {
     }
 
     #[test]
+    fn wrenched_shaft_leaves_network_immediately() {
+        // Issue #14's Java checkpoints: size 3 at 73, size 2 at 75/77/79.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names = [
+            ("create:creative_motor", vec![("facing", "east")]),
+            (
+                "create:gearshift",
+                vec![("axis", "x"), ("powered", "false")],
+            ),
+            ("create:shaft", vec![("axis", "x")]),
+            ("create:shaft", vec![("axis", "z")]),
+        ];
+        states::set_range(10, 4);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let motor = [0, 8, 0];
+        let shaft = [2, 8, 0];
+        let mut events = Vec::new();
+        for tick in 0..160 {
+            match tick {
+                0 => w.block_changed(0, motor, 0, 10),
+                1 => {
+                    w.set_motor(0, motor, 32.0);
+                }
+                3 => w.block_changed(0, [1, 8, 0], 0, 11),
+                4 => w.block_changed(0, shaft, 0, 12),
+                74 => {
+                    w.switching_block_state(0, shaft, 13);
+                    assert_eq!(
+                        w.dims[0].kinetics.network_membership(motor, 0).unwrap().1,
+                        2,
+                        "immediately after switch"
+                    );
+                    w.block_changed(0, shaft, 12, 13);
+                }
+                _ => {}
+            }
+            w.tick(0, &mut events);
+            if tick >= 4 {
+                let expected = if tick < 74 { 3 } else { 2 };
+                assert_eq!(
+                    w.dims[0].kinetics.network_membership(motor, 0).unwrap().1,
+                    expected,
+                    "after tick {tick}"
+                );
+            }
+        }
+        states::clear_range();
+    }
+
+    #[test]
     fn wrench_reactivates_surviving_motor() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         states::set_range(10, 2);
