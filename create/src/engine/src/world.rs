@@ -4,7 +4,7 @@
 
 use crate::Block;
 use crate::kinetics::{Event, Kinetics, SolveStats};
-use crate::parts::{Settings, StateInfo, is_kinetic, parts};
+use crate::parts::{Settings, StateInfo, is_generating, is_kinetic, parts};
 use crate::states;
 use std::collections::{HashMap, HashSet};
 
@@ -1215,12 +1215,12 @@ impl CreateWorld {
         if old == new {
             return;
         }
-        let equivalent = self
-            .table
-            .get(old)
-            .zip(self.table.get(new))
-            .is_some_and(|((a, x), (b, y))| kinetically_equivalent(a, x, b, y));
-        d.kinetics.switch_block_state(pos, equivalent);
+        let (Some((a, x)), Some((b, y))) = (self.table.get(old), self.table.get(new)) else {
+            return;
+        };
+        let equivalent = kinetically_equivalent(a, x, b, y);
+        d.kinetics
+            .switch_block_state(pos, equivalent, is_generating(a));
     }
 
     /// A committed block change. The first lines are the hot path: two

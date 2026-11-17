@@ -747,8 +747,9 @@ impl Kinetics {
     }
 
     /// `KineticBlockEntity.switchToBlockState`: detach before setting a non-equivalent
-    /// state; generators reactivate on their next tick even for an equivalent rotation.
-    pub fn switch_block_state(&mut self, pos: [i32; 3], equivalent: bool) {
+    /// state; a `GeneratingKineticBlockEntity` (`generating`) reactivates on its next tick,
+    /// even for an equivalent rotation.
+    pub fn switch_block_state(&mut self, pos: [i32; 3], equivalent: bool, generating: bool) {
         let Some(ids) = self.at.get(&pos).copied() else {
             return;
         };
@@ -761,7 +762,7 @@ impl Kinetics {
                 self.nodes[id as usize].state.update_speed = true;
             }
             let n = &mut self.nodes[id as usize];
-            if n.part.capacity != 0.0 {
+            if generating {
                 n.state.reactivate_source = true;
                 self.scheduler.reactivate_later(self.now, id, n.stamp);
             }

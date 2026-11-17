@@ -535,6 +535,23 @@ pub fn directional_axis(facing: Dir, along_first: bool) -> Axis {
 }
 
 /// Whether a block can hold kinetic parts at all, for the world-open table.
+/// Whether Create's block entity for `block` is a `GeneratingKineticBlockEntity`
+/// (`PoweredShaftBlockEntity`, `CreativeMotorBlockEntity`, `HandCrankBlockEntity` and
+/// `ValveHandleBlockEntity`, `MechanicalBearingBlockEntity` and `WindmillBearingBlockEntity`,
+/// `WaterWheelBlockEntity` and `LargeWaterWheelBlockEntity`). `ClockworkBearingBlockEntity` is not.
+pub fn is_generating(block: Block) -> bool {
+    matches!(
+        block,
+        Block::PoweredShaft
+            | Block::CreativeMotor
+            | Block::HandCrank
+            | Block::MechanicalBearing
+            | Block::WindmillBearing
+            | Block::WaterWheel
+            | Block::LargeWaterWheel
+    ) || crate::dye::is_valve_handle(block)
+}
+
 pub fn is_kinetic(block: Block) -> bool {
     let probe = StateInfo {
         axis: Some(Axis::Y),
