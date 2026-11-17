@@ -240,6 +240,12 @@ fn settings_from_nbt(data: &Compound) -> Vec<([i32; 3], i32)> {
     }
 }
 
+/// Identifies this port's old persisted format, never a newly placed empty entity.
+fn loading_legacy_save(data: &Compound) -> bool {
+    !data.contains_key(&SAVED_KINETICS.into())
+        && (data.contains_key(&SPEEDS.into()) || data.contains_key(&THEORY.into()))
+}
+
 /// KineticBlockEntity.write's server fields. Nested replacement removes stale Source/Network.
 fn saved_to_nbt(saved: SavedKineticState) -> Compound {
     let mut out = Compound::from([
@@ -478,13 +484,17 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
     }
     let changed = with_world(|w| w.dims[dim].kinetics.take_saved_changes()).unwrap_or_default();
     for pos in changed {
-        let states = with_world(|w| {
-            [
-                w.dims[dim].kinetics.saved_state(pos, 0),
-                w.dims[dim].kinetics.saved_state(pos, 1),
-            ]
+        let Some(states) = with_world(|w| {
+            (!w.dims[dim].kinetics.awaiting_legacy_load(pos)).then(|| {
+                [
+                    w.dims[dim].kinetics.saved_state(pos, 0),
+                    w.dims[dim].kinetics.saved_state(pos, 1),
+                ]
+            })
         })
-        .unwrap_or_default();
+        .flatten() else {
+            continue;
+        };
         if let Some(entity) = lv.host.block_entity(lv.level, pos) {
             let ports: Compound = states
                 .into_iter()
@@ -696,12 +706,14 @@ impl BlockEntityPart for KineticEntity {
             return;
         };
         super::ensure_column(host, &dimension, [pos[0] >> 4, pos[2] >> 4]);
-        let saved = entity
-            .data(&*host)
-            .and_then(|d| match d.get(&SAVED_KINETICS.into()) {
-                Some(Tag::Compound(c)) => Some(c.clone()),
-                _ => None,
-            });
+        let data = entity.data(&*host).unwrap_or_default();
+        let saved = match data.get(&SAVED_KINETICS.into()) {
+            Some(Tag::Compound(c)) => Some(c.clone()),
+            _ => None,
+        };
+        // Previous builds persisted drawing state but no kinetic snapshot. A brand-new
+        // player's block entity has neither: it must retain Create's placement lifecycle.
+        let legacy = loading_legacy_save(&data);
         with_world(|w| {
             w.block_loaded(dim, pos, state);
             if let Some(ports) = saved {
@@ -711,6 +723,12 @@ impl BlockEntityPart for KineticEntity {
                     {
                         w.dims[dim].kinetics.restore_state(pos, sub, saved);
                     }
+                }
+            } else if legacy {
+                for sub in 0..2 {
+                    w.dims[dim]
+                        .kinetics
+                        .loading_save_without_kinetic_state(pos, sub);
                 }
             }
         });
@@ -932,6 +950,17 @@ pub fn draw_turning(
 #[cfg(test)]
 mod saved_state_tests {
     use super::*;
+    #[test]
+    fn only_old_persisted_data_requests_legacy_migration() {
+        assert!(!loading_legacy_save(&Compound::new()));
+        let mut old = Compound::from([(
+            SPEEDS.into(),
+            Tag::List(vec![Tag::Float(16.0f32.to_bits()), Tag::Float(0)]),
+        )]);
+        assert!(loading_legacy_save(&old));
+        old.insert(SAVED_KINETICS.into(), Tag::Compound(Compound::new()));
+        assert!(!loading_legacy_save(&old));
+    }
     #[test]
     fn kinetic_block_entity_data_round_trips_all_server_fields() {
         let saved = SavedKineticState {
