@@ -2062,19 +2062,19 @@ impl CreateWorld {
     /// `SequencedGearshiftBlockEntity.tick`: the base kinetic tick attaches first;
     /// only afterwards can the instruction advance and detach again. Commit the returned
     /// block-state changes after this call, without another solve until the next tick.
-    pub fn tick_kinetics(
+    pub fn tick(
         &mut self,
         dim: usize,
         events: &mut Vec<Event>,
     ) -> (SolveStats, Vec<([i32; 3], crate::sequencer::Step)>) {
-        let stats = self.tick(dim, events);
+        let stats = self.solve(dim, events);
         let steps = self.tick_sequencers(dim);
         (stats, steps)
     }
 
     /// Re-solves what changed in a dimension: nothing at all when nothing did.
     #[inline]
-    pub fn tick(&mut self, dim: usize, events: &mut Vec<Event>) -> SolveStats {
+    fn solve(&mut self, dim: usize, events: &mut Vec<Event>) -> SolveStats {
         let d = &mut self.dims[dim];
         d.kinetics.advance();
         if !d.kinetics.has_dirty() {
@@ -2822,7 +2822,7 @@ impl CreateWorld {
 
     /// One tick of the sequenced gearshifts whose instruction runs (`tick`), and the steps they
     /// took as their speed changed: what their blocks' `state` becomes. Nothing without one.
-    pub fn tick_sequencers(&mut self, dim: usize) -> Vec<([i32; 3], crate::sequencer::Step)> {
+    fn tick_sequencers(&mut self, dim: usize) -> Vec<([i32; 3], crate::sequencer::Step)> {
         let d = &mut self.dims[dim];
         if d.sequencing.is_empty() && d.sequencer_steps.is_empty() {
             return Vec::new();
@@ -4738,13 +4738,17 @@ mod tests {
         assert!(!w.table.is_kinetic(0) && !w.table.is_kinetic(casing));
         // Vanilla changes miss at once.
         w.block_changed(0, [5, 5, 5], 0, 1);
-        assert_eq!(w.tick(0, &mut Vec::new()), SolveStats::default());
+        assert_eq!(w.tick(0, &mut Vec::new()).0, SolveStats::default());
         w.block_changed(0, [0, 64, 0], 0, motor_east);
         w.block_changed(0, [1, 64, 0], 0, shaft_x);
         let mut e = Vec::new();
-        assert_eq!(w.tick(0, &mut e).components, 1);
+        assert_eq!(w.tick(0, &mut e).0.components, 1);
         assert_eq!(w.speed(0, [1, 64, 0]), Some(16.0));
-        assert_eq!(w.tick(0, &mut e), SolveStats::default(), "steady: no work");
+        assert_eq!(
+            w.tick(0, &mut e).0,
+            SolveStats::default(),
+            "steady: no work"
+        );
         // The motor's speed setting re-solves it.
         w.set_settings(
             0,
@@ -5702,7 +5706,7 @@ mod tests {
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
         ));
         fn level_tick(w: &mut CreateWorld) -> Vec<([i32; 3], Step)> {
-            let (_, steps) = w.tick_kinetics(0, &mut Vec::new());
+            let (_, steps) = w.tick(0, &mut Vec::new());
             for &(pos, step) in &steps {
                 if let Step::Run(n) = step {
                     let old = w.state_at(0, pos).unwrap();
@@ -5715,7 +5719,7 @@ mod tests {
         w.block_changed(0, [-1, 8, 0], 0, 13);
         w.set_motor(0, [-1, 8, 0], 32.0);
         w.block_changed(0, pos, 0, 10);
-        w.tick_kinetics(0, &mut Vec::new());
+        w.tick(0, &mut Vec::new());
         w.set_sequencer_instructions(
             0,
             pos,
@@ -5779,13 +5783,12 @@ mod tests {
         w.block_changed(0, [-1, 0, 0], 0, 12);
         w.block_changed(0, [0, 0, 0], 0, 10);
         w.block_changed(0, [1, 0, 0], 0, 13);
-        w.tick(0, &mut Vec::new());
+        assert!(w.tick(0, &mut Vec::new()).1.is_empty());
         assert_eq!(
             w.speed(0, [1, 0, 0]),
             Some(0.0),
             "idle: the far half is still"
         );
-        assert!(w.tick_sequencers(0).is_empty());
         // Powered: its neighbour changed, its redstone is looked at; the 90° turn starts.
         w.neighbor_changed(0, [0, 0, 0], 10);
         assert_eq!(w.take_sequencer_checks(0), [([0, 0, 0], false)]);
@@ -5794,14 +5797,15 @@ mod tests {
             Some(Step::Run(1))
         );
         w.block_changed(0, [0, 0, 0], 10, 11);
-        w.tick(0, &mut Vec::new());
-        assert_eq!(w.speed(0, [1, 0, 0]), Some(16.0));
         // 21 ticks at 16 RPM, then it ends and the far half stops.
-        for _ in 0..21 {
-            assert!(w.tick_sequencers(0).is_empty());
+        for i in 0..21 {
+            assert!(w.tick(0, &mut Vec::new()).1.is_empty());
+            if i == 0 {
+                assert_eq!(w.speed(0, [1, 0, 0]), Some(16.0));
+            }
         }
-        assert_eq!(w.tick_sequencers(0), [([0, 0, 0], Step::Ended)]);
-        w.tick(0, &mut Vec::new());
+        assert_eq!(w.tick(0, &mut Vec::new()).1, [([0, 0, 0], Step::Ended)]);
+        assert!(w.tick(0, &mut Vec::new()).1.is_empty());
         assert_eq!(w.speed(0, [1, 0, 0]), Some(0.0));
         // SequencedGearshiftBlockEntity.run(-1): Sequence is absent, including on disk.
         assert_eq!(w.dims[0].kinetics.sequence_limit([0, 0, 0], 1, false), None);
@@ -5813,7 +5817,10 @@ mod tests {
                 .sequence,
             None
         );
-        assert!(w.tick_sequencers(0).is_empty(), "idle: nothing ticks");
+        assert!(
+            w.tick(0, &mut Vec::new()).1.is_empty(),
+            "idle: nothing ticks"
+        );
         states::clear_range();
     }
 

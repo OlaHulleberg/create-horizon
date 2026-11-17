@@ -449,7 +449,7 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
     let mut events = Vec::new();
     let Some((steps, removed, unsaved)) = with_world(|w| {
         w.settle_belts(dim);
-        let (_, steps) = w.tick_kinetics(dim, &mut events);
+        let (_, steps) = w.tick(dim, &mut events);
         (
             steps,
             w.dims[dim].kinetics.take_removed(),
@@ -515,7 +515,7 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
 
 /// Sequenced gearshifts: those whose neighbour changed look at their power
 /// (`SequencedGearshiftBlock.tick`). Instruction ticks run after the base kinetic tick in
-/// `CreateWorld::tick_kinetics`.
+/// `CreateWorld::tick`.
 fn tick_sequencers(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let mut steps = Vec::new();
