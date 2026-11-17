@@ -85,6 +85,9 @@ impl StateTable {
                 .unwrap_or(Block::AndesiteCasing);
             t.kinetic.push(keeps_state(block));
             t.block.push(block);
+            // AllBlockEntityTypes supplies block eligibility; these newBlockEntity
+            // overrides additionally decide whether this particular state creates one:
+            // TrackBlock requires HAS_BE; SlidingDoorBlock excludes the upper half.
             let mut track_entity = false;
             let mut upper = false;
             t.info.push(StateInfo::read(props.inspect(|&(key, value)| {
@@ -96,7 +99,7 @@ impl StateTable {
                 }
             })));
             t.entity.push(
-                has_block_entity(block)
+                block.has_block_entity()
                     && (block != Block::Track || track_entity)
                     && (!crate::dye::is_sliding_door(block) || !upper),
             );
@@ -597,67 +600,6 @@ pub struct Fan {
 /// (a depot, a sequenced gearshift). These are the blocks the glue gives a block entity.
 pub fn keeps_state(block: Block) -> bool {
     is_kinetic(block) || has_state(block)
-}
-
-/// Create's AllBlockEntityTypes.validBlocks, extending the engine's stateful blocks.
-/// Some world-state consumers (contacts, structural wheel blocks, controls) have no entity.
-pub fn has_block_entity(block: Block) -> bool {
-    (keeps_state(block)
-        && !matches!(
-            block,
-            Block::PoweredLatch
-                | Block::PoweredToggleLatch
-                | Block::RoseQuartzLamp
-                | Block::RedstoneContact
-                | Block::WaterWheelStructure
-                | Block::SteamWhistleExtension
-                | Block::ControllerRail
-                | Block::Controls
-        ))
-        || matches!(
-            block,
-            Block::Schematicannon
-                | Block::SchematicTable
-                | Block::LinearChassis
-                | Block::SecondaryLinearChassis
-                | Block::RadialChassis
-                | Block::ChainConveyor
-                | Block::MechanicalArm
-                | Block::ItemHatch
-                | Block::StockLink
-                | Block::RedstoneRequester
-                | Block::CreativeCrate
-                | Block::Placard
-                | Block::CopperBacktank
-                | Block::NetheriteBacktank
-                | Block::FakeTrack
-                | Block::SmallBogey
-                | Block::LargeBogey
-                | Block::CopycatPanel
-                | Block::CopycatStep
-                | Block::Clipboard
-                | Block::AndesiteTableCloth
-                | Block::BrassTableCloth
-                | Block::CopperTableCloth
-                | Block::WhiteTableCloth
-                | Block::OrangeTableCloth
-                | Block::MagentaTableCloth
-                | Block::LightBlueTableCloth
-                | Block::YellowTableCloth
-                | Block::LimeTableCloth
-                | Block::PinkTableCloth
-                | Block::GrayTableCloth
-                | Block::LightGrayTableCloth
-                | Block::CyanTableCloth
-                | Block::PurpleTableCloth
-                | Block::BlueTableCloth
-                | Block::BrownTableCloth
-                | Block::GreenTableCloth
-                | Block::RedTableCloth
-                | Block::BlackTableCloth
-        )
-        || crate::dye::is_toolbox(block)
-        || crate::dye::is_sliding_door(block)
 }
 
 /// Blocks that keep state of their own here but are not kinetic: depots.
