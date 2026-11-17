@@ -1,5 +1,5 @@
 //! Create's base/KineticBlockEntity and GeneratingKineticBlockEntity state.
-use super::{Context, NONE};
+use super::Context;
 
 /// Runtime information belonging to one kinetic block entity, independent of its block part.
 #[derive(Clone, Debug)]
@@ -21,12 +21,12 @@ pub(super) struct KineticState {
     pub(super) flicker: i32,
     pub(super) flicker_at: u64,
     /// KineticBlockEntity.network: identity inherited from the immediate source.
-    pub(super) net: u32,
+    pub(super) net: Option<i64>,
     /// Added since the last solve (not a replaced part): a block entity that has not ticked yet.
     pub(super) new_part: bool,
     /// KineticBlockEntity.updateSpeed: attach on the next server tick.
     pub(super) update_speed: bool,
-    pub(super) source: u32,
+    pub(super) source: Option<PartLocation>,
     pub(super) reactivate_source: bool,
 }
 impl Default for KineticState {
@@ -40,10 +40,10 @@ impl Default for KineticState {
             seq: None,
             flicker: 0,
             flicker_at: 0,
-            net: NONE,
+            net: None,
             new_part: true,
             update_speed: true,
-            source: NONE,
+            source: None,
             reactivate_source: false,
         }
     }
@@ -53,4 +53,30 @@ impl KineticState {
     pub(super) fn flicker(&self, now: u64) -> i32 {
         (self.flicker - now.saturating_sub(self.flicker_at).min(i32::MAX as u64) as i32).max(0)
     }
+}
+
+/// A source block position, with the engine port for split shaft halves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PartLocation {
+    pub pos: [i32; 3],
+    pub sub: u8,
+}
+/// KineticBlockEntity.write/read's Network compound.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SavedNetwork {
+    pub id: i64,
+    pub stress: f32,
+    pub capacity: f32,
+    pub size: u32,
+    pub added_stress: f32,
+    pub added_capacity: f32,
+}
+/// KineticBlockEntity.write/read's persistent kinetic fields. Displayed speed is derived.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SavedKineticState {
+    pub speed: f32,
+    pub sequence: Option<(Context, f32)>,
+    pub source: Option<PartLocation>,
+    pub network: Option<SavedNetwork>,
+    pub needs_speed_update: bool,
 }

@@ -52,9 +52,9 @@ impl Kinetics {
             };
             let desired = if target == 0.0 || (targeting && w.state.theoretical == 0.0) {
                 0.0
-            } else if c.state.source == NONE {
+            } else if c.state.source.is_none() {
                 if targeting { target } else { 0.0 }
-            } else if self.nodes[c.state.source as usize].pos == w.pos {
+            } else if c.state.source.is_some_and(|s| s.pos == w.pos) {
                 if targeting {
                     target
                 } else {
@@ -81,7 +81,7 @@ impl Kinetics {
         if a.pos == b.pos
             && let Some(Couple::Relay(m)) = a.part.couple.or(b.part.couple)
         {
-            return if a.state.source == to {
+            return if a.state.source == Some(self_location(b)) {
                 if m == 0.0 {
                     0.0
                 } else {
@@ -101,8 +101,8 @@ impl Kinetics {
                         let opposite = &self.nodes[other as usize];
                         let link = node.part.link.or(opposite.part.link);
                         if link == Some(0.0)
-                            && opposite.state.source != NONE
-                            && self.nodes[opposite.state.source as usize].pos != node.pos
+                            && opposite.state.source.is_some()
+                            && opposite.state.source.is_some_and(|s| s.pos != node.pos)
                         {
                             return 0.0;
                         }
@@ -132,7 +132,7 @@ impl Kinetics {
             n.state.seq = Some((c, if speed == 0.0 { 0.0 } else { c.value / speed }));
         }
         let net = n.state.net;
-        if net != NONE {
+        if net.is_some() {
             self.networks
                 .get_or_create_network_for(net)
                 .update_stress_for(id, self.nodes[id as usize].part.impact);
@@ -146,16 +146,16 @@ impl Kinetics {
     /// KineticBlockEntity.removeSource; GeneratingKineticBlockEntity.removeSource.
     pub(super) fn remove_source(&mut self, id: u32) {
         let n = &mut self.nodes[id as usize];
-        if n.state.source != NONE && n.part.generated != 0.0 {
+        if n.state.source.is_some() && n.part.generated != 0.0 {
             n.state.reactivate_source = true;
             self.scheduler.reactivate_later(self.now, id, n.stamp);
         }
         let changed = n.state.seq.is_some() || n.state.overstressed;
-        n.state.source = NONE;
+        n.state.source = None;
         n.state.seq = None;
         n.state.overstressed = false;
         self.change_speed(id, 0.0);
-        self.set_network(id, NONE);
+        self.set_network(id, None);
         if changed {
             self.mark_changed(id);
         }
@@ -170,8 +170,12 @@ impl Kinetics {
         let net = self.nodes[source as usize].state.net;
         let seq = self.nodes[source as usize].state.seq;
         let speed = self.nodes[source as usize].state.speed;
+        let location = self_location(&self.nodes[source as usize]);
         let n = &mut self.nodes[id as usize];
-        n.state.source = source;
+        if n.state.source != Some(location) {
+            self.saved_dirty.insert(n.pos);
+        }
+        n.state.source = Some(location);
         let old_seq = n.state.seq;
         n.state.seq = n
             .part
@@ -208,10 +212,12 @@ impl Kinetics {
             self.remove_source(id);
             for (m, _) in self.get_connected_neighbours(id) {
                 let n = &self.nodes[m as usize];
-                if m == missing || n.state.source == NONE {
+                if Some(self_location(&self.nodes[m as usize])) == missing
+                    || n.state.source.is_none()
+                {
                     continue;
                 }
-                if n.state.source != id {
+                if n.state.source != Some(self_location(&self.nodes[id as usize])) {
                     candidates.push(m);
                     continue;
                 }
@@ -223,7 +229,7 @@ impl Kinetics {
         }
         for id in candidates {
             let n = &self.nodes[id as usize];
-            if n.state.source != NONE || n.part.generated != 0.0 {
+            if n.state.source.is_some() || n.part.generated != 0.0 {
                 self.propagate_new_source(id, events);
                 break;
             }
@@ -249,7 +255,11 @@ impl Kinetics {
         }
         let dependents = potential
             .into_iter()
-            .filter(|&m| self.nodes[m as usize].live && self.nodes[m as usize].state.source == id)
+            .filter(|&m| {
+                self.nodes[m as usize].live
+                    && self.nodes[m as usize].state.source
+                        == Some(self_location(&self.nodes[id as usize]))
+            })
             .collect::<Vec<_>>();
         for m in dependents {
             self.propagate_missing_source(m, events);
@@ -294,7 +304,7 @@ impl Kinetics {
                 continue;
             }
             if new.abs() >= other.abs() {
-                if self.nodes[cur as usize].state.net == NONE
+                if self.nodes[cur as usize].state.net.is_none()
                     || self.nodes[cur as usize].state.net == self.nodes[m as usize].state.net
                 {
                     if new.abs() > other.abs() + other.abs() / 256.0 / 256.0 {
@@ -306,7 +316,9 @@ impl Kinetics {
                     }
                     continue;
                 }
-                if self.nodes[cur as usize].state.source == m {
+                if self.nodes[cur as usize].state.source
+                    == Some(self_location(&self.nodes[m as usize]))
+                {
                     self.remove_source(cur);
                 }
             } else if (other - new).abs() <= 1e-4 {
@@ -331,7 +343,7 @@ impl Kinetics {
             self.apply_new_speed(id, prev, generated, source, events);
         }
         let n = &self.nodes[id as usize];
-        if n.live && n.state.net != NONE {
+        if n.live && n.state.net.is_some() {
             let net = n.state.net;
             let capacity = if generated == 0.0 {
                 0.0
@@ -357,25 +369,25 @@ impl Kinetics {
         id: u32,
         prev: f32,
         generated: f32,
-        source: u32,
+        source: Option<PartLocation>,
         events: &mut Vec<Event>,
     ) {
         if generated == 0.0 {
-            if source != NONE {
+            if source.is_some() {
                 return;
             }
             self.handle_removed(id, events);
             self.change_speed(id, 0.0);
-            self.set_network(id, NONE);
+            self.set_network(id, None);
         } else if prev == 0.0 {
             self.change_speed(id, generated);
             self.nodes[id as usize].state.seq = self.nodes[id as usize]
                 .part
                 .context
                 .map(|c| (c, c.value / generated));
-            self.set_network(id, id);
+            self.set_network(id, Some(network_id(self.nodes[id as usize].pos)));
             self.propagate_new_source(id, events);
-        } else if source != NONE && prev.abs() >= generated.abs() {
+        } else if source.is_some() && prev.abs() >= generated.abs() {
             if prev.signum() != generated.signum() {
                 let pos = self.nodes[id as usize].pos;
                 events.push(Event::Break { pos });
@@ -388,8 +400,8 @@ impl Kinetics {
                 .part
                 .context
                 .map(|c| (c, c.value / generated));
-            self.nodes[id as usize].state.source = NONE;
-            self.set_network(id, id);
+            self.nodes[id as usize].state.source = None;
+            self.set_network(id, Some(network_id(self.nodes[id as usize].pos)));
             self.propagate_new_source(id, events);
         }
     }

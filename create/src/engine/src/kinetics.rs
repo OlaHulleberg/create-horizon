@@ -8,6 +8,7 @@ mod scheduling;
 mod state;
 use networks::TorquePropagator;
 use state::KineticState;
+pub use state::{PartLocation, SavedKineticState, SavedNetwork};
 
 use std::collections::{HashMap, HashSet};
 
@@ -443,6 +444,7 @@ pub struct Kinetics {
     far: HashMap<[i32; 3], Vec<[i32; 3]>>,
     dirty: Vec<u32>,
     changed: Vec<u32>,
+    saved_dirty: HashSet<[i32; 3]>,
     pending_events: Vec<Event>,
     networks: TorquePropagator,
     scheduler: scheduling::TickScheduler,
@@ -458,6 +460,19 @@ pub struct Kinetics {
     now: u64,
 }
 
+/// Create's BlockPos.asLong, used by GeneratingKineticBlockEntity.createNetworkId.
+pub fn network_id(pos: [i32; 3]) -> i64 {
+    ((pos[0] as i64 & 0x3ffffff) << 38)
+        | ((pos[2] as i64 & 0x3ffffff) << 12)
+        | (pos[1] as i64 & 0xfff)
+}
+fn self_location(n: &Node) -> PartLocation {
+    PartLocation {
+        pos: n.pos,
+        sub: n.sub,
+    }
+}
+
 const NONE: u32 = u32::MAX;
 
 /// The networks a solve looked at, for tests and benchmarks.
@@ -468,6 +483,78 @@ pub struct SolveStats {
 }
 
 impl Kinetics {
+    fn resolve_source(&self, source: Option<PartLocation>) -> Option<u32> {
+        let source = source?;
+        self.at
+            .get(&source.pos)
+            .map(|ids| ids[source.sub as usize])
+            .filter(|&id| id != NONE)
+    }
+
+    /// Positions whose persistent kinetic fields changed, without scanning idle parts.
+    pub fn take_saved_changes(&mut self) -> HashSet<[i32; 3]> {
+        std::mem::take(&mut self.saved_dirty)
+    }
+
+    /// KineticBlockEntity.write: a portable snapshot, independent of graph slot identities.
+    pub fn saved_state(&self, pos: [i32; 3], sub: u8) -> Option<SavedKineticState> {
+        let id = *self.at.get(&pos)?.get(sub as usize)?;
+        let n = self.nodes.get(id as usize)?;
+        Some(SavedKineticState {
+            speed: n.state.theoretical,
+            sequence: n.state.seq,
+            source: n.state.source,
+            network: n.state.net.map(|id| SavedNetwork {
+                id,
+                stress: n.state.stress,
+                capacity: n.state.capacity,
+                size: self.networks.figures(Some(id)).2,
+                added_stress: n.part.impact,
+                added_capacity: n.part.capacity,
+            }),
+            needs_speed_update: n.state.update_speed,
+        })
+    }
+
+    /// KineticBlockEntity.read + initialize, before the first attach. Source positions may
+    /// refer to entities whose columns have not loaded yet.
+    pub fn restore_state(&mut self, pos: [i32; 3], sub: u8, saved: SavedKineticState) -> bool {
+        let Some(id) = self
+            .at
+            .get(&pos)
+            .map(|ids| ids[sub as usize])
+            .filter(|&id| id != NONE)
+        else {
+            return false;
+        };
+        if !self.nodes[id as usize].state.new_part {
+            return false;
+        }
+        let n = &mut self.nodes[id as usize];
+        n.state.theoretical = saved.speed;
+        n.state.seq = saved.sequence;
+        n.state.source = saved.source;
+        if let Some(net) = saved.network {
+            n.state.net = Some(net.id);
+            n.state.stress = net.stress;
+            n.state.capacity = net.capacity;
+            n.state.overstressed = net.capacity < net.stress;
+            let network = self.networks.get_or_create_network_for(Some(net.id));
+            network.init_from_te(net.capacity, net.stress, net.size);
+            network.add_silently(id, &self.nodes, net.added_capacity, net.added_stress);
+        }
+        let n = &mut self.nodes[id as usize];
+        n.state.speed = if n.state.overstressed {
+            0.0
+        } else {
+            saved.speed
+        };
+        // read deliberately leaves the constructor's updateSpeed=true, as Create does.
+        n.state.update_speed = true;
+        self.mark_changed(id);
+        true
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -501,17 +588,19 @@ impl Kinetics {
                 }
                 let source = self.nodes[id as usize].state.source;
                 // KineticBlockEntity.validateKinetics reads the source's theoretical speed.
-                if source != NONE
-                    && (self.nodes[id as usize].state.net == NONE
-                        || !self.nodes[source as usize].live
-                        || self.nodes[source as usize].state.theoretical == 0.0)
+                if source.is_some()
+                    && (self.nodes[id as usize].state.net.is_none()
+                        || self.resolve_source(source).is_some_and(|i| {
+                            !self.nodes[i as usize].live
+                                || self.nodes[i as usize].state.theoretical == 0.0
+                        }))
                 {
                     self.remove_source(id);
                     self.dirty.push(id);
                     let mut events = Vec::new();
                     self.handle_removed(id, &mut events);
                     self.pending_events.extend(events);
-                } else if source == NONE
+                } else if source.is_none()
                     && self.nodes[id as usize].part.generated == 0.0
                     && self.nodes[id as usize].state.theoretical != 0.0
                 {
@@ -719,7 +808,7 @@ impl Kinetics {
         if start == NONE {
             return false;
         }
-        self.nodes[start as usize].state.source != NONE
+        self.nodes[start as usize].state.source.is_some()
     }
 
     /// The nodes connected to `id`, with the ratio from it to each.
@@ -859,6 +948,7 @@ impl Kinetics {
     /// KineticBlockEntity.sendData: enqueue a part once when its observable state changes.
     fn mark_changed(&mut self, id: u32) {
         let n = &mut self.nodes[id as usize];
+        self.saved_dirty.insert(n.pos);
         if !n.report_queued {
             n.report_queued = true;
             self.changed.push(id);
@@ -868,6 +958,9 @@ impl Kinetics {
     /// KineticBlockEntity.updateFromNetwork: sync figures and notify on overstress changes.
     fn update_from_network(&mut self, id: u32, capacity: f32, stress: f32) {
         let n = &mut self.nodes[id as usize];
+        if n.state.capacity != capacity || n.state.stress != stress {
+            self.saved_dirty.insert(n.pos);
+        }
         n.state.capacity = capacity;
         n.state.stress = stress;
         let over = stress > capacity;
@@ -891,7 +984,7 @@ impl Kinetics {
     }
 
     /// KineticBlockEntity.setNetwork leaves the old network before enrolling in the new one.
-    fn set_network(&mut self, id: u32, net: u32) {
+    fn set_network(&mut self, id: u32, net: Option<i64>) {
         let old = self.nodes[id as usize].state.net;
         if old == net {
             return;
@@ -899,7 +992,8 @@ impl Kinetics {
         self.networks.remove(old, id);
         self.update_from_network(id, 0.0, 0.0);
         self.nodes[id as usize].state.net = net;
-        if net != NONE {
+        self.saved_dirty.insert(self.nodes[id as usize].pos);
+        if net.is_some() {
             self.networks
                 .get_or_create_network_for(net)
                 .add(id, &self.nodes);
@@ -931,7 +1025,7 @@ impl Kinetics {
             }
             let n = &self.nodes[id as usize];
             if n.state.new_part
-                && (n.state.source == NONE || n.part.generated > n.state.theoretical)
+                && (n.state.source.is_none() || n.part.generated > n.state.theoretical)
             {
                 self.update_generated_rotation(id, events);
             }
@@ -974,7 +1068,7 @@ impl Kinetics {
                 theoretical: n.state.theoretical,
                 overstressed: n.state.overstressed,
             });
-            if n.state.net != NONE {
+            if n.state.net.is_some() {
                 touched_nets.insert(n.state.net);
             } else {
                 stats.nodes += 1;
@@ -1057,17 +1151,19 @@ mod tests {
         k.set([1, 0, 0], 0, Part::shaft(Axis::X));
         k.set([2, 0, 0], 0, Part::shaft(Axis::X));
         solve(&mut k);
-        let root = k.at[&[0, 0, 0]][0];
         let middle = k.at[&[1, 0, 0]][0];
         let end = k.at[&[2, 0, 0]][0];
-        assert_eq!(k.nodes[end as usize].state.source, middle);
-        assert_eq!(k.nodes[end as usize].state.net, root);
-        assert_eq!(k.networks.figures(root).2, 3);
+        assert_eq!(
+            k.nodes[end as usize].state.source,
+            Some(self_location(&k.nodes[middle as usize]))
+        );
+        assert_eq!(k.nodes[end as usize].state.net, Some(network_id([0, 0, 0])));
+        assert_eq!(k.networks.figures(Some(network_id([0, 0, 0]))).2, 3);
         k.remove([1, 0, 0]);
         solve(&mut k);
-        assert_eq!(k.nodes[end as usize].state.source, NONE);
+        assert_eq!(k.nodes[end as usize].state.source, None);
         assert_eq!(k.speed([2, 0, 0], 0), Some(0.0));
-        assert_eq!(k.networks.figures(root).2, 1);
+        assert_eq!(k.networks.figures(Some(network_id([0, 0, 0]))).2, 1);
     }
 
     #[test]
@@ -1163,6 +1259,90 @@ mod tests {
             }
         )));
         assert_eq!(k.network([0, 0, 0], 0).unwrap().1, 0.0);
+    }
+
+    #[test]
+    fn restored_member_motors_keep_sources_in_either_load_order() {
+        let mut original = Kinetics::new();
+        let parts = [
+            motor(Dir::East, 16.0),
+            Part::shaft(Axis::X),
+            motor(Dir::West, 16.0),
+        ];
+        for (x, part) in parts.into_iter().enumerate() {
+            original.set([x as i32, 0, 0], 0, part);
+        }
+        solve(&mut original);
+        let saved = (0..3)
+            .map(|x| original.saved_state([x, 0, 0], 0).unwrap())
+            .collect::<Vec<_>>();
+        for order in [[0, 1, 2], [2, 1, 0]] {
+            let mut loaded = Kinetics::new();
+            for x in order {
+                loaded.set([x as i32, 0, 0], 0, parts[x]);
+                assert!(loaded.restore_state([x as i32, 0, 0], 0, saved[x]));
+                // A different column may not arrive until a later tick.
+                let events = solve(&mut loaded);
+                assert!(
+                    !events.iter().any(|e| matches!(e, Event::Break { .. })),
+                    "{events:?}"
+                );
+            }
+            let events = solve(&mut loaded);
+            assert!(
+                !events.iter().any(|e| matches!(e, Event::Break { .. })),
+                "{events:?}"
+            );
+            for x in 0..3 {
+                assert_eq!(loaded.speed([x, 0, 0], 0), Some(16.0));
+                let restored = loaded.saved_state([x, 0, 0], 0).unwrap();
+                assert_eq!(restored.source, saved[x as usize].source);
+                assert_eq!(restored.network, saved[x as usize].network);
+            }
+        }
+    }
+
+    #[test]
+    fn partial_network_restore_preserves_unloaded_contributions() {
+        let mut original = Kinetics::new();
+        original.set([-17, 3, 18], 0, motor(Dir::East, 32.0));
+        original.set(
+            [-16, 3, 18],
+            0,
+            Part {
+                impact: 8.0,
+                ..Part::shaft(Axis::X)
+            },
+        );
+        solve(&mut original);
+        let saved = original.saved_state([-16, 3, 18], 0).unwrap();
+        assert_eq!(saved.network.unwrap().id, network_id([-17, 3, 18]));
+        let mut loaded = Kinetics::new();
+        loaded.set(
+            [-16, 3, 18],
+            0,
+            Part {
+                impact: 8.0,
+                ..Part::shaft(Axis::X)
+            },
+        );
+        loaded.restore_state([-16, 3, 18], 0, saved);
+        solve(&mut loaded);
+        assert_eq!(
+            loaded.saved_state([-16, 3, 18], 0).unwrap().network,
+            saved.network
+        );
+        loaded.set([-17, 3, 18], 0, motor(Dir::East, 32.0));
+        loaded.restore_state(
+            [-17, 3, 18],
+            0,
+            original.saved_state([-17, 3, 18], 0).unwrap(),
+        );
+        solve(&mut loaded);
+        assert_eq!(
+            loaded.saved_state([-16, 3, 18], 0).unwrap().network,
+            saved.network
+        );
     }
 
     /// A creative motor set to `rpm`, turning the shaft on `face` (CreativeMotorBlockEntity).
