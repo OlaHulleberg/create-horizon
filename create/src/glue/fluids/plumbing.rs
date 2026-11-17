@@ -251,7 +251,7 @@ impl create_engine::hose::Level for HoseLevel<'_, '_> {
     }
 }
 
-/// After the pipes: valves whose pointer moves (`FluidValveBlockEntity.tick`), hose pulleys
+/// After the pipes: all valves (`FluidValveBlockEntity.tick`), hose pulleys
 /// given a speed or busy, whistles and their extensions, and what clients must see again.
 /// Nothing runs without any.
 pub(super) fn tick(lv: &mut ServerLevel<'_>) {
@@ -263,12 +263,20 @@ pub(super) fn tick(lv: &mut ServerLevel<'_>) {
 
 fn tick_valves(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
-    let moving = with_world(|w| w.dims[dim].plumbing.valve_moving.clone()).unwrap_or_default();
-    if moving.is_empty() {
+    let valves = with_world(|w| {
+        w.dims[dim]
+            .plumbing
+            .valves
+            .keys()
+            .copied()
+            .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
+    if valves.is_empty() {
         return;
     }
-    // Each moving valve's `enabled`, read before the engine steps them.
-    let open: Vec<([i32; 3], Option<bool>)> = moving
+    // Each valve's `enabled`, read before the engine steps them.
+    let open: Vec<([i32; 3], Option<bool>)> = valves
         .iter()
         .map(|&p| {
             let enabled = info_at(lv, p)

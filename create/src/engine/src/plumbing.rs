@@ -18,9 +18,8 @@ pub struct Whistle {
 
 #[derive(Default)]
 pub struct Plumbing {
-    /// Fluid valves' pointers, and the valves whose pointer moves (the only ones that tick).
+    /// FluidValveBlockEntity pointers: every valve ticks, including stationary ones.
     pub valves: HashMap<[i32; 3], Pointer>,
-    pub valve_moving: Vec<[i32; 3]>,
     /// Smart fluid pipes' filters (`FilteringBehaviour.forFluids`), saved with their column;
     /// those saved for pipes not loaded yet are kept as they are.
     pub filters: HashMap<[i32; 3], crate::fluids::SmartFilter>,
@@ -57,18 +56,10 @@ pub struct Plumbing {
 }
 
 impl Plumbing {
-    /// A valve placed, loaded or changed: its pointer starts where its block is. A pointer at
-    /// rest that disagrees with its block (a valve replaced by another, open or shut, as a new
-    /// block entity starts) is put where the block is, and chases its target from there.
-    pub fn valve_placed(&mut self, pos: [i32; 3], open: bool) {
-        let p = self.valves.entry(pos).or_insert_with(|| Pointer::at(open));
-        let at = if open { 1.0 } else { 0.0 };
-        if !p.moving() && p.value != at {
-            p.value = at;
-            if p.moving() && !self.valve_moving.contains(&pos) {
-                self.valve_moving.push(pos);
-            }
-        }
+    /// FluidValveBlockEntity's constructor starts at zero, chasing zero at zero speed.
+    /// Changes of block state preserve the entity; ENABLED follows the pointer in tick.
+    pub fn valve_placed(&mut self, pos: [i32; 3]) {
+        self.valves.entry(pos).or_default();
     }
 
     /// `FluidValveBlockEntity.onSpeedChanged`.
@@ -77,38 +68,29 @@ impl Plumbing {
             return;
         };
         p.speed_changed(speed);
-        if p.moving() && !self.valve_moving.contains(&pos) {
-            self.valve_moving.push(pos);
-        }
     }
 
-    /// One tick of the moving valves (`FluidValveBlockEntity.tick`): `open` reads a valve's
-    /// `enabled`; the valves whose `enabled` must change, with the new value. A valve whose
-    /// pointer stopped leaves the list.
+    /// FluidValveBlockEntity.tick: tickChaser, then reconcile ENABLED at both endpoints,
+    /// even when stationary. Intermediate pointer values leave ENABLED unchanged.
     pub fn tick_valves(
         &mut self,
         open: impl Fn([i32; 3]) -> Option<bool>,
     ) -> Vec<([i32; 3], bool)> {
         let mut out = Vec::new();
-        let valves = &mut self.valves;
-        self.valve_moving.retain(|pos| {
-            let (Some(p), Some(o)) = (valves.get_mut(pos), open(*pos)) else {
-                return false;
-            };
-            if let Some(n) = p.tick(o) {
-                out.push((*pos, n));
+        for (pos, pointer) in &mut self.valves {
+            if let Some(enabled) = open(*pos)
+                && let Some(next) = pointer.tick(enabled)
+            {
+                out.push((*pos, next));
             }
-            p.moving()
-        });
+        }
         out
     }
 
     /// A block left `pos`: whatever it kept goes.
     pub fn removed(&mut self, pos: [i32; 3]) -> bool {
         let mut saved = false;
-        if self.valves.remove(&pos).is_some() {
-            self.valve_moving.retain(|p| *p != pos);
-        }
+        self.valves.remove(&pos);
         if self.filters.remove(&pos).is_some() {
             self.filter_changes.push(pos);
             saved = true;
@@ -133,7 +115,6 @@ impl Plumbing {
     pub fn column_unloaded(&mut self, cx: i32, cz: i32) {
         let out = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) != (cx, cz);
         self.valves.retain(|p, _| out(p));
-        self.valve_moving.retain(out);
         self.filters.retain(|p, _| out(p));
         self.hose_saved.retain(|p, _| out(p));
         self.creative_saved.retain(|p, _| out(p));
@@ -163,36 +144,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_valve_replaced_shut_while_turning_opens_again() {
+    fn enabled_valve_starts_at_zero_and_closes_without_rotation() {
+        let pos = [0, 0, 0];
         let mut p = Plumbing::default();
-        p.valve_placed([0, 0, 0], false);
-        p.valve_speed([0, 0, 0], 320.0);
-        assert_eq!(p.tick_valves(|_| Some(false)), [([0, 0, 0], true)]);
-        assert!(p.valve_moving.is_empty());
-        // Replaced by a shut valve: its pointer starts shut and opens again.
-        p.valve_placed([0, 0, 0], false);
-        assert_eq!(p.valve_moving, [[0, 0, 0]]);
-        assert_eq!(p.tick_valves(|_| Some(false)), [([0, 0, 0], true)]);
-        // Its own change (open as its pointer) keeps it.
-        p.valve_placed([0, 0, 0], true);
-        assert!(p.valve_moving.is_empty());
+        p.valve_placed(pos);
+        assert_eq!(p.valves[&pos], Pointer::default());
+        assert_eq!(p.tick_valves(|_| Some(true)), [(pos, false)]);
+        assert!(p.tick_valves(|_| Some(false)).is_empty());
     }
 
     #[test]
-    fn only_moving_valves_tick() {
+    fn stationary_valve_endpoints_drive_enabled_after_state_changes() {
+        let pos = [0, 0, 0];
         let mut p = Plumbing::default();
-        p.valve_placed([0, 0, 0], false);
-        assert!(p.valve_moving.is_empty());
-        p.valve_speed([0, 0, 0], 64.0);
-        assert_eq!(p.valve_moving, vec![[0, 0, 0]]);
-        let mut changes = Vec::new();
-        for _ in 0..5 {
-            changes.extend(p.tick_valves(|_| Some(false)));
+        p.valve_placed(pos);
+        p.valve_speed(pos, 64.0);
+        for expected in [0.2, 0.4, 0.6, 0.8] {
+            assert!(p.tick_valves(|_| Some(false)).is_empty());
+            assert!((p.valves[&pos].value - expected).abs() < 1e-6);
         }
-        // 64 RPM: 0.2 a tick, open after 5 ticks; then still.
-        assert_eq!(changes, vec![([0, 0, 0], true)]);
-        assert!(p.valve_moving.is_empty());
-        assert!(!p.removed([0, 0, 0]));
+        assert_eq!(p.tick_valves(|_| Some(false)), [(pos, true)]);
+        p.valve_speed(pos, 0.0);
+        p.valve_placed(pos);
+        assert_eq!(p.valves[&pos].value, 1.0);
+        assert_eq!(p.tick_valves(|_| Some(false)), [(pos, true)]);
+        p.valve_speed(pos, -320.0);
+        assert_eq!(p.tick_valves(|_| Some(true)), [(pos, false)]);
+        assert!(!p.removed(pos));
         assert!(p.valves.is_empty());
     }
 }

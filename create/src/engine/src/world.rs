@@ -4699,7 +4699,7 @@ impl CreateWorld {
         let d = &mut self.dims[dim];
         let p = &mut d.plumbing;
         match block {
-            Block::FluidValve => p.valve_placed(pos, info.enabled),
+            Block::FluidValve => p.valve_placed(pos),
             Block::HosePulley if !p.hoses.contains_key(&pos) => {
                 let (offset, tank) = p.hose_saved.remove(&pos).unwrap_or_default();
                 p.hoses.insert(
@@ -6464,7 +6464,7 @@ mod tests {
         assert!(w.dims[0].pipes_changed, "a valve is a pipe");
         assert!(w.dims[0].plumbing.valves.contains_key(&valve));
         w.dims[0].plumbing.valve_speed(valve, 32.0);
-        assert_eq!(w.dims[0].plumbing.valve_moving, vec![valve]);
+        assert!(w.dims[0].plumbing.valves[&valve].moving());
         // A hose pulley turns on x (its facing north turned clockwise), its shaft out east.
         w.block_changed(0, hose, 0, 12);
         assert!(w.dims[0].plumbing.hoses.contains_key(&hose));

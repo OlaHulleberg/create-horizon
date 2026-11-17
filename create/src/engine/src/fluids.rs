@@ -705,7 +705,8 @@ pub struct Pointer {
 }
 
 impl Pointer {
-    /// At rest, open or shut as its block is (what a loaded valve starts from).
+    /// A stationary endpoint for rendering before entity data arrives.
+    /// New server entities use `Default`, following FluidValveBlockEntity's constructor.
     pub fn at(open: bool) -> Pointer {
         let v = if open { 1.0 } else { 0.0 };
         Pointer {
