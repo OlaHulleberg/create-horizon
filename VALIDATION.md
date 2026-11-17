@@ -11,8 +11,8 @@ Sunrise at the pin with an SDK built from the same checkout, signed with a throw
 |---|---|---|
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
-| `create/` | `cargo +1.99.1 test` | Pass (86 glue tests) |
-| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (711 engine tests) |
+| `create/` | `cargo +1.99.1 test` | Pass (87 glue tests) |
+| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (713 engine tests) |
 | `create/` | `cargo horizon-mod check` | Pass ("Create uses 3578 items of the API … Made for b77574e.") |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/src/engine/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
@@ -132,6 +132,7 @@ above:
 | A crank's or valve's use saved and restored (#29) | Partly in game | A crank turned with ticks frozen saves `HandleState` with `InUse: 8` while turning at 32 (written only when it changes), and the world reloads without errors; the 8 ticks run out while the world loads, so the restore itself is checked by `crank_use_survives_cold_load`, `valve_use_survives_cold_load` and create-fuzz's reload cases |
 | Saved network figures from the entity's cache (#33) | Pass | Motor and two shafts, one shaft removed, saved and reloaded: saved `Size` 1 on the motor, 3 then 2 on the shafts, the same after reload, exactly what Create saves for that input (create-fuzz: each entity's `networkSize` changes only when its network syncs) |
 | Reloads keep depots' held items and network members (#30, #34) | Pass | A motor driving two shafts and a depot holding two diamonds (put on by the player), saved and reloaded: speeds 16, saved sizes 1 and 3, the depot still holding both diamonds, no errors; the sliding position and the transient member counts are checked by create-fuzz's reload cases |
+| A loaded belt forms its controller before its first tick (#31) | Pass | A six-segment belt made with the connector, iron dropped on it, saved and reloaded: `BeltState` (controller, index, length 6) and speed 16 kept, no errors; item positions on the first tick after load are checked by create-fuzz's reload cases |
 | Kinetic state saved and loaded (#10) | Pass | Two member-motor pairs keep their roles over two save/reload cycles; a world saved before #10 loads with both pairs intact and keeps them after saving again |
 
 Known differences left: the category editor's inventory shows the inventory as it was at the last change made in
