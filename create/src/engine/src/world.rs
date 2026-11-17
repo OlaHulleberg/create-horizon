@@ -2894,12 +2894,22 @@ impl CreateWorld {
     }
 
     /// The sequenced gearshift at `pos` loaded mid-sequence: it goes on from `run`, its far half
-    /// at the running instruction's modifier.
+    /// at the running instruction's modifier. Restore the saved kinetic state first,
+    /// as the block entity load callback does; its speed and stress are read without
+    /// a speed-change notification.
     pub fn restore_sequencer(&mut self, dim: usize, pos: [i32; 3], run: crate::sequencer::Run) {
+        // SequencedGearshiftBlockEntity.read calls KineticBlockEntity.read: restore
+        // speed and overStressed directly, without synthesizing onSpeedChanged.
+        let (speed, overstressed) = self.dims[dim]
+            .kinetics
+            .theoretical(pos, 0)
+            .unwrap_or((0.0, false));
         let Some(s) = self.dims[dim].sequencers.get_mut(&pos) else {
             return;
         };
         s.restore(run);
+        s.speed = speed;
+        s.overstressed = overstressed;
         self.sequencer_stepped(dim, pos);
     }
 
@@ -6500,6 +6510,56 @@ mod tests {
         // The drive's neighbour changes: it is shaped again (no change here).
         w.neighbor_changed(0, [0, 0, 1], 11);
         assert!(w.take_chain_shapes(0).is_empty());
+        states::clear_range();
+    }
+
+    #[test]
+    fn loaded_sequencer_continues_saved_timer() {
+        use crate::sequencer::{Instruction, Kind, Run, Speed};
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        states::set_range(10, 1);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            [(
+                "create:sequenced_gearshift",
+                [("axis", "x"), ("state", "1"), ("vertical", "false")].into_iter(),
+            )]
+            .into_iter(),
+        ));
+        let pos = [0, 8, 0];
+        w.block_loaded(0, pos, 10);
+        w.set_sequencer_instructions(
+            0,
+            pos,
+            vec![Instruction {
+                kind: Kind::TurnAngle,
+                speed: Speed::ForwardFast,
+                value: 90,
+            }],
+            false,
+        );
+        let mut kinetic = w.dims[0].kinetics.saved_state(pos, 0).unwrap();
+        kinetic.speed = 32.0;
+        w.dims[0].kinetics.restore_state(pos, 0, kinetic);
+        // Java c37: completed tick 22 saved these fields; read does not call
+        // onSpeedChanged. The unchanged 32 RPM report must leave the timer alone.
+        w.restore_sequencer(
+            0,
+            pos,
+            Run {
+                current: 0,
+                duration: 7,
+                progress: 19.2,
+                timer: 2,
+                powered_before: true,
+            },
+        );
+        let s = w.dims[0].sequencers.get_mut(&pos).unwrap();
+        assert_eq!(s.speed_changed(32.0, false), None);
+        assert_eq!(s.tick(), None);
+        assert_eq!(s.duration, 7);
+        assert_eq!(s.timer, 3);
+        assert_eq!(s.progress, 28.800001);
         states::clear_range();
     }
 
