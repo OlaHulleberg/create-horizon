@@ -1295,7 +1295,16 @@ impl Kinetics {
         let state = self.nodes[id as usize].state.clone();
         if let Some(net) = state.net {
             let network = self.networks.get_or_create_network_for(Some(net));
-            network.init_from_te(state.capacity, state.stress, state.network_size);
+            let syncs = network.init_from_te(
+                state.capacity,
+                state.stress,
+                state.network_size,
+                &self.nodes,
+            );
+            for sync in syncs {
+                self.sync_network(Some(sync));
+            }
+            let network = self.networks.get_or_create_network_for(Some(net));
             network.add_silently(id, &mut self.nodes, state.last_capacity, state.last_stress);
         }
     }

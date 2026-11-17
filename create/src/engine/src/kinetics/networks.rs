@@ -33,16 +33,30 @@ impl KineticNetwork {
     }
 
     /// KineticNetwork.initFromTE accounts for members not yet loaded.
-    pub(super) fn init_from_te(&mut self, capacity: f32, stress: f32, size: u32) {
+    pub(super) fn init_from_te(
+        &mut self,
+        capacity: f32,
+        stress: f32,
+        size: u32,
+        nodes: &[Node],
+    ) -> Vec<NetworkSync> {
         if self.initialized {
-            return;
+            return Vec::new();
         }
         self.initialized = true;
-        self.capacity = capacity;
-        self.stress = stress;
         self.unloaded_capacity = capacity;
         self.unloaded_stress = stress;
         self.unloaded_members = size;
+        // initFromTE invokes updateStress then updateCapacity, including members
+        // admitted before the first loaded entity initializes this network.
+        let mut syncs = Vec::new();
+        if let Some(sync) = self.update_stress(nodes) {
+            syncs.push(sync);
+        }
+        if let Some(sync) = self.update_capacity(nodes) {
+            syncs.push(sync);
+        }
+        syncs
     }
     /// KineticNetwork.addSilently subtracts the saved contribution before adding the live one.
     pub(super) fn add_silently(
@@ -325,5 +339,36 @@ impl TorquePropagator {
                 )
             })
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kinetics::{Axis, Kinetics, Part};
+
+    #[test]
+    fn init_from_te_includes_members_already_present() {
+        // initFromTE calls updateStress and updateCapacity, rather than assigning
+        // the saved totals over the contributions already in the network.
+        let mut kinetics = Kinetics::new();
+        kinetics.set(
+            [1, 8, 0],
+            0,
+            Part {
+                impact: 8.0,
+                ..Part::shaft(Axis::X)
+            },
+        );
+        kinetics.nodes[0].state.theoretical = 32.0;
+        let mut network = KineticNetwork::default();
+        network.update_stress_for(0, 8.0, &kinetics.nodes);
+        let syncs = network.init_from_te(524288.0, 0.0, 1, &kinetics.nodes);
+        assert_eq!(network.stress, 256.0);
+        let sync = syncs.last().unwrap();
+        assert_eq!(
+            (sync.capacity, sync.stress, sync.size),
+            (524288.0, 256.0, 2)
+        );
     }
 }
