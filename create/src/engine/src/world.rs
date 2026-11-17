@@ -2910,7 +2910,25 @@ impl CreateWorld {
         s.restore(run);
         s.speed = speed;
         s.overstressed = overstressed;
-        self.sequencer_stepped(dim, pos);
+        // read restores fields; it does not run an instruction or detach kinetics.
+        let modifier = s.modifier() as i8;
+        let context = s.context();
+        let ticks = s.ticks();
+        let d = &mut self.dims[dim];
+        d.sequencing.retain(|p| *p != pos);
+        if ticks {
+            d.sequencing.push(pos);
+        }
+        let settings = d.settings.entry(pos).or_default();
+        settings.sequence = modifier;
+        settings.context = context;
+        if let Some((block, info)) = d.states.get(&pos).and_then(|state| self.table.get(*state)) {
+            for (sub, part) in parts(block, info, settings).into_iter().enumerate() {
+                if let Some(part) = part {
+                    d.kinetics.read_part(pos, sub as u8, part);
+                }
+            }
+        }
     }
 
     /// The instructions of the sequenced gearshift at `pos`.
@@ -2941,7 +2959,9 @@ impl CreateWorld {
         } else {
             instructions
         };
-        self.sequencer_stepped(dim, pos);
+        if stop {
+            self.sequencer_stepped(dim, pos);
+        }
         step
     }
 
@@ -6541,6 +6561,11 @@ mod tests {
         let mut kinetic = w.dims[0].kinetics.saved_state(pos, 0).unwrap();
         kinetic.speed = 32.0;
         w.dims[0].kinetics.restore_state(pos, 0, kinetic);
+        kinetic.speed = 64.0;
+        kinetic.source = Some(crate::kinetics::PartLocation { pos, sub: 0 });
+        w.dims[0].kinetics.restore_state(pos, 1, kinetic);
+        let far_read_state = w.dims[0].kinetics.saved_state(pos, 1).unwrap();
+        let read_state = w.dims[0].kinetics.saved_state(pos, 0).unwrap();
         // Java c37: completed tick 22 saved these fields; read does not call
         // onSpeedChanged. The unchanged 32 RPM report must leave the timer alone.
         w.restore_sequencer(
@@ -6554,6 +6579,8 @@ mod tests {
                 powered_before: true,
             },
         );
+        assert_eq!(w.dims[0].kinetics.saved_state(pos, 1), Some(far_read_state));
+        assert_eq!(w.dims[0].kinetics.saved_state(pos, 0), Some(read_state));
         let s = w.dims[0].sequencers.get_mut(&pos).unwrap();
         assert_eq!(s.speed_changed(32.0, false), None);
         assert_eq!(s.tick(), None);

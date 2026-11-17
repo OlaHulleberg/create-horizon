@@ -781,6 +781,17 @@ impl Kinetics {
         self.dirty.push(id);
     }
 
+    /// Block entity `read`: install its deserialized configuration without detach,
+    /// source removal, notifications or initialization. Kinetic caches remain the
+    /// values read by KineticBlockEntity.read until the entity's first tick.
+    pub(crate) fn read_part(&mut self, pos: [i32; 3], sub: u8, part: Part) {
+        if let Some(id) = self.at.get(&pos).map(|ids| ids[sub as usize])
+            && id != NONE
+        {
+            self.nodes[id as usize].part = part;
+        }
+    }
+
     /// `KineticBlock.onPlace` / `updateIndirectNeighbourShapes`: retain the entity,
     /// changing its state-derived part without invoking updateGeneratedRotation.
     pub fn change_block_state(&mut self, pos: [i32; 3], sub: u8, part: Part, equivalent: bool) {
