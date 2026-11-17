@@ -248,6 +248,35 @@ fn loading_legacy_save(data: &Compound) -> bool {
         && (data.contains_key(&SPEEDS.into()) || data.contains_key(&THEORY.into()))
 }
 
+/// Java hand crank / valve use data, independent of the kinetic ports.
+fn handle_to_nbt(h: create_engine::valve::SavedHandle) -> Compound {
+    Compound::from([
+        ("InUse".into(), Tag::Int(i32::from(h.in_use))),
+        ("Backwards".into(), Tag::Byte(i8::from(h.backwards))),
+        ("ScrollValue".into(), Tag::Int(h.angle)),
+        (
+            "TotalUseTicks".into(),
+            Tag::Int(i32::from(h.total_use_ticks)),
+        ),
+        ("StartAngle".into(), Tag::Int(h.start_angle)),
+        ("TargetAngle".into(), Tag::Int(h.target_angle)),
+    ])
+}
+fn handle_from_nbt(data: &Compound) -> create_engine::valve::SavedHandle {
+    let int = |key: &str| match data.get(&key.into()) {
+        Some(Tag::Int(v)) => *v,
+        _ => 0,
+    };
+    create_engine::valve::SavedHandle {
+        in_use: int("InUse").clamp(0, 255) as u8,
+        backwards: matches!(data.get(&"Backwards".into()), Some(Tag::Byte(v)) if *v != 0),
+        angle: int("ScrollValue"),
+        total_use_ticks: int("TotalUseTicks").clamp(0, 255) as u8,
+        start_angle: int("StartAngle"),
+        target_angle: int("TargetAngle"),
+    }
+}
+
 /// KineticBlockEntity.write's server fields.
 fn saved_to_nbt(saved: SavedKineticState) -> Compound {
     let mut out = Compound::from([
@@ -506,6 +535,12 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
             }
         }
     }
+    let handles = with_world(|w| w.handle_positions(dim)).unwrap_or_default();
+    for pos in handles {
+        if let Some(saved) = with_world(|w| w.saved_handle(dim, pos)).flatten() {
+            lv.write_entity_field(pos, "HandleState", handle_to_nbt(saved));
+        }
+    }
     let changed = with_world(|w| w.dims[dim].kinetics.take_saved_changes()).unwrap_or_default();
     for pos in changed {
         let Some(states) = with_world(|w| {
@@ -749,6 +784,9 @@ impl BlockEntityPart for KineticEntity {
         let legacy = loading_legacy_save(&data);
         with_world(|w| {
             w.block_loaded(dim, pos, state);
+            if let Some(Tag::Compound(handle)) = data.get(&"HandleState".into()) {
+                w.restore_handle(dim, pos, handle_from_nbt(handle));
+            }
             if let Some(ports) = saved {
                 for sub in 0..2 {
                     if let Some(Tag::Compound(data)) = ports.get(&["0", "1"][sub as usize].into())
@@ -986,6 +1024,19 @@ pub fn draw_turning(
 
 #[cfg(test)]
 mod saved_state_tests {
+    #[test]
+    fn handle_use_nbt_roundtrip() {
+        let saved = create_engine::valve::SavedHandle {
+            in_use: 6,
+            backwards: true,
+            angle: -45,
+            total_use_ticks: 7,
+            start_angle: 0,
+            target_angle: -90,
+        };
+        assert_eq!(super::handle_from_nbt(&super::handle_to_nbt(saved)), saved);
+    }
+
     use super::*;
     #[test]
     fn only_old_persisted_data_requests_legacy_migration() {

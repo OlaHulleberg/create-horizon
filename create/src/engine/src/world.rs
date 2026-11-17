@@ -118,12 +118,8 @@ pub struct Dimension {
     states: HashMap<[i32; 3], u32>,
     /// Columns whose saved data changed, to mark unsaved when the dimension is in place.
     pub unsaved: Vec<(i32, i32)>,
-    /// Hand cranks being turned: ticks left (`HandCrankBlockEntity.inUse`). Empty at rest, so
-    /// cranks cost nothing per tick unless turned.
-    cranks: HashMap<[i32; 3], u8>,
-    /// Valve handles that stopped and wait out their `cooldown` before they turn again; ticked
-    /// only while not empty.
-    valve_cooldowns: HashMap<[i32; 3], u8>,
+    /// Java crank/valve block entity use state, including the unsaved valve cooldown.
+    handles: HashMap<[i32; 3], crate::valve::Handle>,
     /// Sliding doors whose `open` changed (position, open before), for the glue to apply
     /// Create's rules after the tick; and the lower halves whose panel still slides
     /// (`SlidingDoorBlockEntity.animation`), the only doors that tick.
@@ -1596,8 +1592,7 @@ impl CreateWorld {
             d.shaft_engine.remove(&pos);
             d.kinetics.remove(pos);
             d.states.remove(&pos);
-            d.cranks.remove(&pos);
-            d.valve_cooldowns.remove(&pos);
+            d.handles.remove(&pos);
             d.wheels.retain(|p| *p != pos);
             d.millstones.remove(&pos);
             d.basins.remove(&pos);
@@ -1893,8 +1888,7 @@ impl CreateWorld {
             for pos in list {
                 d.kinetics.remove(pos);
                 d.states.remove(&pos);
-                d.cranks.remove(&pos);
-                d.valve_cooldowns.remove(&pos);
+                d.handles.remove(&pos);
             }
             d.wheels.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.millstones
@@ -2369,7 +2363,9 @@ impl CreateWorld {
             return false;
         }
         let d = &mut self.dims[dim];
-        d.cranks.insert(pos, 10);
+        let handle = d.handles.entry(pos).or_default();
+        handle.saved.in_use = 10;
+        handle.saved.backwards = back;
         let crank = if back { -1 } else { 1 };
         let old = d.settings.get(&pos).copied().unwrap_or_default();
         if old.crank != crank {
@@ -2387,7 +2383,9 @@ impl CreateWorld {
         };
         match crate::board::Activity::of(block) {
             crate::board::Activity::Always => true,
-            crate::board::Activity::IdleValve => !d.cranks.contains_key(&pos),
+            crate::board::Activity::IdleValve => {
+                d.handles.get(&pos).is_none_or(|h| h.saved.in_use == 0)
+            }
             crate::board::Activity::UndrivenSteamShaft => {
                 let Some(connected) = engine_facing(info) else {
                     return true;
@@ -2434,11 +2432,27 @@ impl CreateWorld {
             .kinetics
             .theoretical(pos, 0)
             .is_some_and(|(speed, _)| speed != 0.0);
-        if turning || d.cranks.contains_key(&pos) || d.valve_cooldowns.contains_key(&pos) {
+        if turning
+            || d.handles
+                .get(&pos)
+                .is_some_and(|h| h.saved.in_use > 0 || h.cooldown > 0)
+        {
             return false;
         }
-        d.cranks.insert(pos, crate::valve::use_ticks(value));
-        d.valve_cooldowns.insert(pos, crate::valve::COOLDOWN);
+        d.handles.insert(
+            pos,
+            crate::valve::Handle {
+                saved: crate::valve::SavedHandle {
+                    in_use: crate::valve::use_ticks(value),
+                    backwards: back,
+                    angle: value,
+                    total_use_ticks: crate::valve::use_ticks(value),
+                    start_angle: 0,
+                    target_angle: crate::valve::target_angle(value),
+                },
+                cooldown: crate::valve::COOLDOWN,
+            },
+        );
         let crank = if crate::valve::clockwise(value, back) {
             -1
         } else {
@@ -2467,34 +2481,20 @@ impl CreateWorld {
     /// One tick of the cranks being turned: those whose time ran out stop; valve handles that
     /// stopped count their cooldown down (`ValveHandleBlockEntity.tick`, after the crank's).
     pub fn tick_cranks(&mut self, dim: usize) {
-        if self.dims[dim].cranks.is_empty() && self.dims[dim].valve_cooldowns.is_empty() {
-            return;
-        }
-        self.tick_turning_cranks(dim);
-        let d = &mut self.dims[dim];
-        let cranks = &d.cranks;
-        d.valve_cooldowns.retain(|pos, left| {
-            if !cranks.contains_key(pos) {
-                *left -= 1;
-            }
-            *left > 0
-        });
-    }
-
-    fn tick_turning_cranks(&mut self, dim: usize) {
-        if self.dims[dim].cranks.is_empty() {
-            return;
-        }
         let mut stopped = Vec::new();
-        for (pos, left) in self.dims[dim].cranks.iter_mut() {
-            *left -= 1;
-            if *left == 0 {
-                stopped.push(*pos);
+        for (pos, handle) in &mut self.dims[dim].handles {
+            if handle.saved.in_use > 0 {
+                handle.saved.in_use -= 1;
+                if handle.saved.in_use == 0 {
+                    stopped.push(*pos);
+                }
+            }
+            if handle.saved.in_use == 0 && handle.cooldown > 0 {
+                handle.cooldown -= 1;
             }
         }
         for pos in stopped {
             let d = &mut self.dims[dim];
-            d.cranks.remove(&pos);
             if let (Some(&state), Some(old)) = (d.states.get(&pos), d.settings.get(&pos).copied()) {
                 // `HandCrankBlockEntity.tick`: the context goes when it stops.
                 self.set_settings(
@@ -2509,6 +2509,53 @@ impl CreateWorld {
                 );
             }
         }
+    }
+
+    /// Loaded crank/valve positions whose use data the host writes each tick.
+    pub fn handle_positions(&self, dim: usize) -> Vec<[i32; 3]> {
+        self.dims[dim].handles.keys().copied().collect()
+    }
+
+    /// `HandCrankBlockEntity.write`, extended by `ValveHandleBlockEntity.write`.
+    pub fn saved_handle(&self, dim: usize, pos: [i32; 3]) -> Option<crate::valve::SavedHandle> {
+        let block = self.block_at(dim, pos)?;
+        (block == Block::HandCrank || crate::dye::is_valve_handle(block)).then(|| {
+            self.dims[dim]
+                .handles
+                .get(&pos)
+                .map(|h| h.saved)
+                .unwrap_or_default()
+        })
+    }
+
+    /// Java `read`: restore generator inputs before restoring the kinetic snapshot.
+    /// `cooldown` is not saved by Java and starts at zero.
+    pub fn restore_handle(&mut self, dim: usize, pos: [i32; 3], saved: crate::valve::SavedHandle) {
+        if self.saved_handle(dim, pos).is_none() {
+            return;
+        }
+        let state = self.dims[dim].states[&pos];
+        let old = self.dims[dim]
+            .settings
+            .get(&pos)
+            .copied()
+            .unwrap_or_default();
+        let clockwise = if self.block_at(dim, pos) == Some(Block::HandCrank) {
+            saved.backwards
+        } else {
+            crate::valve::clockwise(saved.angle, saved.backwards)
+        };
+        let crank = if saved.in_use == 0 {
+            0
+        } else if clockwise {
+            -1
+        } else {
+            1
+        };
+        self.dims[dim]
+            .handles
+            .insert(pos, crate::valve::Handle { saved, cooldown: 0 });
+        self.set_settings(dim, pos, state, Settings { crank, ..old });
     }
 
     /// Settings saved with a column, before its blocks are scanned.
@@ -5440,6 +5487,81 @@ mod tests {
     }
 
     #[test]
+    fn crank_use_survives_cold_load() {
+        cold_handle_load(false);
+    }
+
+    #[test]
+    fn valve_use_survives_cold_load() {
+        cold_handle_load(true);
+    }
+
+    fn cold_handle_load(valve: bool) {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        states::set_range(10, 2);
+        let table = || {
+            StateTable::new(
+                10,
+                [
+                    ("create:hand_crank", [("facing", "up")].into_iter()),
+                    ("create:copper_valve_handle", [("facing", "up")].into_iter()),
+                ]
+                .into_iter(),
+            )
+        };
+        let id = if valve { 11 } else { 10 };
+        {
+            for back in [false, true] {
+                let pos = [0, 8, 0];
+                let mut w = CreateWorld::new(table());
+                w.block_loaded(0, pos, id);
+                if valve {
+                    assert!(w.use_valve(0, pos, back, -45));
+                } else {
+                    assert!(w.turn_crank(0, pos, back));
+                }
+                w.tick_cranks(0);
+                w.tick(0, &mut Vec::new());
+                let saved = w.saved_handle(0, pos).unwrap();
+                assert_eq!(saved.in_use, if valve { 6 } else { 9 });
+                let kinetic = w.dims[0].kinetics.saved_state(pos, 0).unwrap();
+                let rpm = if back ^ valve { -32.0 } else { 32.0 };
+                assert_eq!(w.dims[0].kinetics.generated(pos, 0), Some(rpm));
+                w.column_unloaded(0, 0, 0);
+                w.block_loaded(0, pos, id);
+                w.restore_handle(0, pos, saved);
+                w.dims[0].kinetics.restore_state(pos, 0, kinetic);
+                assert_eq!(w.dims[0].kinetics.generated(pos, 0), Some(rpm));
+                assert_eq!(w.saved_handle(0, pos), Some(saved));
+                w.tick(0, &mut Vec::new());
+                assert_eq!(w.speed(0, pos), Some(rpm));
+                let network = w.dims[0]
+                    .kinetics
+                    .saved_state(pos, 0)
+                    .unwrap()
+                    .network
+                    .unwrap();
+                assert_eq!(network.capacity, 256.0);
+                assert_eq!(network.size, 1);
+                for _ in 1..saved.in_use {
+                    w.tick_cranks(0);
+                }
+                assert_eq!(w.dims[0].kinetics.generated(pos, 0), Some(rpm));
+                w.tick_cranks(0);
+                w.tick(0, &mut Vec::new());
+                assert_eq!(w.dims[0].kinetics.generated(pos, 0), Some(0.0));
+                if valve {
+                    assert!(
+                        w.use_valve(0, pos, false, 45),
+                        "Java does not save cooldown"
+                    );
+                }
+            }
+        }
+        states::clear_range();
+    }
+
+    #[test]
     fn a_turned_crank_drives_for_ten_ticks() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
@@ -5520,7 +5642,7 @@ mod tests {
         }
         // HandCrankBlockEntity.tick expires, but clearKineticInformation did not
         // detach the old shaft. Java retains its speed, source and sequence.
-        assert!(!w.dims[0].cranks.contains_key(&handle));
+        assert_eq!(w.dims[0].handles[&handle].saved.in_use, 0);
         assert_eq!(w.speed(0, shaft), Some(-32.0));
         assert_eq!(
             w.dims[0].kinetics.sequence_limit(shaft, 0, false),

@@ -66,3 +66,35 @@ mod tests {
         assert_eq!(drawn_angle(-180, 21, 0.0, false, true), 0.0);
     }
 }
+
+/// `HandCrankBlockEntity.write/read` and `ValveHandleBlockEntity.write/read`.
+/// Cooldown is deliberately absent: Java initializes it to zero on load.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SavedHandle {
+    pub in_use: u8,
+    pub backwards: bool,
+    pub angle: i32,
+    pub total_use_ticks: u8,
+    pub start_angle: i32,
+    pub target_angle: i32,
+}
+
+/// Live `HandCrankBlockEntity` / `ValveHandleBlockEntity` use state.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Handle {
+    pub saved: SavedHandle,
+    pub cooldown: u8,
+}
+
+impl Default for SavedHandle {
+    fn default() -> Self {
+        Self {
+            in_use: 0,
+            backwards: false,
+            angle: DEFAULT_ANGLE,
+            total_use_ticks: 0,
+            start_angle: 0,
+            target_angle: 0,
+        }
+    }
+}
