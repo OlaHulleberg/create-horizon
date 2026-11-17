@@ -350,9 +350,9 @@ impl Kinetics {
             // GeneratingKineticBlockEntity.updateGeneratedRotation calculates these
             // contributions before passing them to the network.
             if generated != 0.0 {
-                self.nodes[id as usize].state.last_capacity = capacity;
+                self.nodes[id as usize].calculate_added_stress_capacity();
             }
-            self.nodes[id as usize].state.last_stress = impact;
+            self.nodes[id as usize].calculate_stress_applied();
             let network = self.networks.get_or_create_network_for(net);
             network.update_capacity_for(id, capacity, &self.nodes);
             let sync = network.update_capacity(&self.nodes);

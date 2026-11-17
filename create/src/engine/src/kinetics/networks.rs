@@ -78,9 +78,9 @@ impl KineticNetwork {
         if enrolled {
             return false;
         }
-        n.state.last_stress = n.part.impact;
+        n.calculate_stress_applied();
         if n.part.generated != 0.0 {
-            n.state.last_capacity = n.part.capacity;
+            n.calculate_added_stress_capacity();
             self.sources.insert(Entity(n.pos), n.part.capacity);
         }
         true

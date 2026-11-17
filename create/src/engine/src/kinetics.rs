@@ -479,6 +479,20 @@ struct Node {
     load_origin: LoadOrigin,
 }
 
+impl Node {
+    /// KineticBlockEntity.calculateStressApplied, including its cached save value.
+    fn calculate_stress_applied(&mut self) -> f32 {
+        self.state.last_stress = self.part.impact;
+        self.state.last_stress
+    }
+
+    /// KineticBlockEntity.calculateAddedStressCapacity (also callable when not a source).
+    fn calculate_added_stress_capacity(&mut self) -> f32 {
+        self.state.last_capacity = self.part.capacity;
+        self.state.last_capacity
+    }
+}
+
 /// The kinetic parts of one dimension.
 #[derive(Default)]
 pub struct Kinetics {
@@ -909,6 +923,26 @@ impl Kinetics {
         let n = self.nodes.get(id as usize).filter(|_| id != NONE)?;
         let (c, relative) = n.state.seq?;
         (c.distance == distance).then(|| (relative * n.state.theoretical).abs())
+    }
+
+    /// KineticBlockEntity.calculateStressApplied: return base impact and cache it for
+    /// write. Network admission and goggles/tooltips call this even for consumers.
+    /// Like Java, the calculation alone does not mark the entity for saving.
+    pub fn calculate_stress_applied(&mut self, pos: [i32; 3], sub: u8) -> Option<f32> {
+        let id = *self.at.get(&pos)?.get(sub as usize)?;
+        Some(self.nodes.get_mut(id as usize)?.calculate_stress_applied())
+    }
+
+    /// KineticBlockEntity.calculateAddedStressCapacity: return base capacity and cache
+    /// it for write, independently of generated speed or network membership. Generator
+    /// goggles/tooltips call this for externally driven generators too.
+    pub fn calculate_added_stress_capacity(&mut self, pos: [i32; 3], sub: u8) -> Option<f32> {
+        let id = *self.at.get(&pos)?.get(sub as usize)?;
+        Some(
+            self.nodes
+                .get_mut(id as usize)?
+                .calculate_added_stress_capacity(),
+        )
     }
 
     /// A part's theoretical speed, its network's stress and capacity, and whether it is
@@ -1803,6 +1837,72 @@ mod tests {
         // The conveying large cog is currentTE, even though the small cog was placed later.
         assert!(e.contains(&Event::Break { pos: [1, 1, 1] }), "{e:?}");
         assert_eq!(k.speed([2, 2, 1], 0), Some(0.0));
+    }
+
+    #[test]
+    fn driven_crank_calculation_is_saved_across_reload() {
+        // Seed 113: Observations.kinetic calls calculateAddedStressCapacity
+        // on the dormant, externally driven hand crank before Persistence.reload.
+        // Java then saves AddedCapacity=8, although this entity is not a source.
+        let pos = [-5, 8, 2];
+        let crank = Part {
+            capacity: 8.0,
+            ..Part::half(Dir::Up)
+        };
+        let mut k = Kinetics::new();
+        k.set(pos, 0, crank);
+        solve(&mut k);
+        k.set(
+            [-5, 9, 2],
+            0,
+            Part {
+                capacity: 16384.0,
+                ..motor(Dir::Down, 32.0)
+            },
+        );
+        solve(&mut k);
+        assert_eq!(
+            k.saved_state(pos, 0)
+                .unwrap()
+                .network
+                .unwrap()
+                .added_capacity,
+            0.0
+        );
+        assert_eq!(k.calculate_added_stress_capacity(pos, 0), Some(8.0));
+        let saved = k.saved_state(pos, 0).unwrap();
+        assert_eq!(saved.network.unwrap().added_capacity, 8.0);
+        let mut loaded = Kinetics::new();
+        loaded.set(pos, 0, crank);
+        assert!(loaded.restore_state(pos, 0, saved));
+        assert_eq!(
+            loaded
+                .saved_state(pos, 0)
+                .unwrap()
+                .network
+                .unwrap()
+                .added_capacity,
+            8.0
+        );
+    }
+
+    #[test]
+    fn consumer_stress_calculation_updates_its_saved_cache() {
+        let pos = [0, 0, 0];
+        let mut k = Kinetics::new();
+        k.set(
+            pos,
+            0,
+            Part {
+                impact: 8.0,
+                ..Part::shaft(Axis::X)
+            },
+        );
+        let id = k.at[&pos][0];
+        assert_eq!(k.nodes[id as usize].state.last_stress, 0.0);
+        assert_eq!(k.calculate_stress_applied(pos, 0), Some(8.0));
+        assert_eq!(k.nodes[id as usize].state.last_stress, 8.0);
+        assert!(k.calculate_stress_applied([1, 0, 0], 0).is_none());
     }
 
     #[test]
