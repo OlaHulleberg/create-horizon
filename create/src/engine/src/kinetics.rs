@@ -996,6 +996,45 @@ fn controls(controller: &Part, cog: &Part) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn source_membership_follows_the_immediate_driver() {
+        let mut k = Kinetics::new();
+        k.set([0, 0, 0], 0, motor(Dir::East, 16.0));
+        k.set([1, 0, 0], 0, Part::shaft(Axis::X));
+        k.set([2, 0, 0], 0, Part::shaft(Axis::X));
+        solve(&mut k);
+        let root = k.at[&[0, 0, 0]][0];
+        let middle = k.at[&[1, 0, 0]][0];
+        let end = k.at[&[2, 0, 0]][0];
+        assert_eq!(k.nodes[end as usize].state.source, middle);
+        assert_eq!(k.nodes[end as usize].state.net, root);
+        assert_eq!(k.networks.figures(root).2, 3);
+        k.remove([1, 0, 0]);
+        solve(&mut k);
+        assert_eq!(k.nodes[end as usize].state.source, NONE);
+        assert_eq!(k.speed([2, 0, 0], 0), Some(0.0));
+        assert_eq!(k.networks.figures(root).2, 1);
+    }
+
+    #[test]
+    fn validation_clears_a_source_whose_block_entity_disappeared() {
+        let mut k = Kinetics::new();
+        k.set([0, 0, 0], 0, motor(Dir::East, 16.0));
+        k.set([1, 0, 0], 0, Part::shaft(Axis::X));
+        solve(&mut k);
+        // Simulate a source disappearing without handleRemoved (e.g. external unload).
+        let root = k.at[&[0, 0, 0]][0];
+        k.nodes[root as usize].live = false;
+        for _ in 0..60 {
+            k.advance();
+        }
+        assert_eq!(k.speed([1, 0, 0], 0), Some(16.0));
+        k.advance();
+        assert!(k.has_dirty());
+        solve(&mut k);
+        assert_eq!(k.speed([1, 0, 0], 0), Some(0.0));
+    }
+
     /// A creative motor set to `rpm`, turning the shaft on `face` (CreativeMotorBlockEntity).
     fn motor(face: Dir, rpm: f32) -> Part {
         Part {
