@@ -428,6 +428,7 @@ struct Node {
     /// Set or replaced since the last solve: reported even when its speed is unchanged, so the
     /// game shows every part (a still one too).
     fresh: bool,
+    report_queued: bool,
 }
 
 /// The kinetic parts of one dimension.
@@ -441,6 +442,7 @@ pub struct Kinetics {
     /// `ChainConveyorBlockEntity.propagateRotationTo`): both sides list each other.
     far: HashMap<[i32; 3], Vec<[i32; 3]>>,
     dirty: Vec<u32>,
+    changed: Vec<u32>,
     pending_events: Vec<Event>,
     networks: TorquePropagator,
     scheduler: scheduling::TickScheduler,
@@ -482,6 +484,8 @@ impl Kinetics {
         !self.dirty.is_empty()
             || !self.reactivation_due.is_empty()
             || !self.pending_events.is_empty()
+            || !self.changed.is_empty()
+            || self.networks.has_dirty()
     }
 
     /// One tick went by: every part's flicker score falls by one (`KineticBlockEntity.tick`).
@@ -562,6 +566,7 @@ impl Kinetics {
             n.stamp = self.stamp;
             n.fresh = true;
             self.scheduler.validate_later(self.now, existing, n.stamp);
+            self.mark_changed(existing);
             self.dirty.push(existing);
             return;
         }
@@ -573,6 +578,7 @@ impl Kinetics {
             state: KineticState::default(),
             live: true,
             fresh: true,
+            report_queued: false,
         };
         let id = match self.free.pop() {
             Some(id) => {
@@ -585,6 +591,7 @@ impl Kinetics {
             }
         };
         slot[sub as usize] = id;
+        self.mark_changed(id);
         self.dirty.push(id);
     }
 
@@ -601,6 +608,8 @@ impl Kinetics {
         // destroyBlock makes the position absent before block entity removal callbacks.
         // Existing propagation frames retain their old entity's speed, as Java references do.
         for id in ids.into_iter().filter(|&i| i != NONE) {
+            let net = self.nodes[id as usize].state.net;
+            self.networks.remove(net, id);
             self.nodes[id as usize].live = false;
         }
         let mut breaks = Vec::new();
@@ -847,24 +856,65 @@ impl Kinetics {
         }
     }
 
+    /// KineticBlockEntity.sendData: enqueue a part once when its observable state changes.
+    fn mark_changed(&mut self, id: u32) {
+        let n = &mut self.nodes[id as usize];
+        if !n.report_queued {
+            n.report_queued = true;
+            self.changed.push(id);
+        }
+    }
+
+    /// KineticBlockEntity.updateFromNetwork: sync figures and notify on overstress changes.
+    fn update_from_network(&mut self, id: u32, capacity: f32, stress: f32) {
+        let n = &mut self.nodes[id as usize];
+        n.state.capacity = capacity;
+        n.state.stress = stress;
+        let over = stress > capacity;
+        if over != n.state.overstressed {
+            let shown = if over { 0.0 } else { n.state.theoretical };
+            n.state.flicker = n.state.flicker(self.now) + flicker_gain(n.state.speed, shown);
+            n.state.flicker_at = self.now;
+            n.state.overstressed = over;
+            n.state.speed = shown;
+            self.mark_changed(id);
+        }
+    }
+
+    /// KineticNetwork.sync calls updateFromNetwork for each member of that network.
+    fn sync_network(&mut self, sync: Option<networks::NetworkSync>) {
+        if let Some(sync) = sync {
+            for id in sync.members {
+                self.update_from_network(id, sync.capacity, sync.stress);
+            }
+        }
+    }
+
+    /// KineticBlockEntity.setNetwork leaves the old network before enrolling in the new one.
+    fn set_network(&mut self, id: u32, net: u32) {
+        let old = self.nodes[id as usize].state.net;
+        if old == net {
+            return;
+        }
+        self.networks.remove(old, id);
+        self.update_from_network(id, 0.0, 0.0);
+        self.nodes[id as usize].state.net = net;
+        if net != NONE {
+            self.networks
+                .get_or_create_network_for(net)
+                .add(id, &self.nodes);
+            self.networks.mark_dirty(net);
+            let (stress, capacity, _) = self.networks.figures(net);
+            self.update_from_network(id, capacity, stress);
+        }
+    }
+
     /// Runs queued block entity attachments and generator updates, then syncs network stress.
     pub fn solve(&mut self, events: &mut Vec<Event>) -> SolveStats {
         if !self.has_dirty() {
             return SolveStats::default();
         }
         events.append(&mut self.pending_events);
-        let before: Vec<_> = self
-            .nodes
-            .iter()
-            .map(|n| {
-                (
-                    n.state.speed,
-                    n.state.theoretical,
-                    n.state.overstressed,
-                    n.state.seq,
-                )
-            })
-            .collect();
         let mut pending = std::mem::take(&mut self.dirty);
         pending.sort_by_key(|&id| self.nodes[id as usize].stamp);
         pending.dedup();
@@ -900,69 +950,49 @@ impl Kinetics {
             }
         }
         self.dirty.clear();
-        // KineticNetwork.calculateCapacity / calculateStress: all members, generated RPM for sources.
-        self.networks.clear_members();
-        for n in self.nodes.iter().filter(|n| n.live && n.state.net != NONE) {
-            self.networks
-                .add(n.state.net, n.pos, n.sub, n.part, n.state.theoretical);
-        }
-        self.networks.update_networks();
         let mut stats = SolveStats::default();
-        let mut touched_nets = HashSet::new();
-        for (id, n) in self.nodes.iter_mut().enumerate().filter(|(_, n)| n.live) {
-            let (stress, capacity, _) = self.networks.figures(n.state.net);
-            if n.state.stress != stress || n.state.capacity != capacity {
-                touched_nets.insert(n.state.net);
-            }
-            n.state.stress = stress;
-            n.state.capacity = capacity;
-            let overstressed = stress > capacity;
-            if n.state.overstressed != overstressed {
-                let shown = if overstressed {
-                    0.0
-                } else {
-                    n.state.theoretical
-                };
-                n.state.flicker = n.state.flicker(self.now) + flicker_gain(n.state.speed, shown);
-                n.state.flicker_at = self.now;
-            }
-            n.state.overstressed = overstressed;
-            n.state.speed = if n.state.overstressed {
-                0.0
-            } else {
-                n.state.theoretical
-            };
-            if n.fresh
-                || before[id]
-                    != (
-                        n.state.speed,
-                        n.state.theoretical,
-                        n.state.overstressed,
-                        n.state.seq,
-                    )
-            {
-                events.push(Event::Speed {
-                    pos: n.pos,
-                    sub: n.sub,
-                    speed: n.state.speed,
-                    theoretical: n.state.theoretical,
-                    overstressed: n.state.overstressed,
-                });
-                n.fresh = false;
-                touched_nets.insert(n.state.net);
+        let mut touched_nets = self.networks.take_dirty();
+        for &net in &touched_nets {
+            if let Some(sync) = self.networks.update_network(net, &self.nodes) {
+                for id in sync.members {
+                    self.update_from_network(id, sync.capacity, sync.stress);
+                }
             }
         }
-        for n in self
-            .nodes
-            .iter()
-            .filter(|n| n.live && touched_nets.contains(&n.state.net))
-        {
-            stats.nodes += 1;
-            if n.sub == 0 && self.watched.contains(&n.pos) {
-                self.touched.push(n.pos);
+        let mut changed = std::mem::take(&mut self.changed);
+        for &id in &changed {
+            let n = &mut self.nodes[id as usize];
+            if !n.live || !n.report_queued {
+                continue;
+            }
+            n.report_queued = false;
+            n.fresh = false;
+            events.push(Event::Speed {
+                pos: n.pos,
+                sub: n.sub,
+                speed: n.state.speed,
+                theoretical: n.state.theoretical,
+                overstressed: n.state.overstressed,
+            });
+            if n.state.net != NONE {
+                touched_nets.insert(n.state.net);
+            } else {
+                stats.nodes += 1;
+            }
+        }
+        changed.clear();
+        self.changed = changed;
+        for &net in &touched_nets {
+            for id in self.networks.members(net) {
+                let n = &self.nodes[id as usize];
+                stats.nodes += 1;
+                if n.sub == 0 && self.watched.contains(&n.pos) {
+                    self.touched.push(n.pos);
+                }
             }
         }
         stats.components = touched_nets.len() as u32;
+        events.append(&mut self.pending_events);
         stats
     }
 
