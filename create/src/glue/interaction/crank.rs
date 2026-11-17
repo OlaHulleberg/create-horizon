@@ -54,7 +54,7 @@ impl BlockPart for Crank {
             return None;
         }
         let back = items::sneaking(&*host, player);
-        let lv = ServerLevel::new(host, click.dimension.key().id())?;
+        let mut lv = ServerLevel::new(host, click.dimension.key().id())?;
         let dim = lv.dim;
         if with_world(|w| w.turn_crank(dim, click.pos, back)) != Some(true) {
             return None;
@@ -66,6 +66,7 @@ impl BlockPart for Crank {
         if player.food(&*lv.host).is_some_and(|f| f.level == 0) {
             crate::glue::advancements::award(lv.host, player, "hand_crank_000");
         }
+        crate::glue::persist::publish(&mut lv);
         Some(InteractionResult::Success)
     }
 }

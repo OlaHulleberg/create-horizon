@@ -6166,6 +6166,54 @@ mod tests {
     }
 
     #[test]
+    fn interaction_journals_include_immediate_handle_rotation() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        states::set_range(10, 2);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            [
+                ("create:copper_valve_handle", [("facing", "up")].into_iter()),
+                ("create:shaft", [("axis", "y")].into_iter()),
+            ]
+            .into_iter(),
+        ));
+        let (handle, shaft) = ([0, 8, 0], [0, 7, 0]);
+        w.block_changed(0, shaft, 0, 11);
+        w.block_changed(0, handle, 0, 10);
+        w.tick(0, &mut Vec::new());
+        w.take_handle_changes(0);
+        w.dims[0].kinetics.take_saved_changes();
+        // An unrelated interaction can publish a newly placed, stationary shaft.
+        let idle = [8, 8, 0];
+        w.block_changed(0, idle, 0, 11);
+        assert!(
+            w.dims[0]
+                .kinetics
+                .saved_state(idle, 0)
+                .unwrap()
+                .needs_speed_update
+        );
+        w.dims[0].kinetics.take_saved_changes();
+        w.tick(0, &mut Vec::new());
+        assert!(
+            !w.dims[0]
+                .kinetics
+                .saved_state(idle, 0)
+                .unwrap()
+                .needs_speed_update
+        );
+        assert!(w.dims[0].kinetics.take_saved_changes().contains(&idle));
+        // ValveHandleBlockEntity.activate calls updateGeneratedRotation before returning.
+        assert!(w.use_valve(0, handle, false, 90));
+        assert_eq!(w.saved_handle(0, handle).unwrap().in_use, 12);
+        assert_eq!(w.speed(0, shaft), Some(32.0));
+        assert!(w.take_handle_changes(0).contains(&handle));
+        let changed = w.dims[0].kinetics.take_saved_changes();
+        assert!(changed.contains(&handle) && changed.contains(&shaft));
+        states::clear_range();
+    }
+
+    #[test]
     fn recoloured_valve_retains_entity_and_driven_shaft() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names = [

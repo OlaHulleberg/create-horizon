@@ -245,6 +245,7 @@ pub(crate) fn use_valve_handle(
         let used = super::sources::handles::valve_use(lv.game_time(), value, back);
         let _ = entity.merge_data(&mut *lv.host, used);
     }
+    super::persist::publish(lv);
     Some(InteractionResult::Success)
 }
 

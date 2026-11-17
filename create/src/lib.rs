@@ -166,10 +166,7 @@ impl Hooks for Create {
                 s.level_tick(&mut lv);
             }
         }
-        for s in SUBSYSTEMS {
-            s.write_entities(&mut lv);
-        }
-        persist::flush(&mut lv, SUBSYSTEMS);
+        persist::publish(&mut lv);
     }
 
     fn player_logged_in(&self, host: &mut dyn ServerHost, event: &mut PlayerLoggedInEvent<'_>) {

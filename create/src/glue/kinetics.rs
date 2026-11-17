@@ -225,6 +225,7 @@ pub struct Solve;
 
 impl Subsystem for Solve {
     fn write_entities(&self, lv: &mut ServerLevel<'_>) {
+        publish_saved(lv);
         let positions = with_world(|w| {
             w.dims[lv.dim]
                 .sequencers
@@ -576,6 +577,11 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
             }
         }
     }
+}
+
+/// Publish the engine saved-change journals without advancing simulation.
+fn publish_saved(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
     let handles = with_world(|w| w.take_handle_changes(dim)).unwrap_or_default();
     for pos in handles {
         if let Some(saved) = with_world(|w| w.saved_handle(dim, pos)).flatten() {

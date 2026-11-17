@@ -639,6 +639,9 @@ pub(crate) fn settings_at(
         }
         _ => return None,
     };
+    if pick.is_some() || short.is_some() {
+        super::super::persist::publish(lv);
+    }
     value.flatten()
 }
 

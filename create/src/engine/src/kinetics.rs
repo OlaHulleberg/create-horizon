@@ -1290,6 +1290,8 @@ impl Kinetics {
         }
         if self.nodes[id as usize].state.update_speed {
             self.nodes[id as usize].state.update_speed = false;
+            // attachKinetics changes the serialized NeedsSpeedUpdate flag, even at rest.
+            self.saved_dirty.insert(self.nodes[id as usize].pos);
             self.propagate_new_source(id, events);
         }
         if !self.nodes[id as usize].live {
@@ -1332,6 +1334,8 @@ impl Kinetics {
         {
             let mut events = Vec::new();
             self.nodes[id as usize].state.update_speed = false;
+            // attachKinetics changes the serialized NeedsSpeedUpdate flag, even at rest.
+            self.saved_dirty.insert(self.nodes[id as usize].pos);
             self.propagate_new_source(id, &mut events);
             self.pending_events.extend(events);
         }

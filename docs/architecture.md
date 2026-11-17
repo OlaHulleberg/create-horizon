@@ -55,7 +55,8 @@ ambience), packages, stock, schematics, decor, copycats, items and equipment, ad
 5. **Saving.** After all subsystem ticks, `write_entities` publishes live entity state (including
    mutations made by later subsystems). This is a completed-tick boundary, not a host save hook;
    see the live entity serialization limitation in `API_GAPS.md`. Each subsystem writes its column state in `chunk_data_save` and reads it back in `chunk_load`;
-   block entity data saves with the block entity.
+   block entity data saves with the block entity. Accepted value settings and handle interactions
+   run the same publication and column flush immediately, without advancing simulation.
 
 ## Adding a block
 

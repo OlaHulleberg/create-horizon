@@ -3,8 +3,8 @@
 //!
 //! The game saves a chunk's attachments with it, and saves the chunk before it unloads. There
 //! is no moment just before a chunk is saved, so a column whose state changed is written into
-//! its attachment at the end of the level tick that changed it: what is saved is never older
-//! than one tick. A column that did not change is not written.
+//! its attachment at the end of the level tick that changed it and when an interaction
+//! is accepted. A column that did not change is not written.
 
 use super::server::ServerLevel;
 use super::subsystem::Subsystem;
@@ -96,4 +96,16 @@ pub fn flush(lv: &mut ServerLevel<'_>, systems: &[&dyn Subsystem]) {
             );
         }
     }
+}
+
+/// Create's interaction `setChanged`/`sendData`: publish live records and columns
+/// before a host can capture its next chunk snapshot, without ticking entities.
+pub(crate) fn publish(lv: &mut ServerLevel<'_>) {
+    for (cx, cz) in super::world::with_world(|w| w.take_unsaved(lv.dim)).unwrap_or_default() {
+        mark_unsaved(lv.dim, [cx, cz]);
+    }
+    for s in super::SUBSYSTEMS {
+        s.write_entities(lv);
+    }
+    flush(lv, super::SUBSYSTEMS);
 }
