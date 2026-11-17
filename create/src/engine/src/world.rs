@@ -1215,9 +1215,11 @@ impl CreateWorld {
         }
     }
 
-    /// `Level.setBlock` with UPDATE_KNOWN_SHAPE skips updateIndirectNeighbourShapes.
-    /// Record the committed state before the normal block-change notification so the
-    /// surviving block entity keeps its kinetic information.
+    /// A `Level.setBlock` with `UPDATE_KNOWN_SHAPE` (`ChainGearshiftBlock.neighborChanged`):
+    /// `updateIndirectNeighbourShapes` doesn't run, so the block entity keeps its kinetic
+    /// information though the states aren't equivalent. Call it just before committing the
+    /// state: the host's `block_changed` that follows then finds the state already taken. (The
+    /// hook doesn't say a change's update flags: API_GAPS.)
     pub fn setting_known_shape(&mut self, dim: usize, pos: [i32; 3], new: u32) {
         if let Some(old) = self.dims[dim].states.get_mut(&pos)
             && self.table.get(*old).map(|(b, _)| b) == self.table.get(new).map(|(b, _)| b)

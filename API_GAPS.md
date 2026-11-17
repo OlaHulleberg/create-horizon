@@ -43,6 +43,10 @@ Each entry: what Create does → what's missing → the API that would close it.
   runs the entity's `read` (`BlockDataAccessor.setData` → `loadWithComponents`) and takes it up at once → the server has
   only `block_entity_on_load`, once per instance (`block_entity_data_received` is the client's). Still so at Sunrise
   head 1f799a9 (2026-11-17). Fix: a server hook when a block entity loads data into an existing instance.
+- **A block change's update flags.** `block_changed` says the old and new state but not the `setBlock` flags, and
+  Create's kinetics depend on one: with `UPDATE_KNOWN_SHAPE` (an adjustable chain gearshift's power change)
+  `updateIndirectNeighbourShapes` doesn't run and the entity keeps its kinetic state → the glue calls
+  `CreateWorld::setting_known_shape` before the commit it makes itself. Fix: the flags in `block_changed`.
 - **A placement answering another block.** A shaft placed in front of a steam engine becomes a powered shaft a tick
   later (`pickCorrectShaftType`) → `state_for_placement` can't read another block's state.
 - **Collision shapes in `can_survive`.** Hand cranks and valve handles are refused only against air or fluid →
