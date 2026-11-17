@@ -417,6 +417,14 @@ fn set_stalled(item: &mut Item, stalled: bool, out: &mut Ticked) {
     }
 }
 
+/// `BeltBlockEntity.read/write`: persistent controller membership, independent of kinetics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SavedSegment {
+    pub controller: [i32; 3],
+    pub index: i32,
+    pub length: i32,
+}
+
 /// A stack on a belt (`TransportedItemStack`): how far along it is, sideways offset, angle, the
 /// stack, and whether a machine holds it.
 #[derive(Clone, Debug, PartialEq)]

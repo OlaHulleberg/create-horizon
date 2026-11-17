@@ -784,6 +784,26 @@ impl BlockEntityPart for KineticEntity {
         let legacy = loading_legacy_save(&data);
         with_world(|w| {
             w.block_loaded(dim, pos, state);
+            // BeltBlockEntity.read restores Controller/Index/Length before initialize.
+            // Register the saved kinetic part before asking restore_state to read it.
+            if let Some(Tag::Compound(belt)) = data.get(&"BeltState".into())
+                && let (Some(Tag::IntArray(c)), Some(Tag::Int(index)), Some(Tag::Int(length))) = (
+                    belt.get(&"Controller".into()),
+                    belt.get(&"Index".into()),
+                    belt.get(&"Length".into()),
+                )
+                && let [x, y, z] = c.as_slice()
+            {
+                w.restore_belt_segment(
+                    dim,
+                    pos,
+                    create_engine::belt::SavedSegment {
+                        controller: [*x, *y, *z],
+                        index: *index,
+                        length: *length,
+                    },
+                );
+            }
             if let Some(Tag::Compound(depot)) = data.get(&"DepotState".into()) {
                 w.restore_depot(dim, pos, super::logistics::depot::saved_from_nbt(depot));
             }

@@ -3175,6 +3175,65 @@ impl CreateWorld {
         d.belt_dirty.extend_from_slice(chain);
     }
 
+    /// `BeltBlockEntity.write`: save membership even for empty inventories.
+    pub fn saved_belt_segment(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+    ) -> Option<crate::belt::SavedSegment> {
+        let d = &self.dims[dim];
+        let controller = *d.belt_of.get(&pos)?;
+        let b = d.belts.get(&controller)?;
+        Some(crate::belt::SavedSegment {
+            controller,
+            index: b.chain.iter().position(|p| *p == pos)? as i32,
+            length: b.chain.len() as i32,
+        })
+    }
+
+    /// `BeltBlockEntity.read`: restore membership before restoring kinetic state.
+    /// A loaded belt has a nonzero length and does not run `initBelt`/attachKinetics.
+    pub fn restore_belt_segment(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        saved: crate::belt::SavedSegment,
+    ) {
+        if saved.length < 2 || saved.index < 0 || saved.index >= saved.length {
+            return;
+        }
+        let Some(state) = self.dims[dim].states.get(&pos).copied() else {
+            return;
+        };
+        let Some(mut segment) = self.table.get(state).and_then(|(_, i)| i.belt) else {
+            return;
+        };
+        let d = &mut self.dims[dim];
+        d.belt_of.insert(pos, saved.controller);
+        d.settings.entry(pos).or_default().belt = Some(saved.controller);
+        if pos == saved.controller {
+            let mut chain = vec![pos];
+            segment.part = crate::belt::Part::Middle;
+            for _ in 1..saved.length {
+                let Some(next) = segment.next(*chain.last().unwrap(), true) else {
+                    return;
+                };
+                chain.push(next);
+            }
+            segment.part = crate::belt::Part::Start;
+            let items = d.belt_saved.remove(&pos).unwrap_or_default();
+            d.belts.insert(
+                pos,
+                Belt {
+                    chain,
+                    segment,
+                    items,
+                },
+            );
+        }
+        self.place(dim, pos, state);
+    }
+
     /// Items saved with belts in a column (`chunk_data_save`), for when their chains form.
     pub fn load_belt_items(
         &mut self,
@@ -3194,7 +3253,7 @@ impl CreateWorld {
         let mut out: Vec<_> = self.dims[dim]
             .belts
             .iter()
-            .filter(|(c, b)| (c[0] >> 4, c[2] >> 4) == (cx, cz) && !b.items.is_empty())
+            .filter(|(c, _)| (c[0] >> 4, c[2] >> 4) == (cx, cz))
             .map(|(c, b)| (*c, b.items.to_save()))
             .collect();
         out.sort_by_key(|(c, _)| *c);
@@ -4300,7 +4359,9 @@ impl CreateWorld {
 
     /// Begin `BeltBlockEntity.tick` for this level's controllers. The phase keeps
     /// controller order, including empty belts, without ticking idle inventories.
-    pub fn belt_ticks(&self, dim: usize) -> BeltTicks {
+    pub fn belt_ticks(&mut self, dim: usize) -> BeltTicks {
+        // BeltBlockEntity.tick initializes an unsaved chain before moving its inventory.
+        self.settle_belts(dim);
         let d = &self.dims[dim];
         let mut controllers: Vec<_> = d.belts.keys().copied().collect();
         // Controllers tick in block entity registration order, not HashMap order.
@@ -4712,6 +4773,67 @@ mod tests {
         ) -> Option<crate::belt::Process> {
             None
         }
+    }
+
+    #[test]
+    fn empty_belt_inventory_direction_is_saved() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = item_belt_world(32.0);
+        assert_eq!(w.belt_ticks(0).next(&mut w), None);
+        let saved = w.column_belts(0, 0, 0);
+        assert_eq!(saved.len(), 1);
+        assert!(saved[0].1.positive);
+        assert!(saved[0].1.items.is_empty());
+    }
+
+    #[test]
+    fn loaded_belt_moves_on_its_first_inventory_tick() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = item_belt_world(-32.0);
+        let c = [0, 8, 0];
+        let mut item = crate::belt::Item::new("minecraft:iron_ingot", 16, 180, false);
+        // Java belt.min.json ticks 41 -> 42: 1.4958333 -> 1.4291666 after reload.
+        item.position = 1.4958333;
+        item.inserted_at = 1;
+        item.inserted_from = Some(crate::kinetics::Dir::Up);
+        w.dims[0].belts.get_mut(&c).unwrap().items.add(item);
+        let members: Vec<_> = (0..5)
+            .map(|z| {
+                let p = [0, 8, z];
+                (
+                    p,
+                    w.saved_belt_segment(0, p).unwrap(),
+                    w.dims[0].kinetics.saved_state(p, 0).unwrap(),
+                )
+            })
+            .collect();
+        let inventory = w.column_belts(0, 0, 0);
+        w.column_unloaded(0, 0, 0);
+        w.load_belt_items(0, inventory.into_iter());
+        for (p, saved, kinetic) in members {
+            let state = if saved.index == 0 {
+                11
+            } else if saved.index == 4 {
+                13
+            } else {
+                12
+            };
+            w.block_loaded(0, p, state);
+            w.restore_belt_segment(0, p, saved);
+            assert!(w.dims[0].kinetics.restore_state(p, 0, kinetic));
+        }
+        assert_eq!(w.belt_ticks(0).next(&mut w), Some(c));
+        let rpm = w.speed(0, c).unwrap();
+        assert_eq!(rpm, -32.0);
+        let b = w.dims[0].belts.get_mut(&c).unwrap();
+        let speed = crate::belt::direction_aware_speed(rpm, b.segment.facing);
+        b.items.tick(5, speed, true, &mut ItemBeltSide);
+        assert!((b.items.items[0].position - 1.4291666).abs() < 0.000001);
+        assert_eq!(b.items.items[0].inserted_at, 1);
+        assert_eq!(
+            b.items.items[0].inserted_from,
+            Some(crate::kinetics::Dir::Up)
+        );
     }
 
     #[test]

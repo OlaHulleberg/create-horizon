@@ -779,6 +779,30 @@ pub fn tick_belts(lv: &mut ServerLevel<'_>) {
         send_belts(lv, &players, &changed);
         // A belt that starts carrying is drawn again (its drawing was kept while empty).
         for c in changed {
+            let members = with_world(|w| {
+                w.dims[dim]
+                    .belts
+                    .get(&c)
+                    .map(|b| b.chain.clone())
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+            for pos in members {
+                if let Some(saved) = with_world(|w| w.saved_belt_segment(dim, pos)).flatten() {
+                    lv.write_entity_field(
+                        pos,
+                        "BeltState",
+                        mod_api::Compound::from([
+                            (
+                                "Controller".into(),
+                                mod_api::Tag::IntArray(saved.controller.to_vec()),
+                            ),
+                            ("Index".into(), mod_api::Tag::Int(saved.index)),
+                            ("Length".into(), mod_api::Tag::Int(saved.length)),
+                        ]),
+                    );
+                }
+            }
             let carrying = with_world(|w| {
                 w.dims[dim]
                     .belts

@@ -1098,6 +1098,16 @@ pub(super) fn belts_to_nbt(belts: &[([i32; 3], create_engine::belt::Inventory)])
                     "positive".into(),
                     Tag::IntArray(vec![i32::from(inv.positive)]),
                 );
+                // TransportedItemStack.serializeNBT: insertion context survives a reload.
+                b.insert(
+                    "insertion".into(),
+                    Tag::IntArray(
+                        inv.items
+                            .iter()
+                            .flat_map(|i| [i.inserted_at, i.inserted_from.map_or(6, |d| d as i32)])
+                            .collect(),
+                    ),
+                );
                 // Items in a sequenced assembly: their index and step, and the recipe.
                 let assembly: Vec<Tag> = inv
                     .items
@@ -1158,6 +1168,12 @@ pub(super) fn belts_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::b
                     Some(item)
                 })
                 .collect();
+            if let Some(Tag::IntArray(context)) = b.get(&"insertion".into()) {
+                for (item, pair) in items.iter_mut().zip(context.as_chunks::<2>().0) {
+                    item.inserted_at = pair[0];
+                    item.inserted_from = usize::try_from(pair[1]).ok().and_then(|n| Dir::ALL.get(n)).copied();
+                }
+            }
             if let Some(Tag::List(assembly)) = b.get(&"assembly".into()) {
                 for a in assembly {
                     let Tag::Compound(a) = a else { continue };
@@ -1236,4 +1252,21 @@ pub(super) fn brass_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::t
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod belt_save_tests {
+    use super::*;
+
+    #[test]
+    fn belt_inventory_keeps_insertion_context() {
+        let mut item = create_engine::belt::Item::new("minecraft:iron_ingot", 16, 180, false);
+        item.position = 1.4375;
+        item.inserted_at = 1;
+        item.inserted_from = Some(Dir::Up);
+        let inv = create_engine::belt::Inventory::from_saved(vec![item.clone()], true);
+        let data = Compound::from([("belts".into(), belts_to_nbt(&[([0, 8, 0], inv)]))]);
+        let saved = belts_from_nbt(&data);
+        assert_eq!(saved[0].1.items[0], item);
+    }
 }
