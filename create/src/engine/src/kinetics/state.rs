@@ -13,6 +13,10 @@ pub(super) struct KineticState {
     /// `capacity`).
     pub(super) stress: f32,
     pub(super) capacity: f32,
+    /// KineticBlockEntity caches, written verbatim by write.
+    pub(super) network_size: u32,
+    pub(super) last_stress: f32,
+    pub(super) last_capacity: f32,
     /// The sequence context it took from what turns it (`copySequenceContextFrom`): its
     /// holder's, and the value per RPM of its own speed (`SequenceContext.relativeValue`).
     pub(super) seq: Option<(Context, f32)>,
@@ -39,6 +43,9 @@ impl Default for KineticState {
             overstressed: false,
             stress: 0.0,
             capacity: 0.0,
+            network_size: 0,
+            last_stress: 0.0,
+            last_capacity: 0.0,
             seq: None,
             flicker: 0,
             flicker_at: 0,

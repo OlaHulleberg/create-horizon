@@ -42,7 +42,7 @@ impl KineticNetwork {
     pub(super) fn add_silently(
         &mut self,
         id: u32,
-        nodes: &[Node],
+        nodes: &mut [Node],
         last_capacity: f32,
         last_stress: f32,
     ) {
@@ -62,9 +62,9 @@ impl KineticNetwork {
     }
     /// KineticNetwork.add enrolls an entity; only a new member receives the initial
     /// updateFromNetwork and networkDirty transition (returned to the caller).
-    pub(super) fn add(&mut self, id: u32, nodes: &[Node]) -> bool {
+    pub(super) fn add(&mut self, id: u32, nodes: &mut [Node]) -> bool {
         self.initialized = true;
-        let n = &nodes[id as usize];
+        let n = &mut nodes[id as usize];
         let enrolled = self.members.contains_key(&Entity(n.pos));
         self.members
             .entry(Entity(n.pos))
@@ -78,7 +78,9 @@ impl KineticNetwork {
         if enrolled {
             return false;
         }
+        n.state.last_stress = n.part.impact;
         if n.part.generated != 0.0 {
+            n.state.last_capacity = n.part.capacity;
             self.sources.insert(Entity(n.pos), n.part.capacity);
         }
         true
@@ -201,6 +203,7 @@ impl KineticNetwork {
                 .collect(),
             stress: self.stress,
             capacity: self.capacity,
+            size: self.members.len() as u32 + self.unloaded_members,
         }
     }
 }
@@ -209,6 +212,7 @@ pub(super) struct NetworkSync {
     pub members: Vec<u32>,
     pub stress: f32,
     pub capacity: f32,
+    pub size: u32,
 }
 /// TorquePropagator's registry and deduplicated networkDirty work queue.
 #[derive(Default)]

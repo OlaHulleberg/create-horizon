@@ -560,9 +560,9 @@ impl Kinetics {
                 id,
                 stress: n.state.stress,
                 capacity: n.state.capacity,
-                size: self.networks.figures(Some(id)).2,
-                added_stress: n.part.impact,
-                added_capacity: n.part.capacity,
+                size: n.state.network_size,
+                added_stress: n.state.last_stress,
+                added_capacity: n.state.last_capacity,
             }),
             needs_speed_update: n.state.update_speed,
         })
@@ -591,10 +591,13 @@ impl Kinetics {
             n.state.net = Some(net.id);
             n.state.stress = net.stress;
             n.state.capacity = net.capacity;
+            n.state.network_size = net.size;
+            n.state.last_stress = net.added_stress;
+            n.state.last_capacity = net.added_capacity;
             n.state.overstressed = net.capacity < net.stress;
             let network = self.networks.get_or_create_network_for(Some(net.id));
             network.init_from_te(net.capacity, net.stress, net.size);
-            network.add_silently(id, &self.nodes, net.added_capacity, net.added_stress);
+            network.add_silently(id, &mut self.nodes, net.added_capacity, net.added_stress);
         }
         let n = &mut self.nodes[id as usize];
         n.state.speed = if n.state.overstressed {
@@ -771,6 +774,8 @@ impl Kinetics {
             n.state.overstressed = false;
             n.state.stress = 0.0;
             n.state.capacity = 0.0;
+            n.state.last_stress = 0.0;
+            n.state.last_capacity = 0.0;
             n.state.update_speed = true;
         }
         n.fresh = true;
@@ -814,7 +819,7 @@ impl Kinetics {
         let mut events = Vec::new();
         for id in ids.into_iter().filter(|id| *id != NONE) {
             if !equivalent {
-                self.networks.remove(self.nodes[id as usize].state.net, id);
+                self.leave_network(id);
                 self.handle_removed(id, &mut events);
                 self.remove_source(id);
                 self.nodes[id as usize].state.update_speed = true;
@@ -1119,11 +1124,10 @@ impl Kinetics {
     }
 
     /// KineticBlockEntity.updateFromNetwork: sync figures and notify on overstress changes.
-    fn update_from_network(&mut self, id: u32, capacity: f32, stress: f32) {
+    fn update_from_network(&mut self, id: u32, capacity: f32, stress: f32, size: u32) {
         let n = &mut self.nodes[id as usize];
-        if n.state.capacity != capacity || n.state.stress != stress {
-            self.saved_dirty.insert(n.pos);
-        }
+        self.saved_dirty.insert(n.pos);
+        n.state.network_size = size;
         n.state.capacity = capacity;
         n.state.stress = stress;
         let over = stress > capacity;
@@ -1141,8 +1145,19 @@ impl Kinetics {
     fn sync_network(&mut self, sync: Option<networks::NetworkSync>) {
         if let Some(sync) = sync {
             for id in sync.members {
-                self.update_from_network(id, sync.capacity, sync.stress);
+                self.update_from_network(id, sync.capacity, sync.stress, sync.size);
             }
+        }
+    }
+
+    /// KineticNetwork.remove resets the departing member's cached figures.
+    fn leave_network(&mut self, id: u32) {
+        let old = self.nodes[id as usize].state.net;
+        // KineticNetwork.remove only calls updateFromNetwork for an enrolled member.
+        let enrolled = self.networks.members(old).any(|member| member == id);
+        self.networks.remove(old, id);
+        if enrolled {
+            self.update_from_network(id, 0.0, 0.0, 0);
         }
     }
 
@@ -1152,8 +1167,7 @@ impl Kinetics {
         if old == net {
             return;
         }
-        self.networks.remove(old, id);
-        self.update_from_network(id, 0.0, 0.0);
+        self.leave_network(id);
         self.nodes[id as usize].state.net = net;
         self.saved_dirty.insert(self.nodes[id as usize].pos);
         if net.is_some() {
@@ -1161,11 +1175,11 @@ impl Kinetics {
             if self
                 .networks
                 .get_or_create_network_for(net)
-                .add(id, &self.nodes)
+                .add(id, &mut self.nodes)
             {
                 self.networks.mark_dirty(net);
-                let (stress, capacity, _) = self.networks.figures(net);
-                self.update_from_network(id, capacity, stress);
+                let (stress, capacity, size) = self.networks.figures(net);
+                self.update_from_network(id, capacity, stress, size);
             }
         }
     }
@@ -1229,7 +1243,7 @@ impl Kinetics {
         for &net in &touched_nets {
             if let Some(sync) = self.networks.update_network(net, &self.nodes) {
                 for id in sync.members {
-                    self.update_from_network(id, sync.capacity, sync.stress);
+                    self.update_from_network(id, sync.capacity, sync.stress, sync.size);
                 }
             }
         }
@@ -1789,6 +1803,75 @@ mod tests {
         // The conveying large cog is currentTE, even though the small cog was placed later.
         assert!(e.contains(&Event::Break { pos: [1, 1, 1] }), "{e:?}");
         assert_eq!(k.speed([2, 2, 1], 0), Some(0.0));
+    }
+
+    #[test]
+    fn saved_network_size_is_the_last_entity_sync() {
+        // Create issue #33, saved-size.min.json: the first shaft saves size 2,
+        // capacity 524288, even after the third member joins. KineticNetwork
+        // only syncs all members when stress or capacity changes.
+        let mut k = Kinetics::new();
+        let pos = [0, 8, -3];
+        k.set(pos, 0, Part::shaft(Axis::X));
+        solve(&mut k);
+        k.set(
+            [1, 8, -3],
+            0,
+            Part {
+                capacity: 16384.0,
+                ..motor(Dir::West, 32.0)
+            },
+        );
+        solve(&mut k);
+        k.set([-1, 8, -3], 0, Part::shaft(Axis::X));
+        solve(&mut k);
+        let saved = k.saved_state(pos, 0).unwrap().network.unwrap();
+        assert_eq!(k.network_membership(pos, 0).unwrap().1, 3);
+        assert_eq!(saved.size, 2);
+        assert_eq!(saved.capacity, 524288.0);
+        assert_eq!(saved.stress, 0.0);
+        assert_eq!(saved.added_capacity, 0.0);
+        assert_eq!(saved.added_stress, 0.0);
+    }
+
+    #[test]
+    fn saved_contributions_are_calculation_caches() {
+        // KineticBlockEntity.clearKineticInformation zeroes the contribution
+        // caches. Changing block state does not calculate them again: the
+        // existing network member causes KineticNetwork.add to return early.
+        let mut k = Kinetics::new();
+        let pos = [1, 8, -3];
+        k.set(
+            pos,
+            0,
+            Part {
+                capacity: 16384.0,
+                ..motor(Dir::Up, -32.0)
+            },
+        );
+        solve(&mut k);
+        k.change_block_state(
+            pos,
+            0,
+            Part {
+                capacity: 16384.0,
+                ..motor(Dir::West, -32.0)
+            },
+            false,
+        );
+        solve(&mut k);
+        let id = k.at[&pos][0];
+        // Rejoin the retained network just as setNetwork does, without a new
+        // stress calculation. Java write saves the cleared cache, not config.
+        k.set_network(id, Some(network_id(pos)));
+        assert_eq!(
+            k.saved_state(pos, 0)
+                .unwrap()
+                .network
+                .unwrap()
+                .added_capacity,
+            0.0
+        );
     }
 
     #[test]

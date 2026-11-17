@@ -186,14 +186,14 @@ impl Kinetics {
                     let (cap, impact) = (n.part.capacity, n.part.impact);
                     let network = self.networks.get_or_create_network_for(net);
                     if !anchors.is_empty() {
-                        network.add_silently(id, &self.nodes, cap, impact);
+                        network.add_silently(id, &mut self.nodes, cap, impact);
                     } else {
-                        network.add(id, &self.nodes);
+                        network.add(id, &mut self.nodes);
                     }
                     self.networks.mark_dirty(net);
                 }
-                let (stress, capacity, _) = self.networks.figures(net);
-                self.update_from_network(id, capacity, stress);
+                let (stress, capacity, size) = self.networks.figures(net);
+                self.update_from_network(id, capacity, stress, size);
                 if first {
                     self.scheduler
                         .validate_later(self.now, id, self.nodes[id as usize].stamp);
