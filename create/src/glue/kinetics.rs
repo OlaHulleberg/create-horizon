@@ -459,13 +459,19 @@ fn tick_inputs(lv: &mut ServerLevel<'_>) {
     }
     // Encased chain drives placed or beside a change take their place in their chain
     // (`ChainDriveBlock.updateShape`).
+    apply_chain_shapes(lv);
+    tick_sequencers(lv);
+    tick_brackets(lv);
+}
+
+/// ChainDriveBlock.updateShape runs as part of the block change, including kinetic breaks.
+fn apply_chain_shapes(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
     for (pos, drive) in with_world(|w| w.take_chain_shapes(dim)).unwrap_or_default() {
         let along = if drive.along_first { "true" } else { "false" };
         lv.set_property(pos, "axis_along_first", along, super::server::update_all());
         lv.set_property(pos, "part", drive.part.name(), super::server::update_all());
     }
-    tick_sequencers(lv);
-    tick_brackets(lv);
 }
 
 /// `SpeedControllerBlockEntity.updateBracket`: a controller under a large cog on a horizontal
@@ -531,6 +537,7 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
             // Create's `world.destroyBlock(pos, true)`: the block breaks with its drops.
             Event::Break { pos } => {
                 lv.destroy_block(pos, true);
+                apply_chain_shapes(lv);
             }
             Event::Speed {
                 pos,
@@ -577,6 +584,12 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
             .collect();
         // KineticBlockEntity.write: a `Source` or `Network` the entity no longer has is gone.
         lv.write_entity_field(pos, SAVED_KINETICS, ports);
+        if let Some(signal) = with_world(|w| w.saved_chain_signal(dim, pos)).flatten()
+            && let Some(entity) = lv.host.block_entity(lv.level, pos)
+        {
+            let data = Compound::from([("Signal".into(), Tag::Int(signal))]);
+            let _ = entity.merge_data(&mut *lv.host, data);
+        }
     }
 }
 
@@ -779,6 +792,11 @@ impl BlockEntityPart for KineticEntity {
         let legacy = loading_legacy_save(&data);
         with_world(|w| {
             w.block_loaded(dim, pos, state);
+            let signal = match data.get(&"Signal".into()) {
+                Some(Tag::Int(signal)) => *signal,
+                _ => 0,
+            };
+            w.restore_chain_signal(dim, pos, signal);
             // BeltBlockEntity.read restores Controller/Index/Length before initialize.
             // Register the saved kinetic part before asking restore_state to read it.
             if let Some(Tag::Compound(belt)) = data.get(&"BeltState".into())

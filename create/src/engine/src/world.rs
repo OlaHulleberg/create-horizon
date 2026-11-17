@@ -147,7 +147,7 @@ pub struct Dimension {
     /// whose neighbour changed), checked after the level's tick.
     redstone: Vec<[i32; 3]>,
     /// Encased chain drives whose place in their chain may have changed (placed, or a neighbour
-    /// changed), shaped after the level's tick (`ChainDriveBlock.updateShape`).
+    /// changed), consumed during the block change (`ChainDriveBlock.updateShape`).
     chain_checks: Vec<[i32; 3]>,
     /// Sequenced gearshifts and their sequence (`SequencedGearshiftBlockEntity`).
     pub sequencers: HashMap<[i32; 3], crate::sequencer::Sequencer>,
@@ -2793,12 +2793,48 @@ impl CreateWorld {
         }
         let signal = signal.clamp(0, 15) as i8;
         let known = d.settings.get(&pos).copied();
-        if known.is_none_or(|s| s.signal != signal) {
+        if known.unwrap_or_default().signal != signal {
             let old = known.unwrap_or_default();
             d.settings.insert(pos, Settings { signal, ..old });
             d.kinetics
                 .chain_signal_changed(pos, crate::chain::modifier_for_signal(i32::from(signal)));
         }
+    }
+
+    /// `ChainGearshiftBlockEntity.write`: the entity's persisted analog input.
+    pub fn saved_chain_signal(&self, dim: usize, pos: [i32; 3]) -> Option<i32> {
+        (self.block_at(dim, pos) == Some(Block::AdjustableChainGearshift)).then(|| {
+            i32::from(
+                self.dims[dim]
+                    .settings
+                    .get(&pos)
+                    .copied()
+                    .unwrap_or_default()
+                    .signal,
+            )
+        })
+    }
+
+    /// `ChainGearshiftBlockEntity.read`: restore Signal before base kinetic attachment.
+    pub fn restore_chain_signal(&mut self, dim: usize, pos: [i32; 3], signal: i32) {
+        if self.block_at(dim, pos) != Some(Block::AdjustableChainGearshift) {
+            return;
+        }
+        let state = self.dims[dim].states[&pos];
+        let old = self.dims[dim]
+            .settings
+            .get(&pos)
+            .copied()
+            .unwrap_or_default();
+        self.set_settings(
+            dim,
+            pos,
+            state,
+            Settings {
+                signal: signal.clamp(0, 15) as i8,
+                ..old
+            },
+        );
     }
 
     /// The axis of the large cog at `pos` (`ICogWheel.isLargeCog`), for a speed controller placed
@@ -2831,7 +2867,8 @@ impl CreateWorld {
 
     /// Chain drives placed or beside a change, shaped by their neighbours
     /// (`ChainDriveBlock.updateShape` toward each side off their axis): those whose `part` or
-    /// `axis_along_first` must change, with what they become.
+    /// `axis_along_first` must change, with what they become. Hosts also drain this immediately
+    /// after a kinetic break, before publishing the completed tick.
     pub fn take_chain_shapes(&mut self, dim: usize) -> Vec<([i32; 3], crate::chain::Drive)> {
         if self.dims[dim].chain_checks.is_empty() {
             return Vec::new();
@@ -6530,6 +6567,92 @@ mod tests {
         // The drive's neighbour changes: it is shaped again (no change here).
         w.neighbor_changed(0, [0, 0, 1], 11);
         assert!(w.take_chain_shapes(0).is_empty());
+        states::clear_range();
+    }
+
+    #[test]
+    fn loaded_chain_signal_precedes_base_attachment() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names = [
+            ("create:creative_motor", vec![("facing", "south")]),
+            (
+                "create:adjustable_chain_gearshift",
+                vec![
+                    ("axis", "z"),
+                    ("axis_along_first", "true"),
+                    ("part", "start"),
+                    ("powered", "true"),
+                ],
+            ),
+            (
+                "create:encased_chain_drive",
+                vec![("axis", "z"), ("axis_along_first", "true"), ("part", "end")],
+            ),
+        ];
+        states::set_range(10, 3);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let positions = [[0, 8, -1], [0, 8, 0], [1, 8, 0]];
+        for (i, p) in positions.into_iter().enumerate() {
+            w.block_changed(0, p, 0, 10 + i as u32);
+        }
+        w.set_settings(
+            0,
+            positions[0],
+            10,
+            Settings {
+                motor_rpm: 32.0,
+                ..Settings::default()
+            },
+        );
+        w.tick(0, &mut Vec::new());
+        w.set_chain_signal(0, positions[1], 3);
+        w.tick(0, &mut Vec::new());
+        let saved = positions.map(|p| w.dims[0].kinetics.saved_state(p, 0).unwrap());
+        let signal = w.saved_chain_signal(0, positions[1]).unwrap();
+        w.column_unloaded(0, 0, -1);
+        w.column_unloaded(0, 0, 0);
+        w.load_settings(0, [(positions[0], 32)].into_iter());
+        for (i, p) in positions.into_iter().enumerate() {
+            w.block_loaded(0, p, 10 + i as u32);
+            w.restore_chain_signal(0, p, signal);
+            assert!(w.dims[0].kinetics.restore_state(p, 0, saved[i]));
+        }
+        w.set_chain_signal(0, positions[1], 3);
+        w.tick(0, &mut Vec::new());
+        // chain-active-tiny: completed tick 8, Java keeps 32 and 40 RPM.
+        assert_eq!(w.saved_chain_signal(0, positions[1]), Some(3));
+        assert_eq!(w.speed(0, positions[1]), Some(32.0));
+        assert_eq!(w.speed(0, positions[2]), Some(40.0));
+        assert_eq!(w.dims[0].kinetics.flicker_score(positions[1]), 0);
+        states::clear_range();
+    }
+
+    #[test]
+    fn initial_zero_chain_poll_does_not_detach() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        states::set_range(10, 2);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            [
+                ("create:creative_motor", vec![("facing", "east")]),
+                ("create:adjustable_chain_gearshift", vec![("axis", "x")]),
+            ]
+            .into_iter()
+            .map(|(n, p)| (n, p.into_iter())),
+        ));
+        w.block_loaded(0, [-1, 8, 0], 10);
+        w.block_loaded(0, [0, 8, 0], 11);
+        w.tick(0, &mut Vec::new());
+        let before = w.dims[0].kinetics.flicker_score([0, 8, 0]);
+        w.set_chain_signal(0, [0, 8, 0], 0);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(
+            w.dims[0].kinetics.flicker_score([0, 8, 0]),
+            (before - 1).max(0)
+        );
         states::clear_range();
     }
 

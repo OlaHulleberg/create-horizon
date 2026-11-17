@@ -1302,6 +1302,7 @@ impl Kinetics {
             }
             // ChainGearshiftBlockEntity.tick runs the base tick before analogSignalChanged.
             if let Some(modifier) = self.nodes[id as usize].state.chain_signal.take() {
+                self.saved_dirty.insert(self.nodes[id as usize].pos);
                 self.handle_removed(id, events);
                 self.remove_source(id);
                 if let Some(chain) = &mut self.nodes[id as usize].part.chain {
