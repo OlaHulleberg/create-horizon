@@ -2491,6 +2491,7 @@ impl CreateWorld {
         let mut stopped = Vec::new();
         let d = &mut self.dims[dim];
         for (pos, handle) in &mut d.handles {
+            d.kinetics.tick_generator_base(*pos);
             if handle.saved.in_use > 0 {
                 handle.saved.in_use -= 1;
                 d.handle_changes.insert(*pos);
@@ -5806,6 +5807,71 @@ mod tests {
         assert!(start != 0.0);
         assert_eq!(w.speed(0, [1, 1, 0]), Some(start));
         assert_eq!(w.speed(0, [2, 2, 0]), Some(start));
+        states::clear_range();
+    }
+
+    #[test]
+    fn ghost_only_network_keeps_cached_size_after_expiry() {
+        loaded_handle_cache(false);
+    }
+
+    #[test]
+    fn loaded_valve_first_tick_expiry_clears_capacity() {
+        loaded_handle_cache(true);
+    }
+
+    fn loaded_handle_cache(valve: bool) {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        states::set_range(10, 1);
+        let name = if valve {
+            "create:copper_valve_handle"
+        } else {
+            "create:hand_crank"
+        };
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            [(name, [("facing", "up")].into_iter())].into_iter(),
+        ));
+        let pos = [0, 8, 0];
+        w.block_changed(0, pos, 0, 10);
+        w.tick(0, &mut Vec::new());
+        if valve {
+            assert!(w.use_valve(0, pos, false, 1));
+        } else {
+            assert!(w.turn_crank(0, pos, false));
+        }
+        w.tick_cranks(0);
+        w.tick(0, &mut Vec::new());
+        while valve && w.saved_handle(0, pos).unwrap().in_use > 1 {
+            w.tick_cranks(0);
+            w.tick(0, &mut Vec::new());
+        }
+        let handle = w.saved_handle(0, pos).unwrap();
+        let kinetic = w.dims[0].kinetics.saved_state(pos, 0).unwrap();
+        w.column_unloaded(0, 0, 0);
+        w.block_loaded(0, pos, 10);
+        w.restore_handle(0, pos, handle);
+        assert!(w.dims[0].kinetics.restore_state(pos, 0, kinetic));
+        for _ in 0..handle.in_use {
+            w.tick_cranks(0);
+            w.tick(0, &mut Vec::new());
+        }
+        // Create issue #45: super.tick enrolls before expiry, so remove resets the cache.
+        assert_eq!(w.dims[0].kinetics.network(pos, 0).unwrap().2, 0.0);
+        if !valve {
+            assert!(w.turn_crank(0, pos, true));
+            w.tick_cranks(0);
+            w.tick(0, &mut Vec::new());
+            // Create issue #43: no ghost tick recalculates the retained 256 capacity.
+            let net = w.dims[0]
+                .kinetics
+                .saved_state(pos, 0)
+                .unwrap()
+                .network
+                .unwrap();
+            assert_eq!((net.capacity, net.size), (256.0, 2));
+            assert_eq!(w.dims[0].kinetics.network_membership(pos, 0).unwrap().1, 1);
+        }
         states::clear_range();
     }
 

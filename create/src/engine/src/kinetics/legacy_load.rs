@@ -190,7 +190,7 @@ impl Kinetics {
                     } else {
                         network.add(id, &mut self.nodes);
                     }
-                    self.networks.mark_dirty(net);
+                    self.networks.mark_entity_dirty(id, &self.nodes);
                 }
                 let (stress, capacity, size) = self.networks.figures(net);
                 self.update_from_network(id, capacity, stress, size);

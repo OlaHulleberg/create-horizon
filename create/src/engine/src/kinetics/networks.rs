@@ -242,24 +242,44 @@ pub(super) struct NetworkSync {
 #[derive(Default)]
 pub(super) struct TorquePropagator {
     networks: HashMap<i64, KineticNetwork>,
-    dirty: HashSet<Option<i64>>,
+    dirty: HashSet<(u32, Entity)>,
 }
 impl TorquePropagator {
     pub(super) fn get_or_create_network_for(&mut self, id: Option<i64>) -> &mut KineticNetwork {
         let id = id.expect("network identity");
         self.networks.entry(id).or_default()
     }
-    pub(super) fn mark_dirty(&mut self, id: Option<i64>) {
-        if id.is_some() {
-            self.dirty.insert(id);
+    /// KineticBlockEntity.networkDirty belongs to the retained entity, including ghosts.
+    pub(super) fn mark_entity_dirty(&mut self, id: u32, nodes: &[Node]) {
+        self.dirty.insert((id, Entity(nodes[id as usize].entity)));
+    }
+    pub(super) fn mark_dirty(&mut self, net: Option<i64>, _nodes: &[Node]) {
+        if let Some((&entity, member)) = net
+            .and_then(|n| self.networks.get(&n))
+            .and_then(|n| n.members.iter().next())
+        {
+            for &id in &member.ports {
+                self.dirty.insert((id, entity));
+            }
         }
     }
     pub(super) fn has_dirty(&self) -> bool {
         !self.dirty.is_empty()
     }
-    pub(super) fn take_dirty(&mut self) -> HashSet<Option<i64>> {
+    /// Only a live entity tick consumes networkDirty and updates its current network.
+    pub(super) fn take_dirty(&mut self, nodes: &[Node]) -> HashSet<Option<i64>> {
         std::mem::take(&mut self.dirty)
+            .into_iter()
+            .filter_map(|(id, entity)| {
+                let n = &nodes[id as usize];
+                (n.live && n.entity == entity.0)
+                    .then_some(n.state.net)
+                    .flatten()
+                    .map(Some)
+            })
+            .collect()
     }
+
     pub(super) fn remove(&mut self, net: Option<i64>, id: u32, nodes: &[Node]) {
         let Some(key) = net else {
             return;
@@ -268,9 +288,8 @@ impl TorquePropagator {
             n.remove(id, nodes);
             if n.members.is_empty() {
                 self.networks.remove(&key);
-                self.dirty.remove(&net);
             } else {
-                self.mark_dirty(net);
+                self.mark_dirty(net, nodes);
             }
         }
     }

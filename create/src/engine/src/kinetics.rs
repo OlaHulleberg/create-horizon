@@ -1254,7 +1254,7 @@ impl Kinetics {
                 .get_or_create_network_for(net)
                 .add(id, &mut self.nodes)
             {
-                self.networks.mark_dirty(net);
+                self.networks.mark_entity_dirty(id, &self.nodes);
                 let (stress, capacity, size) = self.networks.figures(net);
                 self.update_from_network(id, capacity, stress, size);
             }
@@ -1271,6 +1271,64 @@ impl Kinetics {
         }
     }
 
+    /// HandCrankBlockEntity.tick calls its kinetic base before consuming InUse.
+    pub fn tick_generator_base(&mut self, pos: [i32; 3]) {
+        let Some(ids) = self.at.get(&pos).copied() else {
+            return;
+        };
+        let mut events = Vec::new();
+        for id in ids {
+            if id != NONE {
+                self.tick_base(id, &mut events);
+            }
+        }
+        self.pending_events.extend(events);
+    }
+
+    fn tick_base(&mut self, id: u32, events: &mut Vec<Event>) {
+        if !self.nodes[id as usize].live {
+            return;
+        }
+        if self.nodes[id as usize].load_origin == LoadOrigin::Legacy {
+            return;
+        }
+        if self.nodes[id as usize].state.update_speed {
+            self.nodes[id as usize].state.update_speed = false;
+            self.propagate_new_source(id, events);
+        }
+        if !self.nodes[id as usize].live {
+            return;
+        }
+        // SmartBlockEntity.tick invokes KineticBlockEntity.initialize after
+        // attachKinetics, before the generator's own initialize callback.
+        if self.nodes[id as usize].state.new_part {
+            self.initialize_network(id);
+        }
+        // ChainGearshiftBlockEntity.tick runs the base tick before analogSignalChanged.
+        if let Some(modifier) = self.nodes[id as usize].state.chain_signal.take() {
+            self.saved_dirty.insert(self.nodes[id as usize].pos);
+            self.handle_removed(id, events);
+            self.remove_source(id);
+            if let Some(chain) = &mut self.nodes[id as usize].part.chain {
+                chain.modifier = modifier;
+            }
+            self.propagate_new_source(id, events);
+        }
+        let n = &self.nodes[id as usize];
+        if n.state.new_part
+            && (n.load_origin == LoadOrigin::Placement
+                || n.part.initialization == GeneratorInitialization::EveryLoad)
+            && (n.state.source.is_none() || n.part.generated > n.state.theoretical)
+        {
+            self.update_generated_rotation(id, events);
+        }
+        if self.nodes[id as usize].state.new_part {
+            self.scheduler
+                .validate_later(self.now, id, self.nodes[id as usize].stamp);
+        }
+        self.nodes[id as usize].state.new_part = false;
+    }
+
     /// Runs queued block entity attachments and generator updates, then syncs network stress.
     pub fn solve(&mut self, events: &mut Vec<Event>) -> SolveStats {
         if !self.has_dirty() {
@@ -1282,47 +1340,7 @@ impl Kinetics {
         pending.sort_by_key(|&id| self.nodes[id as usize].stamp);
         pending.dedup();
         for id in pending {
-            if !self.nodes[id as usize].live {
-                continue;
-            }
-            if self.nodes[id as usize].load_origin == LoadOrigin::Legacy {
-                continue;
-            }
-            if self.nodes[id as usize].state.update_speed {
-                self.nodes[id as usize].state.update_speed = false;
-                self.propagate_new_source(id, events);
-            }
-            if !self.nodes[id as usize].live {
-                continue;
-            }
-            // SmartBlockEntity.tick invokes KineticBlockEntity.initialize after
-            // attachKinetics, before the generator's own initialize callback.
-            if self.nodes[id as usize].state.new_part {
-                self.initialize_network(id);
-            }
-            // ChainGearshiftBlockEntity.tick runs the base tick before analogSignalChanged.
-            if let Some(modifier) = self.nodes[id as usize].state.chain_signal.take() {
-                self.saved_dirty.insert(self.nodes[id as usize].pos);
-                self.handle_removed(id, events);
-                self.remove_source(id);
-                if let Some(chain) = &mut self.nodes[id as usize].part.chain {
-                    chain.modifier = modifier;
-                }
-                self.propagate_new_source(id, events);
-            }
-            let n = &self.nodes[id as usize];
-            if n.state.new_part
-                && (n.load_origin == LoadOrigin::Placement
-                    || n.part.initialization == GeneratorInitialization::EveryLoad)
-                && (n.state.source.is_none() || n.part.generated > n.state.theoretical)
-            {
-                self.update_generated_rotation(id, events);
-            }
-            if self.nodes[id as usize].state.new_part {
-                self.scheduler
-                    .validate_later(self.now, id, self.nodes[id as usize].stamp);
-            }
-            self.nodes[id as usize].state.new_part = false;
+            self.tick_base(id, events);
         }
         // Scheduled block attachments precede GeneratingKineticBlockEntity.tick.
         for (id, stamp) in std::mem::take(&mut self.reactivation_due) {
@@ -1334,7 +1352,7 @@ impl Kinetics {
         }
         self.dirty.clear();
         let mut stats = SolveStats::default();
-        let mut touched_nets = self.networks.take_dirty();
+        let mut touched_nets = self.networks.take_dirty(&self.nodes);
         for &net in &touched_nets {
             if let Some(sync) = self.networks.update_network(net, &self.nodes) {
                 for id in sync.members {
@@ -2128,7 +2146,7 @@ mod tests {
         k.change_block_state(pos, 0, motor(Dir::West, -32.0), false);
         solve(&mut k);
         // KineticNetwork.calculateStress checks entity identity, not network id.
-        k.networks.mark_dirty(net);
+        k.networks.mark_dirty(net, &k.nodes);
         solve(&mut k);
         assert_eq!(k.networks.figures(net).2, 1);
         k.set(pos, 0, motor(Dir::West, 32.0));
