@@ -1267,16 +1267,44 @@ impl Kinetics {
         }
     }
 
+    /// Level block entity registration order, retained across setting changes.
+    pub(crate) fn registration_order(&self, pos: [i32; 3]) -> u64 {
+        self.at
+            .get(&pos)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|&id| id != NONE)
+            .map(|id| self.nodes[id as usize].entity)
+            .min()
+            .unwrap_or(u64::MAX)
+    }
+
     /// SmartBlockEntity initializes once, before HandCrankBlockEntity consumes InUse.
     pub fn tick_generator_base(&mut self, pos: [i32; 3]) {
         let Some(ids) = self.at.get(&pos).copied() else {
             return;
         };
+        if !ids
+            .into_iter()
+            .any(|id| id != NONE && self.nodes[id as usize].state.new_part)
+        {
+            return;
+        }
+        let order = self.registration_order(pos);
+        // SmartBlockEntity.tick initializes earlier registered entities before this
+        // handle's HandCrankBlockEntity.tick can expire its use.
+        let mut pending: Vec<_> = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.live && n.state.new_part && n.entity <= order)
+            .map(|(id, n)| (n.entity, id as u32))
+            .collect();
+        pending.sort_unstable();
         let mut events = Vec::new();
-        for id in ids {
-            if id != NONE && self.nodes[id as usize].state.new_part {
-                self.tick_base(id, self.now + 1, &mut events);
-            }
+        for (_, id) in pending {
+            self.tick_base(id, self.now + 1, &mut events);
         }
         self.pending_events.extend(events);
     }
@@ -1912,6 +1940,46 @@ mod tests {
         // The conveying large cog is currentTE, even though the small cog was placed later.
         assert!(e.contains(&Event::Break { pos: [1, 1, 1] }), "{e:?}");
         assert_eq!(k.speed([2, 2, 1], 0), Some(0.0));
+    }
+
+    #[test]
+    fn loaded_shaft_enrolls_before_valve_expiry() {
+        // Issue #50, Java tick 14: both handle and shaft cache zero capacity.
+        let shaft = [0, 7, 0];
+        let handle = [0, 8, 0];
+        let valve = Part {
+            generated: -32.0,
+            capacity: 8.0,
+            ..Part::half(Dir::Down)
+        };
+        let mut k = Kinetics::new();
+        k.set(shaft, 0, Part::shaft(Axis::Y));
+        k.set(handle, 0, valve);
+        solve(&mut k);
+        let saved = [shaft, handle].map(|p| k.saved_state(p, 0).unwrap());
+        for p in [shaft, handle] {
+            k.unload(p);
+        }
+        for ((p, part), saved) in [shaft, handle]
+            .into_iter()
+            .zip([Part::shaft(Axis::Y), valve])
+            .zip(saved)
+        {
+            k.set(p, 0, part);
+            assert!(k.restore_state(p, 0, saved));
+        }
+        k.tick_generator_base(handle);
+        k.set(
+            handle,
+            0,
+            Part {
+                generated: 0.0,
+                ..valve
+            },
+        );
+        solve(&mut k);
+        assert_eq!(k.network(shaft, 0).unwrap().2, 0.0);
+        assert_eq!(k.network(handle, 0).unwrap().2, 0.0);
     }
 
     #[test]

@@ -2539,7 +2539,10 @@ impl CreateWorld {
     pub fn tick_cranks(&mut self, dim: usize) {
         let mut stopped = Vec::new();
         let d = &mut self.dims[dim];
-        for (pos, handle) in &mut d.handles {
+        let mut positions: Vec<_> = d.handles.keys().copied().collect();
+        positions.sort_by_key(|&pos| d.kinetics.registration_order(pos));
+        for pos in &positions {
+            let handle = d.handles.get_mut(pos).unwrap();
             d.kinetics.tick_generator_base(*pos);
             if handle.saved.in_use > 0 {
                 handle.saved.in_use -= 1;
