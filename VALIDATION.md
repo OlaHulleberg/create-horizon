@@ -12,7 +12,7 @@ Sunrise at the pin with an SDK built from the same checkout, signed with a throw
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `create/` | `cargo +1.99.1 test` | Pass (84 glue tests) |
-| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (693 engine tests) |
+| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (694 engine tests) |
 | `create/` | `cargo horizon-mod check` | Pass ("Create uses 3574 items of the API … Made for b77574e.") |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/src/engine/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
@@ -124,6 +124,7 @@ above:
 | An adjustable chain gearshift's flicker under signal changes (#18) | Pass | Motor and adjustable chain gearshift, a redstone block above toggled every 4 ticks (`/tick freeze`, `step 4`): it breaks at the 21st toggle, as Create does for the same input (create-fuzz) |
 | Default states from Create (#17) | Pass | `/setblock` with no properties: encased chain drive `axis=y,axis_along_first=true,part=none`, clutch `axis=y,powered=false`, as Create's runtime defaults; a player-placed chain drive keeps `axis_along_first=true` after reload; fresh worlds load without errors |
 | A pulley put into a driven belt (#24) | Pass | Motor, two x shafts joined by the belt connector (four segments, 16 rpm), a shaft used on the second segment: it becomes a pulley and the segments keep turning at 16 with network capacity 262144 (it was 0) |
+| A belt's break cascade (#23) | Pass | Four-segment belt made with the connector, a pulley in the second segment, the start broken with ticks frozen: one tick later air, shaft, air, shaft, as Create for the same input (create-fuzz); the same after reload |
 | Kinetic state saved and loaded (#10) | Pass | Two member-motor pairs keep their roles over two save/reload cycles; a world saved before #10 loads with both pairs intact and keeps them after saving again |
 
 Known differences left: the category editor's inventory shows the inventory as it was at the last change made in
