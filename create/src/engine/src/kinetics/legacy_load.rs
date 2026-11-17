@@ -76,7 +76,7 @@ impl Kinetics {
             visited.insert(start);
             while let Some(id) = queue.pop_front() {
                 group.push(id);
-                for (m, _) in self.get_connected_neighbours(id) {
+                for m in self.get_connected_neighbours(id) {
                     if self.nodes[m as usize].load_origin != LoadOrigin::Placement
                         && visited.insert(m)
                     {
@@ -215,11 +215,11 @@ impl Kinetics {
             queue.push_front(root);
         }
         while let Some(id) = queue.pop_front() {
-            for (m, r) in self.get_connected_neighbours(id) {
+            for m in self.get_connected_neighbours(id) {
                 if !allowed.contains(&m) {
                     continue;
                 }
-                let speed = self.get_conveyed_speed(id, m, r);
+                let speed = self.get_conveyed_speed(id, m);
                 if speed == 0.0 {
                     continue;
                 }

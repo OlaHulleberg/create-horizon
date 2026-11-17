@@ -2,7 +2,7 @@
 use super::*;
 impl Kinetics {
     /// RotationPropagator.getConnectedNeighbours, including non-ratio couplings.
-    pub(super) fn get_connected_neighbours(&self, id: u32) -> Vec<(u32, f32)> {
+    pub(super) fn get_connected_neighbours(&self, id: u32) -> Vec<u32> {
         let mut out = self.java_order(id);
         out.retain(|&(m, _)| self.nodes[m as usize].live);
         let (mut cs, mut pull) = (Vec::new(), Vec::new());
@@ -32,11 +32,11 @@ impl Kinetics {
                 100
             }
         });
-        out
+        out.into_iter().map(|(id, _)| id).collect()
     }
 
     /// RotationPropagator.getConveyedSpeed; controller connections depend on source.
-    pub(super) fn get_conveyed_speed(&self, from: u32, to: u32, ratio: f32) -> f32 {
+    pub(super) fn get_conveyed_speed(&self, from: u32, to: u32) -> f32 {
         let a = &self.nodes[from as usize];
         let b = &self.nodes[to as usize];
         let controller = if controls(&a.part, &b.part) && b.pos == add(a.pos, [0, 1, 0]) {
@@ -107,7 +107,14 @@ impl Kinetics {
                 a.state.theoretical * output / input
             };
         }
-        a.state.theoretical * ratio
+        // RotationPropagator.getConveyedSpeed evaluates the directed modifier
+        // from the live entities; a reverse edge is not its rounded reciprocal.
+        let modifier = if self.far.get(&a.pos).is_some_and(|ps| ps.contains(&b.pos)) {
+            1.0
+        } else {
+            super::ratio(&a.part, &b.part, sub(b.pos, a.pos))
+        };
+        a.state.theoretical * modifier
     }
 
     /// KineticBlockEntity.onSpeedChanged and setSpeed.
@@ -193,7 +200,7 @@ impl Kinetics {
                 continue;
             }
             self.remove_source(id);
-            for (m, _) in self.get_connected_neighbours(id) {
+            for m in self.get_connected_neighbours(id) {
                 let n = &self.nodes[m as usize];
                 if Some(self_location(&self.nodes[m as usize])) == missing
                     || n.state.source.is_none()
@@ -258,12 +265,12 @@ impl Kinetics {
                 continue;
             }
             let cur = *id;
-            let (m, r) = neighbours[*next];
+            let m = neighbours[*next];
             *next += 1;
             let current = self.nodes[cur as usize].state.theoretical;
             let other = self.nodes[m as usize].state.theoretical;
-            let new = self.get_conveyed_speed(cur, m, r);
-            let opposite = self.get_conveyed_speed(m, cur, if r == 0.0 { 0.0 } else { 1.0 / r });
+            let new = self.get_conveyed_speed(cur, m);
+            let opposite = self.get_conveyed_speed(m, cur);
             if new == 0.0 && opposite == 0.0 {
                 continue;
             }
@@ -282,8 +289,7 @@ impl Kinetics {
             }
             if opposite.abs() > current.abs() {
                 self.set_source(cur, m);
-                let conveyed =
-                    self.get_conveyed_speed(m, cur, if r == 0.0 { 0.0 } else { 1.0 / r });
+                let conveyed = self.get_conveyed_speed(m, cur);
                 self.change_speed(cur, conveyed);
                 *stack.last_mut().unwrap() = (cur, self.get_connected_neighbours(cur), 0);
                 continue;
@@ -311,7 +317,7 @@ impl Kinetics {
             }
             if new.abs() >= other.abs() {
                 self.set_source(m, cur);
-                let conveyed = self.get_conveyed_speed(cur, m, r);
+                let conveyed = self.get_conveyed_speed(cur, m);
                 self.change_speed(m, conveyed);
             } else {
                 self.change_speed(m, new);

@@ -2609,6 +2609,52 @@ mod tests {
     }
 
     #[test]
+    fn chain_conflict_breaks_the_first_gearshift() {
+        // Issue 55: Java checkpoint 43 is air at the motor-driven gearshift,
+        // while the far gearshift survives. Placement shapes update the previous
+        // drive after the new block's onPlace, retaining its kinetic entity.
+        let mut k = Kinetics::new();
+        k.set([-1, 0, 0], 0, motor(Dir::East, 32.0));
+        solve(&mut k);
+        for z in 0..5 {
+            k.set([0, 0, z], 0, drive(false, z != 0, 1.0));
+            if z > 0 {
+                k.change_block_state([0, 0, z - 1], 0, drive(true, z > 1, 1.0), true);
+            }
+            solve(&mut k);
+        }
+        k.chain_signal_changed([0, 0, 0], 1.1875); // signal 2
+        k.chain_signal_changed([0, 0, 4], 1.875); // signal 13
+        assert!(
+            !solve(&mut k)
+                .iter()
+                .any(|e| matches!(e, Event::Break { .. }))
+        );
+        // The case reloads at checkpoint 39, resetting the runtime flicker tally.
+        let records: Vec<_> = k
+            .nodes
+            .iter()
+            .filter(|n| n.live)
+            .map(|n| (n.pos, n.part, k.saved_state(n.pos, 0).unwrap()))
+            .collect();
+        k = Kinetics::new();
+        for (pos, part, saved) in records {
+            k.set(pos, 0, part);
+            k.restore_state(pos, 0, saved);
+        }
+        solve(&mut k);
+        k.chain_signal_changed([0, 0, 0], 1.25); // signal 3, tick 42
+        k.chain_signal_changed([0, 0, 4], 1.8125); // signal 12
+        let events = solve(&mut k);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::Break { pos: [0, 0, 0] }))
+        );
+        assert!(k.speed([0, 0, 4], 0).is_some());
+    }
+
+    #[test]
     fn chain_drives_carry_their_speed_times_the_gearshift_s_modifier() {
         let mut k = Kinetics::new();
         k.set([0, 0, 0], 0, motor(Dir::East, 16.0));
