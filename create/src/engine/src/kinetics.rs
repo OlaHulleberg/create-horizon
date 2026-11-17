@@ -1107,6 +1107,64 @@ mod tests {
         assert_eq!(touched, [[1, 0, 0]]);
     }
 
+    #[test]
+    fn changing_one_network_leaves_unrelated_networks_and_events_alone() {
+        let mut k = Kinetics::new();
+        for z in [0, 10] {
+            k.set([0, 0, z], 0, motor(Dir::East, 16.0));
+            k.set(
+                [1, 0, z],
+                0,
+                Part {
+                    impact: 8.0,
+                    ..Part::shaft(Axis::X)
+                },
+            );
+        }
+        solve(&mut k);
+        let untouched = k.network([1, 0, 10], 0);
+        k.watch([1, 0, 10], true);
+        k.set([0, 0, 0], 0, motor(Dir::East, 32.0));
+        let e = solve(&mut k);
+        assert_eq!(k.network([1, 0, 10], 0), untouched);
+        assert!(
+            e.iter()
+                .all(|e| matches!(e, Event::Speed { pos: [_, _, 0], .. }))
+        );
+        let mut touched = Vec::new();
+        k.take_touched(&mut touched);
+        assert!(touched.is_empty());
+        assert!(!k.has_dirty());
+    }
+
+    #[test]
+    fn leaving_an_overstressed_network_resets_only_the_departing_member() {
+        let mut k = Kinetics::new();
+        k.set([0, 0, 0], 0, motor(Dir::East, 16.0));
+        k.set(
+            [1, 0, 0],
+            0,
+            Part {
+                impact: 128.0,
+                ..Part::shaft(Axis::X)
+            },
+        );
+        solve(&mut k);
+        assert_eq!(k.theoretical([1, 0, 0], 0), Some((16.0, true)));
+        k.remove([1, 0, 0]);
+        let e = solve(&mut k);
+        assert_eq!(k.theoretical([0, 0, 0], 0), Some((16.0, false)));
+        assert!(e.iter().any(|e| matches!(
+            e,
+            Event::Speed {
+                pos: [0, 0, 0],
+                overstressed: false,
+                ..
+            }
+        )));
+        assert_eq!(k.network([0, 0, 0], 0).unwrap().1, 0.0);
+    }
+
     /// A creative motor set to `rpm`, turning the shaft on `face` (CreativeMotorBlockEntity).
     fn motor(face: Dir, rpm: f32) -> Part {
         Part {
