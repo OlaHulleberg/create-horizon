@@ -1012,6 +1012,17 @@ impl Inventory {
         dirty
     }
 
+    /// `BeltInventory.tick`'s nonzero-speed direction update. On an empty inventory
+    /// this is the whole observable server tick: no surroundings are consulted.
+    pub(crate) fn update_direction(&mut self, speed: f32) -> bool {
+        if speed == 0.0 || self.positive == (speed > 0.0) {
+            return false;
+        }
+        self.positive = !self.positive;
+        self.items.reverse();
+        true
+    }
+
     /// `BeltInventory.tick` on the server for a belt of `length` turning at `speed` (direction
     /// aware, blocks a tick); `horizontal` whether machines over it may process.
     pub fn tick(
@@ -1031,11 +1042,7 @@ impl Inventory {
         if speed == 0.0 {
             return out;
         }
-        if self.positive != (speed > 0.0) {
-            self.positive = !self.positive;
-            self.items.reverse();
-            out.changed = true;
-        }
+        out.changed |= self.update_direction(speed);
         let positive = self.positive;
         let spacing = 1.0;
         let mut ending: Option<Ending> = None;
@@ -1500,6 +1507,22 @@ mod tests {
         // Nothing for one inside the belt, or on a belt too slow.
         assert!(passenger_motion(&seg, [0, 64, 0], [0.5, 64.1, 0.5], 48.0, false).is_none());
         assert!(passenger_motion(&seg, [0, 64, 0], [0.5, 64.8, 0.5], 0.5, false).is_none());
+    }
+
+    #[test]
+    fn empty_direction_update_equals_full_inventory_tick() {
+        // Java's server tick has no item-loop effects when items/toInsert are empty.
+        // Compare every state transition, including stop, restart and reversal.
+        for positive in [false, true] {
+            let mut full = Inventory::from_saved(Vec::new(), positive);
+            let mut idle = full.clone();
+            for speed in [0.0, 32.0 / 480.0, 0.0, -32.0 / 480.0, 0.0, 32.0 / 480.0] {
+                let ticked = full.tick(5, speed, true, &mut Open(Ending::Eject));
+                assert_eq!(idle.update_direction(speed), ticked.changed);
+                assert_eq!(idle, full);
+                assert!(ticked.ejected.is_empty());
+            }
+        }
     }
 
     struct Open(Ending);

@@ -730,6 +730,35 @@ pub struct Belt {
     pub items: crate::belt::Inventory,
 }
 
+/// A controller tick phase (`BeltBlockEntity.tick`). Visit in controller order,
+/// checking for work at each turn so a transfer can wake a later empty controller.
+/// Empty inventories perform only `BeltInventory.tick`'s direction update.
+pub struct BeltTicks {
+    dim: usize,
+    controllers: std::vec::IntoIter<[i32; 3]>,
+}
+
+impl BeltTicks {
+    /// The next inventory requiring a full tick. Call again after moving its items
+    /// and applying transfers; never collect this into a snapshot of busy belts.
+    pub fn next(&mut self, world: &mut CreateWorld) -> Option<[i32; 3]> {
+        for c in self.controllers.by_ref() {
+            let rpm = world.speed(self.dim, c).unwrap_or(0.0);
+            let Some(b) = world.dims[self.dim].belts.get_mut(&c) else {
+                continue;
+            };
+            if !b.items.is_empty() {
+                return Some(c);
+            }
+            let speed = crate::belt::direction_aware_speed(rpm, b.segment.facing);
+            if b.items.update_direction(speed) {
+                world.dims[self.dim].belt_changes.push(c);
+            }
+        }
+        None
+    }
+}
+
 /// What breaking a belt segment does to the next ones (`BeltBlock.onRemove`): each becomes a
 /// shaft on the belt's axis (a pulley) or air.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -4191,7 +4220,21 @@ impl CreateWorld {
         self.dims[dim].unsaved.push((pos[0] >> 4, pos[2] >> 4));
     }
 
-    /// Belts that hold items: the only ones that tick.
+    /// Begin `BeltBlockEntity.tick` for this level's controllers. The phase keeps
+    /// controller order, including empty belts, without ticking idle inventories.
+    pub fn belt_ticks(&self, dim: usize) -> BeltTicks {
+        let d = &self.dims[dim];
+        let mut controllers: Vec<_> = d.belts.keys().copied().collect();
+        // Controllers tick in block entity registration order, not HashMap order.
+        // Use the kinetic entity's registration, which survives reconfiguration.
+        controllers.sort_by_key(|c| (d.kinetics.placement_order(*c), *c));
+        BeltTicks {
+            dim,
+            controllers: controllers.into_iter(),
+        }
+    }
+
+    /// Belts currently holding items, for observation only. Use `belt_ticks` to tick.
     pub fn busy_belts(&self, dim: usize) -> Vec<[i32; 3]> {
         self.dims[dim]
             .belts
@@ -4532,6 +4575,145 @@ mod tests {
         states::set_range(2, names.len() as u32);
         let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
         CreateWorld::new(table)
+    }
+
+    fn item_belt_world(rpm: f32) -> CreateWorld {
+        let belt = |part| {
+            (
+                "create:belt",
+                vec![("facing", "south"), ("slope", "horizontal"), ("part", part)],
+            )
+        };
+        let names = [
+            ("create:creative_motor", vec![("facing", "east")]),
+            belt("start"),
+            belt("middle"),
+            belt("end"),
+        ];
+        states::set_range(10, 4);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        for (start, length) in [(0, 5), (-4, 4)] {
+            for i in 0..length {
+                w.block_changed(
+                    0,
+                    [0, 8, start + i],
+                    0,
+                    if i == 0 {
+                        11
+                    } else if i == length - 1 {
+                        13
+                    } else {
+                        12
+                    },
+                );
+            }
+            w.block_changed(0, [-1, 8, start], 0, 10);
+            w.set_motor(0, [-1, 8, start], rpm);
+        }
+        w.settle_belts(0);
+        w.tick(0, &mut Vec::new());
+        w
+    }
+
+    struct ItemBeltSide;
+    impl crate::belt::Surroundings for ItemBeltSide {
+        fn ending(&mut self) -> crate::belt::Ending {
+            crate::belt::Ending::Blocked
+        }
+        fn insert(&mut self, _: &crate::belt::Item) -> Option<u8> {
+            None
+        }
+        fn process(
+            &mut self,
+            _: i32,
+            _: &mut crate::belt::Item,
+            _: bool,
+        ) -> Option<crate::belt::Process> {
+            None
+        }
+    }
+
+    #[test]
+    fn empty_belt_tick_sets_first_stack_order() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = item_belt_world(32.0);
+        assert_eq!(w.belt_ticks(0).next(&mut w), None);
+        let b = w.dims[0].belts.get_mut(&[0, 8, 0]).unwrap();
+        let mut item = crate::belt::Item::new("minecraft:iron_ingot", 16, 180, false);
+        item.position = 1.5 + if b.items.positive { -1.0 } else { 1.0 } / 16.0;
+        b.items.add(item);
+        let mut phase = w.belt_ticks(0);
+        assert_eq!(phase.next(&mut w), Some([0, 8, 0]));
+        let b = w.dims[0].belts.get_mut(&[0, 8, 0]).unwrap();
+        b.items.tick(
+            5,
+            crate::belt::direction_aware_speed(32.0, b.segment.facing),
+            true,
+            &mut ItemBeltSide,
+        );
+        assert!((b.items.items[0].position - 1.5041667).abs() < 1e-6);
+        states::clear_range();
+    }
+
+    #[test]
+    fn empty_belt_receives_before_its_turn_in_the_same_tick() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = item_belt_world(-32.0);
+        let sender = [0, 8, 0];
+        let receiver = [0, 8, -4];
+        let mut item = crate::belt::Item::new("minecraft:iron_ingot", 16, 180, false);
+        item.position = 0.01;
+        w.dims[0]
+            .belts
+            .get_mut(&sender)
+            .unwrap()
+            .items
+            .add(item.clone());
+        let mut phase = w.belt_ticks(0);
+        assert_eq!(phase.next(&mut w), Some(sender));
+        item.position = 4.26; // DirectBeltInputBehaviour's start at the receiving end.
+        w.dims[0].belts.get_mut(&receiver).unwrap().items.add(item);
+        assert_eq!(phase.next(&mut w), Some(receiver));
+        let b = w.dims[0].belts.get_mut(&receiver).unwrap();
+        b.items.tick(
+            4,
+            crate::belt::direction_aware_speed(-32.0, b.segment.facing),
+            true,
+            &mut ItemBeltSide,
+        );
+        assert!((b.items.items[0].position - 4.1933336).abs() < 1e-6);
+        b.items.tick(
+            4,
+            crate::belt::direction_aware_speed(-32.0, b.segment.facing),
+            true,
+            &mut ItemBeltSide,
+        );
+        assert!((b.items.items[0].position - 4.126667).abs() < 1e-6);
+        states::clear_range();
+    }
+
+    #[test]
+    fn belt_receiving_after_its_turn_waits_until_next_tick() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = item_belt_world(-32.0);
+        let receiver = [0, 8, -4];
+        let mut phase = w.belt_ticks(0);
+        // Both empty controllers already took their turns.
+        assert_eq!(phase.next(&mut w), None);
+        let mut item = crate::belt::Item::new("minecraft:iron_ingot", 16, 180, false);
+        item.position = 4.26;
+        w.dims[0].belts.get_mut(&receiver).unwrap().items.add(item);
+        assert_eq!(phase.next(&mut w), None);
+        assert!(w.dims[0].belts[&receiver].items.items.is_empty());
+        let mut phase = w.belt_ticks(0);
+        assert_eq!(phase.next(&mut w), Some(receiver));
+        let b = w.dims[0].belts.get_mut(&receiver).unwrap();
+        b.items.tick(4, -32.0 / 480.0, true, &mut ItemBeltSide);
+        assert!((b.items.items[0].position - 4.1933336).abs() < 1e-6);
+        states::clear_range();
     }
 
     #[test]

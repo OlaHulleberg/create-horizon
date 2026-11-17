@@ -706,8 +706,8 @@ impl belt::BreakWorld for BeltBreakWorld<'_, '_> {
 }
 
 /// Belts: segments broken next to a broken one become shafts or air, a broken belt's items
-/// drop, then belts holding items move them (`BeltInventory.tick`); belts at rest or empty cost
-/// nothing.
+/// drop, then the engine visits controllers (`BeltBlockEntity.tick`), moving items
+/// received before their turn and updating empty inventories' direction bits.
 pub fn tick_belts(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     belt::break_cascade(&mut BeltBreakWorld(lv));
@@ -715,8 +715,10 @@ pub fn tick_belts(lv: &mut ServerLevel<'_>) {
     for (c, seg, length, item) in drops {
         eject_item(lv, c, &seg, length, 0.0, &item);
     }
-    let busy = with_world(|w| w.busy_belts(dim)).unwrap_or_default();
-    for c in busy {
+    let Some(mut phase) = with_world(|w| w.belt_ticks(dim)) else {
+        return;
+    };
+    while let Some(c) = with_world(|w| phase.next(w)).flatten() {
         let Some((seg, length, mut belt_items)) = with_world(|w| {
             let b = w.dims[dim].belts.get_mut(&c)?;
             Some((
