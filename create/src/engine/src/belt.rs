@@ -1047,174 +1047,163 @@ impl Inventory {
         let spacing = 1.0;
         let mut ending: Option<Ending> = None;
         let mut front: Option<f32> = None;
-        let mut i = 0;
-        while i < self.items.len() {
-            if self.items[i].count == 0 {
-                self.items.remove(i);
+        // BeltInventory.tick retains currentItem after iterator.remove(); only an item
+        // already empty at entry clears it. Keep ownership through every exit path so
+        // processing, funnels, insertion and ejection all leave their final position.
+        for mut item in std::mem::take(&mut self.items) {
+            if item.count == 0 {
+                front = None;
                 continue;
             }
-            // Held still for a tick by a mechanical arm reaching for it (`lockedExternally`).
-            if self.items[i].held_externally {
-                self.items[i].held_externally = false;
-                front = Some(self.items[i].position);
-                i += 1;
-                continue;
-            }
-            let mut movement = speed;
-            let mut no_movement = false;
-            let current = self.items[i].position;
-            if let Some(f) = front {
-                let diff = f - current;
-                if diff.abs() <= spacing {
-                    no_movement = true;
+            let keep = (|| {
+                // Held still for a tick by a mechanical arm reaching for it (`lockedExternally`).
+                if item.held_externally {
+                    item.held_externally = false;
+                    return true;
                 }
-                movement = if positive {
-                    movement.min(diff - spacing)
-                } else {
-                    movement.max(diff + spacing)
-                };
-            }
-            let mut to_end = if positive {
-                length as f32 - current
-            } else {
-                -current
-            };
-            if to_end.abs() < movement.abs() + 1.0 {
-                let e = *ending.get_or_insert_with(|| world.ending());
-                to_end += if positive { -e.margin() } else { e.margin() };
-            }
-            let limited = if positive {
-                movement.min(to_end)
-            } else {
-                movement.max(to_end)
-            };
-            let next = current + limited;
-
-            if horizontal {
-                match self.process(i, next, no_movement, world, &mut out) {
-                    Step::Removed => continue,
-                    Step::Replaced => continue,
-                    Step::Held => {
-                        front = Some(self.items[i].position);
-                        i += 1;
-                        continue;
+                let mut movement = speed;
+                let mut no_movement = false;
+                let current = item.position;
+                if let Some(f) = front {
+                    let diff = f - current;
+                    if diff.abs() <= spacing {
+                        no_movement = true;
                     }
-                    Step::Free => {}
-                }
-            }
-            // Belt funnels: a funnel over a segment the item reaches takes what it can of it.
-            match self.funnels(i, next, length, world, &mut out) {
-                FunnelStep::Gone => continue,
-                FunnelStep::Held => {
-                    front = Some(self.items[i].position);
-                    i += 1;
-                    continue;
-                }
-                FunnelStep::Free => {}
-            }
-            if no_movement {
-                set_stalled(&mut self.items[i], true, &mut out);
-                front = Some(self.items[i].position);
-                i += 1;
-                continue;
-            }
-            // Belt tunnels, when the item enters another segment.
-            let mut upcoming = next as i32;
-            if !positive && next == 0.0 {
-                upcoming = -1;
-            }
-            if current as i32 != upcoming {
-                let before = self.items[i].count;
-                let stuck = world.tunnel(upcoming, &mut self.items[i]);
-                if self.items[i].count != before {
-                    out.changed = true;
-                }
-                if stuck {
-                    set_stalled(&mut self.items[i], true, &mut out);
-                    front = Some(self.items[i].position);
-                    i += 1;
-                    continue;
-                }
-            }
-            // Held at the end the move is a float's rounding away from none: what counts is
-            // whether the position changes.
-            let still = self.items[i].position + limited == self.items[i].position;
-            set_stalled(&mut self.items[i], still, &mut out);
-            let item = &mut self.items[i];
-            item.position += limited;
-            let to_middle = item.target_side_offset() - item.side_offset;
-            item.side_offset +=
-                (to_middle * limited.abs() * 6.0).clamp(-to_middle.abs(), to_middle.abs());
-            if limited == movement {
-                front = Some(item.position);
-                i += 1;
-                continue;
-            }
-            // The end is reached.
-            match ending.unwrap_or(Ending::Eject) {
-                Ending::Insert => {
-                    let Some(left) = world.insert(&self.items[i]) else {
-                        front = Some(self.items[i].position);
-                        i += 1;
-                        continue;
+                    movement = if positive {
+                        movement.min(diff - spacing)
+                    } else {
+                        movement.max(diff + spacing)
                     };
-                    if left == self.items[i].count {
-                        front = Some(self.items[i].position);
-                        i += 1;
-                        continue;
-                    }
-                    out.changed = true;
-                    if left == 0 {
-                        self.items.remove(i);
-                        continue;
-                    }
-                    self.items[i].count = left;
                 }
-                Ending::Blocked => {}
-                Ending::Eject => {
-                    out.ejected.push(self.items.remove(i));
-                    out.changed = true;
-                    continue;
+                let mut to_end = if positive {
+                    length as f32 - current
+                } else {
+                    -current
+                };
+                if to_end.abs() < movement.abs() + 1.0 {
+                    let e = *ending.get_or_insert_with(|| world.ending());
+                    to_end += if positive { -e.margin() } else { e.margin() };
                 }
+                let limited = if positive {
+                    movement.min(to_end)
+                } else {
+                    movement.max(to_end)
+                };
+                let next = current + limited;
+
+                if horizontal {
+                    match self.process(&mut item, next, no_movement, world, &mut out) {
+                        Step::Removed => return false,
+                        Step::Replaced => return false,
+                        Step::Held => {
+                            return true;
+                        }
+                        Step::Free => {}
+                    }
+                }
+                // Belt funnels: a funnel over a segment the item reaches takes what it can of it.
+                match self.funnels(&mut item, next, length, world, &mut out) {
+                    FunnelStep::Gone => return false,
+                    FunnelStep::Held => {
+                        return true;
+                    }
+                    FunnelStep::Free => {}
+                }
+                if no_movement {
+                    set_stalled(&mut item, true, &mut out);
+                    return true;
+                }
+                // Belt tunnels, when the item enters another segment.
+                let mut upcoming = next as i32;
+                if !positive && next == 0.0 {
+                    upcoming = -1;
+                }
+                if current as i32 != upcoming {
+                    let before = item.count;
+                    let stuck = world.tunnel(upcoming, &mut item);
+                    if item.count != before {
+                        out.changed = true;
+                    }
+                    if stuck {
+                        set_stalled(&mut item, true, &mut out);
+                        return true;
+                    }
+                }
+                // Held at the end the move is a float's rounding away from none: what counts is
+                // whether the position changes.
+                let still = item.position + limited == item.position;
+                set_stalled(&mut item, still, &mut out);
+                let item = &mut item;
+                item.position += limited;
+                let to_middle = item.target_side_offset() - item.side_offset;
+                item.side_offset +=
+                    (to_middle * limited.abs() * 6.0).clamp(-to_middle.abs(), to_middle.abs());
+                if limited == movement {
+                    return true;
+                }
+                // The end is reached.
+                match ending.unwrap_or(Ending::Eject) {
+                    Ending::Insert => {
+                        let Some(left) = world.insert(item) else {
+                            return true;
+                        };
+                        if left == item.count {
+                            return true;
+                        }
+                        out.changed = true;
+                        if left == 0 {
+                            return false;
+                        }
+                        item.count = left;
+                    }
+                    Ending::Blocked => {}
+                    Ending::Eject => {
+                        out.ejected.push(item.clone());
+                        out.changed = true;
+                        return false;
+                    }
+                }
+                true
+            })();
+            front = Some(item.position);
+            if keep {
+                self.items.push(item);
             }
-            front = Some(self.items[i].position);
-            i += 1;
         }
         out
     }
 
-    /// `handleBeltProcessingAndCheckIfRemoved` for item `i` about to move to `next`.
+    /// `handleBeltProcessingAndCheckIfRemoved` for an item about to move to `next`.
     fn process(
         &mut self,
-        i: usize,
+        item: &mut Item,
         next: f32,
         no_movement: bool,
         world: &mut impl Surroundings,
         out: &mut Ticked,
     ) -> Step {
         let positive = self.positive;
-        let segment = self.items[i].position as i32;
-        if self.items[i].locked {
-            let result = world.process(segment, &mut self.items[i], true);
+        let segment = item.position as i32;
+        if item.locked {
+            let result = world.process(segment, item, true);
             return match result {
                 None => {
-                    self.items[i].locked = false;
+                    item.locked = false;
                     out.changed = true;
                     Step::Free
                 }
                 Some(Process::Hold) => Step::Held,
                 Some(Process::Remove) => {
-                    self.items.remove(i);
                     out.changed = true;
                     Step::Removed
                 }
                 Some(Process::Convert { held, outputs }) => {
-                    self.replace(i, segment, held, outputs);
+                    self.replace(segment, held, outputs);
                     out.changed = true;
                     Step::Replaced
                 }
                 Some(Process::Pass) => {
-                    self.items[i].locked = false;
+                    item.locked = false;
                     out.changed = true;
                     Step::Free
                 }
@@ -1223,7 +1212,6 @@ impl Inventory {
         if no_movement {
             return Step::Free;
         }
-        let item = &self.items[i];
         if !(item.position > 0.5 || positive) {
             return Step::Free;
         }
@@ -1235,15 +1223,13 @@ impl Inventory {
         } else {
             segment as f32 + 0.5 >= next
         } {
-            match world.process(segment, &mut self.items[i], false) {
+            match world.process(segment, item, false) {
                 None | Some(Process::Pass) => {}
                 Some(Process::Remove) => {
-                    self.items.remove(i);
                     out.changed = true;
                     return Step::Removed;
                 }
                 Some(Process::Hold) | Some(Process::Convert { .. }) => {
-                    let item = &mut self.items[i];
                     item.position =
                         segment as f32 + 0.5 + if positive { 1.0 / 512.0 } else { -1.0 / 512.0 };
                     item.locked = true;
@@ -1256,12 +1242,12 @@ impl Inventory {
         Step::Free
     }
 
-    /// `BeltFunnelInteractionHandler.checkForFunnels` for item `i` about to move to `next`: each
+    /// `BeltFunnelInteractionHandler.checkForFunnels` for an item about to move to `next`: each
     /// funnel it reaches takes what it can into the inventory behind it; one facing against the
     /// belt holds it at its entry.
     fn funnels(
         &mut self,
-        i: usize,
+        item: &mut Item,
         next: f32,
         length: i32,
         world: &mut impl Surroundings,
@@ -1270,8 +1256,8 @@ impl Inventory {
         use crate::funnel::Check;
         let positive = self.positive;
         let mut held = false;
-        self.items[i].at_funnel = false;
-        for segment in crate::funnel::segments(self.items[i].position, next, positive, length) {
+        item.at_funnel = false;
+        for segment in crate::funnel::segments(item.position, next, positive, length) {
             let Some((f, movement)) = world.funnel(segment) else {
                 continue;
             };
@@ -1281,21 +1267,20 @@ impl Inventory {
                     Check::Stop => break,
                     Check::Crossed { blocking, entry } => (blocking, entry),
                 };
-            if blocking && self.items[i].position != entry {
-                self.items[i].position = entry;
+            if blocking && item.position != entry {
+                item.position = entry;
                 out.changed = true;
             }
-            let before = self.items[i].count;
+            let before = item.count;
             let left = if f.powered {
                 None
             } else {
-                world.funnel_insert(segment, &self.items[i])
+                world.funnel_insert(segment, &*item)
             };
             if let Some(left) = left.filter(|l| *l != before) {
-                self.items[i].count = left;
+                item.count = left;
                 out.changed = true;
                 if left == 0 {
-                    self.items.remove(i);
                     return FunnelStep::Gone;
                 }
             }
@@ -1305,7 +1290,7 @@ impl Inventory {
             }
         }
         if held {
-            self.items[i].at_funnel = true;
+            item.at_funnel = true;
             FunnelStep::Held
         } else {
             FunnelStep::Free
@@ -1314,8 +1299,7 @@ impl Inventory {
 
     /// `applyToEachWithin` applying a `TransportedResult`: the item is replaced by what it was
     /// turned into, inserted next tick (`toInsert`).
-    fn replace(&mut self, i: usize, segment: i32, held: Option<Item>, outputs: Vec<Item>) {
-        self.items.remove(i);
+    fn replace(&mut self, segment: i32, held: Option<Item>, outputs: Vec<Item>) {
         if let Some(mut h) = held {
             h.position = segment as f32 + 0.5
                 - if self.positive {
@@ -1523,6 +1507,51 @@ mod tests {
                 assert!(ticked.ejected.is_empty());
             }
         }
+    }
+
+    #[test]
+    fn removed_end_stack_blocks_for_the_rest_of_the_tick() {
+        // Java issue #27: tick 161 holds pearls at 3.75; tick 162 reaches 3.8166666.
+        for horizontal in [false, true] {
+            for positive in [false, true] {
+                for ending in [Ending::Insert, Ending::Eject] {
+                    let end = if ending == Ending::Insert { 4.75 } else { 5.0 };
+                    let mut lead = Item::new("minecraft:gold_ingot", 7, 0, false);
+                    lead.position = if positive { end } else { 5.0 - end };
+                    let mut follower = Item::new("minecraft:ender_pearl", 16, 0, false);
+                    follower.position = lead.position + if positive { -1.0 } else { 1.0 };
+                    let at = follower.position;
+                    let mut inv = Inventory::from_saved(vec![lead, follower], positive);
+                    let speed = if positive {
+                        32.0 / 480.0
+                    } else {
+                        -32.0 / 480.0
+                    };
+                    let mut world = Open(ending);
+                    inv.tick(5, speed, horizontal, &mut world);
+                    assert_eq!(inv.items.len(), 1);
+                    assert_eq!(inv.items[0].position, at);
+                    assert!(inv.items[0].stalled);
+                    inv.tick(5, speed, horizontal, &mut world);
+                    assert_eq!(inv.items[0].position, at + speed);
+                    assert!(!inv.items[0].stalled);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn empty_stack_clears_the_previous_blocker() {
+        let mut lead = Item::new("lead", 1, 0, false);
+        lead.position = 2.0;
+        lead.held_externally = true;
+        let mut empty = Item::new("empty", 0, 0, false);
+        empty.position = 1.5;
+        let mut follower = Item::new("follower", 1, 0, false);
+        follower.position = 1.0;
+        let mut inv = Inventory::from_saved(vec![lead, empty, follower], true);
+        inv.tick(5, 0.1, true, &mut Open(Ending::Eject));
+        assert_eq!(inv.items[1].position, 1.1);
     }
 
     struct Open(Ending);
