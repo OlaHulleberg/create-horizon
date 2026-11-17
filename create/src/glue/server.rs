@@ -6,8 +6,8 @@
 
 use super::states;
 use mod_api::{
-    BlockState, BlockUpdateFlags, Direction, HostBlockStates, LevelRef, NeighbourUpdate, PlayerRef,
-    ServerHost,
+    BlockState, BlockUpdateFlags, Compound, Direction, HostBlockStates, LevelRef, NeighbourUpdate,
+    PlayerRef, ServerHost, Tag,
 };
 
 /// `minecraft:block`'s particle key, for block break particles (set at registration by the
@@ -140,6 +140,21 @@ impl<'a> ServerLevel<'a> {
                 .destroy_block(&mut *self.host, pos, drops, None, false),
             Ok(Some(_))
         )
+    }
+
+    /// One compound a block entity's `write` owns, written as a whole under `key`: the entity
+    /// rewrites its fields, so one it no longer writes must go. `merge_data` merges nested
+    /// compounds recursively (as `/data merge`) and would keep it. False when no block entity
+    /// is at `pos` or its data did not change.
+    pub fn write_entity_field(&mut self, pos: [i32; 3], key: &str, value: Compound) -> bool {
+        let Some(entity) = self.host.block_entity(self.level, pos) else {
+            return false;
+        };
+        let Some(mut data) = entity.data(&*self.host) else {
+            return false;
+        };
+        data.insert(key.into(), Tag::Compound(value));
+        entity.replace_data(&mut *self.host, data) == Ok(true)
     }
 
     /// The level's game time.

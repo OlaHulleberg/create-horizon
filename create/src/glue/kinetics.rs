@@ -496,22 +496,15 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
         .flatten() else {
             continue;
         };
-        if let Some(entity) = lv.host.block_entity(lv.level, pos) {
-            let ports: Compound = states
-                .into_iter()
-                .enumerate()
-                .filter_map(|(i, state)| {
-                    state.map(|s| (["0", "1"][i].into(), Tag::Compound(saved_to_nbt(s))))
-                })
-                .collect();
-            // KineticBlockEntity.write rewrites its fields: a merge (recursive, as `/data merge`)
-            // would keep a `Source` or `Network` the entity no longer has.
-            let Some(mut data) = entity.data(&*lv.host) else {
-                continue;
-            };
-            data.insert(SAVED_KINETICS.into(), Tag::Compound(ports));
-            let _ = entity.replace_data(&mut *lv.host, data);
-        }
+        let ports: Compound = states
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, state)| {
+                state.map(|s| (["0", "1"][i].into(), Tag::Compound(saved_to_nbt(s))))
+            })
+            .collect();
+        // KineticBlockEntity.write: a `Source` or `Network` the entity no longer has is gone.
+        lv.write_entity_field(pos, SAVED_KINETICS, ports);
     }
 }
 

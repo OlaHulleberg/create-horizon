@@ -348,10 +348,9 @@ fn show(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let Some(c) = cloths(lv.dim, |m| m.get(&pos).cloned()) else {
         return;
     };
-    if let Some(entity) = lv.host.block_entity(lv.level, pos) {
-        let data = Compound::from([(DATA.into(), Tag::Compound(cloth_tag(&*lv.host, &c)))]);
-        let _ = entity.merge_data(&mut *lv.host, data);
-    }
+    // TableClothBlockEntity.write rewrites its items and request and omits a cleared owner.
+    let cloth = cloth_tag(&*lv.host, &c);
+    lv.write_entity_field(pos, DATA, cloth);
     mark(lv, pos);
 }
 
