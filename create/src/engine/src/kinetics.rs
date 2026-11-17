@@ -793,6 +793,19 @@ impl Kinetics {
         })
     }
 
+    /// Create's `KineticBlockEntity.network` and `KineticNetwork.getSize` for a part.
+    /// Returns the source's position-based network id and member count, including unloaded
+    /// members restored from saves. Returns `None` for an absent part or one without a network.
+    /// Reads the existing TorquePropagator without creating a network or copying its state.
+    pub fn network_membership(&self, pos: [i32; 3], sub: u8) -> Option<(i64, u32)> {
+        let id = *self.at.get(&pos)?.get(sub as usize)?;
+        if id == NONE {
+            return None;
+        }
+        let net = self.nodes[id as usize].state.net?;
+        Some((net, self.networks.figures(Some(net)).2))
+    }
+
     /// The speed a part generates (`getGeneratedSpeed`), 0 for one that does not.
     pub fn generated(&self, pos: [i32; 3], sub: u8) -> Option<f32> {
         let id = *self.at.get(&pos)?.get(sub as usize)?;
@@ -2111,6 +2124,32 @@ mod tests {
                 "{m}: {e:?}"
             );
         }
+    }
+
+    #[test]
+    fn membership_reads_the_existing_network_and_its_size() {
+        let mut k = Kinetics::new();
+        assert_eq!(k.network_membership([0, 0, 0], 0), None);
+        k.set([0, 0, 0], 0, motor(Dir::East, 16.0));
+        k.set([1, 0, 0], 0, Part::shaft(Axis::X));
+        k.set([0, 0, 10], 0, motor(Dir::East, 16.0));
+        k.solve(&mut Vec::new());
+        assert_eq!(
+            k.network_membership([0, 0, 0], 0),
+            Some((network_id([0, 0, 0]), 2))
+        );
+        assert_eq!(
+            k.network_membership([1, 0, 0], 0),
+            k.network_membership([0, 0, 0], 0)
+        );
+        assert_eq!(
+            k.network_membership([0, 0, 10], 0),
+            Some((network_id([0, 0, 10]), 1))
+        );
+        assert_eq!(k.network_membership([0, 0, 0], 1), None);
+        k.remove([0, 0, 0]);
+        k.solve(&mut Vec::new());
+        assert_eq!(k.network_membership([1, 0, 0], 0), None);
     }
 
     #[test]
