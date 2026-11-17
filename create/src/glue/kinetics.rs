@@ -386,6 +386,7 @@ fn tick_inputs(lv: &mut ServerLevel<'_>) {
         };
         let now = lv.has_neighbor_signal(pos);
         if now != was {
+            with_world(|w| w.transmission_power_changing(dim, pos));
             let value = if now { "true" } else { "false" };
             lv.set_property(pos, "powered", value, super::server::UPDATE_CLIENTS);
         }

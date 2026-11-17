@@ -8,6 +8,25 @@ use crate::parts::{Settings, StateInfo, is_kinetic, parts};
 use crate::states;
 use std::collections::{HashMap, HashSet};
 
+/// `KineticBlock.areStatesKineticallyEquivalent` and its block overrides.
+fn kinetically_equivalent(a: Block, x: &StateInfo, b: Block, y: &StateInfo) -> bool {
+    let axis = |b, s| parts(b, s, &Settings::default())[0].map(|p| p.axis);
+    a == b
+        && axis(a, x) == axis(b, y)
+        && match b {
+            Block::SequencedGearshift => false,
+            Block::AdjustableChainGearshift | Block::GantryShaft => x.powered == y.powered,
+            Block::AndesiteEncasedCogwheel
+            | Block::BrassEncasedCogwheel
+            | Block::AndesiteEncasedLargeCogwheel
+            | Block::BrassEncasedLargeCogwheel => {
+                x.top_shaft == y.top_shaft && x.bottom_shaft == y.bottom_shaft
+            }
+            Block::Belt => x.belt.map(|s| s.part) == y.belt.map(|s| s.part),
+            _ => true,
+        }
+}
+
 /// Every Create block state, by `state - first`: its block, its decoded properties, and whether it
 /// holds kinetic parts. Built once when a world opens, never per tick.
 pub struct StateTable {
@@ -1151,7 +1170,13 @@ impl CreateWorld {
         }
         let settings = d.settings.get(&pos).copied().unwrap_or_default();
         let [a, b] = parts(block, info, &settings);
-        d.kinetics.remove(pos);
+        let previous = d.states.get(&pos).and_then(|s| self.table.get(*s));
+        let same = previous.is_some_and(|(b, _)| b == block);
+        let equivalent =
+            previous.is_some_and(|(b, old)| kinetically_equivalent(b, old, block, info));
+        if !same {
+            d.kinetics.remove(pos);
+        }
         // A block whose state changes often (a diode) is listed in its column once.
         if d.states.insert(pos, state).is_none() {
             d.columns
@@ -1159,12 +1184,43 @@ impl CreateWorld {
                 .or_default()
                 .push(pos);
         }
-        if let Some(a) = a {
-            d.kinetics.set(pos, 0, a);
+        for (sub, part) in [(0, a), (1, b)] {
+            if let Some(part) = part {
+                if same {
+                    d.kinetics.change_block_state(pos, sub, part, equivalent);
+                } else {
+                    d.kinetics.set(pos, sub, part);
+                }
+            }
         }
-        if let Some(b) = b {
-            d.kinetics.set(pos, 1, b);
+    }
+
+    /// `GearshiftBlock.neighborChanged`: detach before committing a redstone power change.
+    /// Direct state replacement does not run this callback.
+    pub fn transmission_power_changing(&mut self, dim: usize, pos: [i32; 3]) {
+        if self
+            .block_at(dim, pos)
+            .is_some_and(|b| matches!(b, Block::Clutch | Block::Gearshift))
+        {
+            self.dims[dim].kinetics.detach_transmission(pos);
         }
+    }
+
+    /// `KineticBlockEntity.switchToBlockState`, before the world commits a wrench rotation.
+    pub fn switching_block_state(&mut self, dim: usize, pos: [i32; 3], new: u32) {
+        let d = &mut self.dims[dim];
+        let Some(old) = d.states.get(&pos).copied() else {
+            return;
+        };
+        if old == new {
+            return;
+        }
+        let equivalent = self
+            .table
+            .get(old)
+            .zip(self.table.get(new))
+            .is_some_and(|((a, x), (b, y))| kinetically_equivalent(a, x, b, y));
+        d.kinetics.switch_block_state(pos, equivalent);
     }
 
     /// A committed block change. The first lines are the hot path: two
@@ -2189,6 +2245,10 @@ impl CreateWorld {
         let d = &mut self.dims[dim];
         d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
         let old = d.settings.get(&pos).copied().unwrap_or_default();
+        // ScrollValueBehaviour only invokes its callback when the value changes.
+        if old.motor_rpm == rpm {
+            return Some(rpm);
+        }
         self.set_settings(
             dim,
             pos,
@@ -4388,6 +4448,62 @@ mod tests {
         states::set_range(2, names.len() as u32);
         let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
         CreateWorld::new(table)
+    }
+
+    #[test]
+    fn motor_same_block_state_lifecycle() {
+        // Java issue #13: north 32 -> south 32 keeps -32; changing axes clears
+        // kinetic information without reinitializing the surviving motor entity.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names = ["north", "south", "west"];
+        states::set_range(10, 3);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names
+                .iter()
+                .map(|f| ("create:creative_motor", [("facing", *f)].into_iter())),
+        ));
+        let p = [0, 8, 1];
+        let mut events = Vec::new();
+        w.block_changed(0, p, 0, 10);
+        w.tick(0, &mut events);
+        w.set_motor(0, p, 32.0);
+        w.tick(0, &mut events);
+        assert_eq!(w.speed(0, p), Some(-32.0));
+        w.block_changed(0, p, 10, 11);
+        w.set_motor(0, p, 32.0);
+        w.tick(0, &mut events);
+        assert_eq!(w.speed(0, p), Some(-32.0));
+        w.block_changed(0, p, 11, 12);
+        w.tick(0, &mut events);
+        assert_eq!(w.speed(0, p), Some(0.0));
+        assert_eq!(w.dims[0].kinetics.network(p, 0).unwrap().2, 0.0);
+        states::clear_range();
+    }
+
+    #[test]
+    fn wrench_reactivates_surviving_motor() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        states::set_range(10, 2);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            ["north", "south"]
+                .into_iter()
+                .map(|f| ("create:creative_motor", [("facing", f)].into_iter())),
+        ));
+        let p = [0, 8, 1];
+        let mut events = Vec::new();
+        w.block_changed(0, p, 0, 10);
+        w.tick(0, &mut events);
+        w.set_motor(0, p, 32.0);
+        w.tick(0, &mut events);
+        w.switching_block_state(0, p, 11);
+        w.block_changed(0, p, 10, 11);
+        assert_eq!(w.speed(0, p), Some(-32.0));
+        w.tick(0, &mut events);
+        assert_eq!(w.speed(0, p), Some(32.0));
+        assert_eq!(w.motor_setting(0, p), Some(32.0));
+        states::clear_range();
     }
 
     #[test]

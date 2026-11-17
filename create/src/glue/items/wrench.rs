@@ -96,13 +96,21 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
         return Some(InteractionResult::Fail);
     }
     if let Some(next) = turned(&lv, pos, clicked) {
-        lv.set_state(pos, next, update_all());
+        switch_state(&mut lv, pos, next);
         rotate_sound(&mut lv, pos);
         if matches!(block, Block::RedstoneContact | Block::ElevatorContact) {
             crate::glue::contraptions::contact_wrenched(&mut lv, pos);
         }
     }
     Some(InteractionResult::Success)
+}
+
+/// `KineticBlockEntity.switchToBlockState`, shared by wrench block overrides.
+pub(crate) fn switch_state(lv: &mut ServerLevel<'_>, pos: [i32; 3], next: mod_api::BlockState) {
+    if let Some(id) = states::id(next) {
+        with_world(|w| w.switching_block_state(lv.dim, pos, id));
+    }
+    lv.set_state(pos, next, update_all());
 }
 
 /// `IWrenchable.playRotateSound`: `WRENCH_ROTATE` (the wooden trapdoor's close at .25 and 1.25

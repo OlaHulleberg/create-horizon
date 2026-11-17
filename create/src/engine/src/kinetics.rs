@@ -701,6 +701,75 @@ impl Kinetics {
         self.dirty.push(id);
     }
 
+    /// `KineticBlock.onPlace` / `updateIndirectNeighbourShapes`: retain the entity,
+    /// changing its state-derived part without invoking updateGeneratedRotation.
+    pub fn change_block_state(&mut self, pos: [i32; 3], sub: u8, part: Part, equivalent: bool) {
+        let Some(id) = self
+            .at
+            .get(&pos)
+            .map(|ids| ids[sub as usize])
+            .filter(|id| *id != NONE)
+        else {
+            self.set(pos, sub, part);
+            return;
+        };
+        let n = &mut self.nodes[id as usize];
+        n.part = part;
+        if !equivalent {
+            // KineticBlockEntity.clearKineticInformation (does not detach or initialize).
+            n.state.speed = 0.0;
+            n.state.theoretical = 0.0;
+            n.state.source = None;
+            n.state.net = None;
+            n.state.overstressed = false;
+            n.state.stress = 0.0;
+            n.state.capacity = 0.0;
+            n.state.update_speed = true;
+        }
+        n.fresh = true;
+        self.mark_changed(id);
+        self.dirty.push(id);
+    }
+
+    /// `GearshiftBlock.detachKinetics`: remove downstream rotation and attach next tick,
+    /// retaining the entity's own source and network.
+    pub fn detach_transmission(&mut self, pos: [i32; 3]) {
+        let Some(ids) = self.at.get(&pos).copied() else {
+            return;
+        };
+        let mut events = Vec::new();
+        for id in ids.into_iter().filter(|id| *id != NONE) {
+            self.handle_removed(id, &mut events);
+            self.nodes[id as usize].state.update_speed = true;
+            self.dirty.push(id);
+        }
+        self.pending_events.extend(events);
+    }
+
+    /// `KineticBlockEntity.switchToBlockState`: detach before setting a non-equivalent
+    /// state; generators reactivate on their next tick even for an equivalent rotation.
+    pub fn switch_block_state(&mut self, pos: [i32; 3], equivalent: bool) {
+        let Some(ids) = self.at.get(&pos).copied() else {
+            return;
+        };
+        let mut events = Vec::new();
+        for id in ids.into_iter().filter(|id| *id != NONE) {
+            if !equivalent {
+                self.networks.remove(self.nodes[id as usize].state.net, id);
+                self.handle_removed(id, &mut events);
+                self.remove_source(id);
+                self.nodes[id as usize].state.update_speed = true;
+            }
+            let n = &mut self.nodes[id as usize];
+            if n.part.capacity != 0.0 {
+                n.state.reactivate_source = true;
+                self.scheduler.reactivate_later(self.now, id, n.stamp);
+            }
+            self.dirty.push(id);
+        }
+        self.pending_events.extend(events);
+    }
+
     /// Whether a part is at `pos` (`sub` 1: a split shaft's second half).
     pub fn has_part(&self, pos: [i32; 3], sub: u8) -> bool {
         self.at.get(&pos).is_some_and(|p| p[sub as usize] != NONE)

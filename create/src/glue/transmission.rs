@@ -433,7 +433,7 @@ pub fn wrench_used(
         if turned != axis
             && let Ok(next) = state.with(&facts, "axis", axis_name(turned))
         {
-            lv.set_state(pos, next, update_all());
+            super::items::wrench::switch_state(lv, pos, next);
             // `Block.updateFromNeighbourShapes`: its part from the drives beside it.
             if let Some(id) = states::id(next) {
                 with_world(|w| w.neighbor_changed(lv.dim, pos, id));
@@ -465,7 +465,7 @@ pub fn wrench_used(
             let v = if info.vertical { "false" } else { "true" };
             let facts = lv.host.block_states();
             if let Ok(next) = state.with(&facts, "vertical", v) {
-                lv.set_state(pos, next, update_all());
+                super::items::wrench::switch_state(lv, pos, next);
                 super::items::wrench::rotate_sound(lv, pos);
             }
             return true;
@@ -482,7 +482,7 @@ pub fn wrench_used(
             bare,
             &[("axis", axis_name(axis)), ("waterlogged", water)],
         ) {
-            lv.set_state(pos, next, update_all());
+            super::items::wrench::switch_state(lv, pos, next);
         }
         return true;
     }
@@ -498,7 +498,7 @@ pub fn wrench_used(
             ("bottom_shaft", info.bottom_shaft)
         };
         if let Ok(next) = state.with(&facts, key, if on { "false" } else { "true" }) {
-            lv.set_state(pos, next, update_all());
+            super::items::wrench::switch_state(lv, pos, next);
             super::items::wrench::rotate_sound(lv, pos);
         }
         return true;
@@ -524,7 +524,7 @@ pub fn wrench_used(
     if let Ok(next) = next
         && next != state
     {
-        lv.set_state(pos, next, update_all());
+        super::items::wrench::switch_state(lv, pos, next);
         super::items::wrench::rotate_sound(lv, pos);
     }
     true
