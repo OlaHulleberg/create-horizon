@@ -12,13 +12,13 @@ Sunrise at the pin with an SDK built from the same checkout, signed with a throw
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `create/` | `cargo +1.99.1 test` | Pass (84 glue tests) |
-| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (690 engine tests) |
+| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (691 engine tests) |
 | `create/` | `cargo horizon-mod check` | Pass ("Create uses 3574 items of the API … Made for b77574e.") |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/src/engine/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 fmt --check` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 clippy --locked --all-targets -- -D warnings` | Pass |
-| `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (46 tests, `committed_assets` included, with Create's jar in the `prepare` cache) |
+| `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (49 tests, `committed_assets` included, with Create's jar in the `prepare` cache) |
 
 ## In game
 
@@ -122,6 +122,7 @@ above:
 | A valve handle recoloured while turning (#21) | Pass | Copper valve on a shaft, used and dyed red within its use (ticks frozen across the two clicks): handle and shaft keep turning at 32 after the use ends, as Create in the same input (create-fuzz); dyed after the use ends, both stop. Still 32 after reload (not compared with Create) |
 | A sequencer's next instruction attaches on the following tick (#20) | Pass | Motor, sequenced gearshift (default program) and shaft, powered by a redstone block: the shaft turns at 16, stops when the 90° turn ends, and the gearshift keeps state 1 while powered (`run(-1)`); the one-tick attach timing itself is checked by create-fuzz |
 | An adjustable chain gearshift's flicker under signal changes (#18) | Pass | Motor and adjustable chain gearshift, a redstone block above toggled every 4 ticks (`/tick freeze`, `step 4`): it breaks at the 21st toggle, as Create does for the same input (create-fuzz) |
+| Default states from Create (#17) | Pass | `/setblock` with no properties: encased chain drive `axis=y,axis_along_first=true,part=none`, clutch `axis=y,powered=false`, as Create's runtime defaults; a player-placed chain drive keeps `axis_along_first=true` after reload; fresh worlds load without errors |
 | Kinetic state saved and loaded (#10) | Pass | Two member-motor pairs keep their roles over two save/reload cycles; a world saved before #10 loads with both pairs intact and keeps them after saving again |
 
 Known differences left: the category editor's inventory shows the inventory as it was at the last change made in
