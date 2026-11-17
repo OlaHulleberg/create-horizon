@@ -530,21 +530,9 @@ fn tick_brackets(lv: &mut ServerLevel<'_>) {
     }
 }
 
-/// Apply synchronous generator/propagation effects before interaction publication.
-pub(crate) fn publish_interaction_effects(lv: &mut ServerLevel<'_>) {
-    loop {
-        let events =
-            with_world(|w| w.dims[lv.dim].kinetics.take_pending_events()).unwrap_or_default();
-        if events.is_empty() {
-            break;
-        }
-        for event in events {
-            if let Event::Break { pos } = event {
-                lv.destroy_block(pos, true);
-                apply_chain_shapes(lv);
-            }
-        }
-    }
+/// Apply synchronous propagation effects before any interaction or tick publication.
+pub(crate) fn drain_effects(lv: &mut ServerLevel<'_>) {
+    apply_events(lv, Vec::new());
 }
 
 /// A level's solve: the network solved, the blocks Create breaks broken, and every changed
@@ -570,28 +558,39 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
     for pos in removed {
         set_speeds(lv, pos, None, Some((0.0, false)));
     }
-    for e in events {
-        match e {
-            // Create's `world.destroyBlock(pos, true)`: the block breaks with its drops.
-            Event::Break { pos } => {
-                lv.destroy_block(pos, true);
-                apply_chain_shapes(lv);
-            }
-            Event::Speed {
-                pos,
-                sub,
-                speed,
-                overstressed,
-                theoretical,
-            } => {
-                let mut speeds = current_speeds(lv, pos);
-                speeds[usize::from(sub & 1)] = speed;
-                let first = (sub == 0).then_some((theoretical, overstressed));
-                set_speeds(lv, pos, Some(speeds), first);
-                for s in super::SUBSYSTEMS {
-                    s.speed_changed(lv, pos, speed);
+    apply_events(lv, events);
+}
+
+/// World callbacks can enqueue more breaks; finish their chain shapes before returning.
+fn apply_events(lv: &mut ServerLevel<'_>, mut events: Vec<Event>) {
+    loop {
+        for e in events {
+            match e {
+                // Create's `world.destroyBlock(pos, true)`: the block breaks with its drops.
+                Event::Break { pos } => {
+                    lv.destroy_block(pos, true);
+                    apply_chain_shapes(lv);
+                }
+                Event::Speed {
+                    pos,
+                    sub,
+                    speed,
+                    overstressed,
+                    theoretical,
+                } => {
+                    let mut speeds = current_speeds(lv, pos);
+                    speeds[usize::from(sub & 1)] = speed;
+                    let first = (sub == 0).then_some((theoretical, overstressed));
+                    set_speeds(lv, pos, Some(speeds), first);
+                    for s in super::SUBSYSTEMS {
+                        s.speed_changed(lv, pos, speed);
+                    }
                 }
             }
+        }
+        events = with_world(|w| w.dims[lv.dim].kinetics.take_pending_events()).unwrap_or_default();
+        if events.is_empty() {
+            break;
         }
     }
 }

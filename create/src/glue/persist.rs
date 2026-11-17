@@ -98,10 +98,11 @@ pub fn flush(lv: &mut ServerLevel<'_>, systems: &[&dyn Subsystem]) {
     }
 }
 
-/// Create's interaction `setChanged`/`sendData`: publish live records and columns
-/// before a host can capture its next chunk snapshot, without ticking entities.
+/// Complete Create's synchronous destroyBlock effects, then publish live records
+/// and flush columns. Shared by accepted interactions and completed level ticks;
+/// no entity tick or kinetic solve runs here.
 pub(crate) fn publish(lv: &mut ServerLevel<'_>) {
-    super::kinetics::publish_interaction_effects(lv);
+    super::kinetics::drain_effects(lv);
     for (cx, cz) in super::world::with_world(|w| w.take_unsaved(lv.dim)).unwrap_or_default() {
         mark_unsaved(lv.dim, [cx, cz]);
     }
