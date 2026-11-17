@@ -272,9 +272,6 @@ fn tick_valves(lv: &mut ServerLevel<'_>) {
             .collect::<Vec<_>>()
     })
     .unwrap_or_default();
-    if valves.is_empty() {
-        return;
-    }
     // Each valve's `enabled`, read before the engine steps them.
     let open: Vec<([i32; 3], Option<bool>)> = valves
         .iter()
@@ -286,7 +283,7 @@ fn tick_valves(lv: &mut ServerLevel<'_>) {
         })
         .collect();
     let changes = with_world(|w| {
-        w.tick_valves(dim, |p| {
+        w.tick_fluid_entities(dim, |p| {
             open.iter().find(|(q, _)| *q == p).and_then(|(_, e)| *e)
         })
     })

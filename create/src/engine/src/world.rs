@@ -162,7 +162,7 @@ pub struct Dimension {
     pub depots: HashMap<[i32; 3], Option<crate::depot::Held>>,
     /// Depots whose held stack still slides.
     pub sliding: Vec<[i32; 3]>,
-    transport_entities: TransportOrder,
+    block_entities: BlockEntityOrder,
     /// Depots whose contents clients must see again (put down, taken, filled by a hopper).
     pub depot_changes: Vec<[i32; 3]>,
     /// Mechanical presses and their cycle.
@@ -731,11 +731,11 @@ pub struct Belt {
     pub items: crate::belt::Inventory,
 }
 
-/// Level registration order for transport block entities. State changes retain a
+/// Level registration order shared by kinetic, fluid and transport block entities. State changes retain a
 /// registration; replacement and unload remove it, and load registers anew.
 #[derive(Default)]
-struct TransportOrder(Vec<[i32; 3]>);
-impl TransportOrder {
+struct BlockEntityOrder(Vec<[i32; 3]>);
+impl BlockEntityOrder {
     fn register(&mut self, pos: [i32; 3]) {
         if !self.0.contains(&pos) {
             self.0.push(pos);
@@ -875,11 +875,9 @@ impl CreateWorld {
             .and_then(|s| self.table.get(*s))
             .is_some_and(|(old, _)| old != block)
         {
-            d.transport_entities.remove(pos);
+            d.block_entities.remove(pos);
         }
-        if matches!(block, Block::Depot | Block::Belt) {
-            d.transport_entities.register(pos);
-        }
+        d.block_entities.register(pos);
         d.lifts.placed(pos, block, info);
         d.displays.placed(pos, block);
         match block {
@@ -1795,7 +1793,7 @@ impl CreateWorld {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
             let d = &mut self.dims[dim];
-            d.transport_entities.remove(pos);
+            d.block_entities.remove(pos);
             if d.depots.remove(&pos).is_some() {
                 d.sliding.retain(|p| *p != pos);
                 d.depot_changes.push(pos);
@@ -2116,7 +2114,7 @@ impl CreateWorld {
             d.depot_work.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.sliding.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
         }
-        d.transport_entities.unload(cx, cz);
+        d.block_entities.unload(cx, cz);
         d.settings.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
     }
 
@@ -2172,6 +2170,12 @@ impl CreateWorld {
         }
         let from = events.len();
         let stats = d.kinetics.solve(events);
+        for (pos, speed) in d.kinetics.take_speed_notifications() {
+            if let Some(pointer) = d.plumbing.valves.get_mut(&pos) {
+                pointer.speed_changed(speed);
+                d.kinetics.mark_saved_changed(pos);
+            }
+        }
         // Sequenced gearshifts follow their speed (`onSpeedChanged`).
         if !d.sequencers.is_empty() {
             let turned: Vec<[i32; 3]> = events[from..]
@@ -2251,18 +2255,11 @@ impl CreateWorld {
                 }
                 d.pipes_changed = true;
             }
-            // Valves chase their pointer, hoses move (`onSpeedChanged`).
-            if let Event::Speed { pos, speed, .. } = *e {
-                if d.plumbing.valves.contains_key(&pos) {
-                    let before = d.plumbing.valves[&pos];
-                    d.plumbing.valve_speed(pos, speed);
-                    if d.plumbing.valves[&pos] != before {
-                        d.kinetics.mark_saved_changed(pos);
-                    }
-                }
-                if d.plumbing.hoses.contains_key(&pos) {
-                    d.plumbing.hose_speeds.push((pos, speed));
-                }
+            // Hoses move when their speed changes.
+            if let Event::Speed { pos, speed, .. } = *e
+                && d.plumbing.hoses.contains_key(&pos)
+            {
+                d.plumbing.hose_speeds.push((pos, speed));
             }
             if let Event::Speed { pos, .. } = *e
                 && (d.mixers.contains_key(&pos) || d.presses.contains_key(&pos))
@@ -2543,7 +2540,7 @@ impl CreateWorld {
         positions.sort_by_key(|&pos| d.kinetics.registration_order(pos));
         for pos in &positions {
             let handle = d.handles.get_mut(pos).unwrap();
-            d.kinetics.tick_generator_base(*pos);
+            d.kinetics.initialize_through(*pos);
             if handle.saved.in_use > 0 {
                 handle.saved.in_use -= 1;
                 d.handle_changes.insert(*pos);
@@ -4506,7 +4503,7 @@ impl CreateWorld {
     pub fn transport_ticks(&mut self, dim: usize) -> TransportTicks {
         TransportTicks {
             dim,
-            entities: self.dims[dim].transport_entities.0.clone().into_iter(),
+            entities: self.dims[dim].block_entities.0.clone().into_iter(),
         }
     }
 
@@ -4718,15 +4715,43 @@ impl CreateWorld {
         }
     }
 
-    /// FluidValveBlockEntity.tick, journalling only changes to its saved Pointer.
-    pub fn tick_valves(
+    /// Fluid tank connectivity and FluidValveBlockEntity.tick in shared registration order.
+    /// The kinetic base tick and onSpeedChanged run before the valve pointer advances.
+    pub fn tick_fluid_entities(
         &mut self,
         dim: usize,
         open: impl Fn([i32; 3]) -> Option<bool>,
     ) -> Vec<([i32; 3], bool)> {
-        let d = &mut self.dims[dim];
-        d.plumbing
-            .tick_valves(open, |pos| d.kinetics.mark_saved_changed(pos))
+        let positions = self.dims[dim].block_entities.0.clone();
+        let mut out = Vec::new();
+        for pos in positions {
+            let d = &mut self.dims[dim];
+            if d.plumbing.valves.contains_key(&pos) {
+                d.kinetics.initialize_through(pos);
+            }
+            for (p, speed) in d.kinetics.take_speed_notifications() {
+                if let Some(pointer) = d.plumbing.valves.get_mut(&p) {
+                    pointer.speed_changed(speed);
+                    d.kinetics.mark_saved_changed(p);
+                }
+            }
+            d.tanks.tick(pos);
+            d.creative_tanks.tick(pos);
+            if let Some(pointer) = d.plumbing.valves.get_mut(&pos)
+                && let Some(enabled) = open(pos)
+            {
+                let before = *pointer;
+                if let Some(next) = pointer.tick(enabled) {
+                    out.push((pos, next));
+                }
+                if *pointer != before {
+                    d.kinetics.mark_saved_changed(pos);
+                }
+            }
+        }
+        self.tanks_touched(dim, true);
+        self.creative_tanks_touched(dim, true);
+        out
     }
 
     /// A valve, smart pipe, hose pulley, creative tank, whistle or extension placed, loaded or
@@ -6548,7 +6573,7 @@ mod tests {
         w.block_loaded(0, pos, 10);
         w.restore_valve_pointer(0, pos, saved);
         w.dims[0].kinetics.take_saved_changes();
-        assert!(w.tick_valves(0, |_| Some(true)).is_empty());
+        assert!(w.tick_fluid_entities(0, |_| Some(true)).is_empty());
         assert_eq!(w.saved_valve_pointer(0, pos).unwrap().value, 0.4);
         assert_eq!(w.dims[0].kinetics.take_saved_changes(), [pos].into());
         assert!(w.dims[0].kinetics.take_saved_changes().is_empty());
@@ -6564,9 +6589,54 @@ mod tests {
         w.block_loaded(0, pos, 10);
         w.restore_valve_pointer(0, pos, stopped);
         w.dims[0].kinetics.take_saved_changes();
-        assert!(w.tick_valves(0, |_| Some(true)).is_empty());
+        assert!(w.tick_fluid_entities(0, |_| Some(true)).is_empty());
         assert_eq!(w.saved_valve_pointer(0, pos), Some(stopped));
+        // The base kinetic tick clears NeedsSpeedUpdate on its first loaded turn.
+        assert_eq!(w.dims[0].kinetics.take_saved_changes(), [pos].into());
+        assert!(w.tick_fluid_entities(0, |_| Some(true)).is_empty());
         assert!(w.dims[0].kinetics.take_saved_changes().is_empty());
+        states::clear_range();
+    }
+
+    #[test]
+    fn valve_chases_on_its_first_kinetic_tick() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        states::set_range(10, 2);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            [
+                ("create:creative_motor", vec![("facing", "south")]),
+                (
+                    "create:fluid_valve",
+                    vec![
+                        ("facing", "down"),
+                        ("axis_along_first", "false"),
+                        ("enabled", "false"),
+                    ],
+                ),
+            ]
+            .into_iter()
+            .map(|(n, p)| (n, p.into_iter())),
+        ));
+        let (motor, valve) = ([0, 8, 1], [0, 8, 2]);
+        w.block_changed(0, motor, 0, 10);
+        w.tick_fluid_entities(0, |_| Some(false));
+        w.tick(0, &mut Vec::new());
+        w.block_changed(0, valve, 0, 11);
+        let setting = Settings {
+            motor_rpm: 32.0,
+            ..Settings::default()
+        };
+        w.set_settings(0, motor, 10, setting);
+        for tick in 14..=23 {
+            let changes = w.tick_fluid_entities(0, |_| Some(false));
+            if tick < 23 {
+                assert!(changes.is_empty());
+            } else {
+                assert_eq!(changes, [(valve, true)]);
+            }
+            w.tick(0, &mut Vec::new());
+        }
         states::clear_range();
     }
 
@@ -6650,6 +6720,7 @@ mod tests {
         ] {
             w.block_changed(0, p, 0, 10);
         }
+        w.tick_fluid_entities(0, |_| None);
         let (c, m) = w.creative_tank(0, [1, 1, 1]).unwrap();
         assert_eq!((c, m.width, m.height), ([0, 0, 0], 2, 2));
         // The new controller had none: it takes the fluid, and every block gives it.
@@ -6660,6 +6731,7 @@ mod tests {
         assert_eq!(saved.len(), 1);
         // Its controller broken: the rest split and form again, each keeping the fluid.
         w.block_changed(0, [0, 0, 0], 10, 0);
+        w.tick_fluid_entities(0, |_| None);
         assert_eq!(w.dims[0].plumbing.creative.len(), 7);
         assert!(w.dims[0].plumbing.creative.values().all(|f| *f == water));
         let shape = w.tank_shape(0, [1, 1, 1]).unwrap();
@@ -6699,6 +6771,7 @@ mod tests {
         for p in square {
             w.block_changed(0, p, 0, 10);
         }
+        w.tick_fluid_entities(0, |_| None);
         // One tank, its controller the north-west corner, each block its corner window.
         let c = [0, 0, 0];
         let (controller, m) = w.tank(0, [1, 0, 1]).unwrap();

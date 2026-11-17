@@ -519,6 +519,8 @@ pub struct Kinetics {
     changed: Vec<u32>,
     saved_dirty: HashSet<[i32; 3]>,
     pending_events: Vec<Event>,
+    /// Synchronous KineticBlockEntity.onSpeedChanged callbacks, separate from reports.
+    speed_notifications: Vec<([i32; 3], f32)>,
     networks: TorquePropagator,
     scheduler: scheduling::TickScheduler,
     reactivation_due: Vec<(u32, u64)>,
@@ -1207,6 +1209,9 @@ impl Kinetics {
             n.state.flicker_at = self.now;
             n.state.overstressed = over;
             n.state.speed = shown;
+            if n.sub == 0 {
+                self.speed_notifications.push((n.pos, shown));
+            }
             self.mark_changed(id);
         }
     }
@@ -1280,8 +1285,13 @@ impl Kinetics {
             .unwrap_or(u64::MAX)
     }
 
-    /// SmartBlockEntity initializes once, before HandCrankBlockEntity consumes InUse.
-    pub fn tick_generator_base(&mut self, pos: [i32; 3]) {
+    /// Deliver onSpeedChanged before a subclass continues its tick.
+    pub(crate) fn take_speed_notifications(&mut self) -> Vec<([i32; 3], f32)> {
+        std::mem::take(&mut self.speed_notifications)
+    }
+
+    /// SmartBlockEntity initializes registered entities before a subclass ticks.
+    pub fn initialize_through(&mut self, pos: [i32; 3]) {
         let Some(ids) = self.at.get(&pos).copied() else {
             return;
         };
@@ -1968,7 +1978,7 @@ mod tests {
             k.set(p, 0, part);
             assert!(k.restore_state(p, 0, saved));
         }
-        k.tick_generator_base(handle);
+        k.initialize_through(handle);
         k.set(
             handle,
             0,

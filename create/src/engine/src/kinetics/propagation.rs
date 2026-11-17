@@ -125,6 +125,9 @@ impl Kinetics {
         n.fresh |= changed;
         n.state.theoretical = speed;
         n.state.speed = shown;
+        if changed && n.sub == 0 {
+            self.speed_notifications.push((n.pos, shown));
+        }
         // KineticBlockEntity.setSpeed/onSpeedChanged do not enroll members.
         // switchToBlockState detaches while the old network id is still present.
         // Membership belongs to setNetwork/add and generator stress updates.

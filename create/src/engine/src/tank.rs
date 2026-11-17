@@ -434,11 +434,13 @@ pub struct BlockShape {
 pub struct Part {
     pub controller: [i32; 3],
     window: bool,
+    /// FluidTankBlockEntity.updateConnectivity.
+    update_connectivity: bool,
 }
 
 /// Every tank of a dimension (`ConnectivityHandler` over `FluidTankBlockEntity`s): each loaded
-/// tank block and its controller, each controller's tank. Tanks form and split only when a tank
-/// block is placed or removed.
+/// tank block and its controller, each controller's tank. Placement forms immediately;
+/// removeController requests reconnection on the member's next tick.
 #[derive(Default)]
 pub struct Tanks {
     /// Each loaded tank block and its controller (itself for a controller).
@@ -449,8 +451,6 @@ pub struct Tanks {
     pub touched: Vec<[i32; 3]>,
     /// Blocks that stopped being part of a bigger tank (`removeController`: `boiler.clear()`).
     pub cleared: Vec<[i32; 3]>,
-    /// Tanks that look for a tank to form again (`updateConnectivity`).
-    pending: Vec<[i32; 3]>,
     /// Creative fluid tanks (`CreativeSmartFluidTank`): a tank's fluid is all it holds (its
     /// amount is not kept), taken by a new tank that has none and given to every block of a
     /// split one.
@@ -481,6 +481,7 @@ impl Tanks {
                 Part {
                     controller,
                     window: true,
+                    update_connectivity: false,
                 },
             );
         }
@@ -570,7 +571,6 @@ impl Tanks {
         self.multis.insert(p, Multi::default());
         self.touched.push(p);
         self.form(p);
-        self.settle();
     }
 
     /// `FluidTankBlock.onRemove`: the tank it was part of splits (`splitMulti`), the fluid shared
@@ -589,7 +589,6 @@ impl Tanks {
         } else if let Some(m) = self.multis.get(&c).copied() {
             self.split_at(c, m, false);
         }
-        self.settle();
     }
 
     /// A moving contraption takes the tank block at `p` with it (`Contraption.addBlock` keeps
@@ -611,21 +610,24 @@ impl Tanks {
         self.parts.retain(|p, _| !here(p));
     }
 
-    /// Tanks whose blocks were split form again (`updateConnectivity` on their next tick, here
-    /// at once, in the order they were split).
-    fn settle(&mut self) {
-        while !self.pending.is_empty() {
-            let p = self.pending.remove(0);
-            if self.parts.get(&p).map(|p| p.controller) == Some(p) && self.multis.contains_key(&p) {
-                self.form(p);
-            }
+    /// FluidTankBlockEntity.tick clears its connectivity request before formMulti.
+    pub fn tick(&mut self, p: [i32; 3]) {
+        let Some(part) = self.parts.get_mut(&p) else {
+            return;
+        };
+        if !std::mem::take(&mut part.update_connectivity) {
+            return;
         }
-        self.pending.clear();
+        if part.controller == p {
+            self.form(p);
+        }
     }
 
     /// `preventConnectivityUpdate`.
     fn prevent(&mut self, p: [i32; 3]) {
-        self.pending.retain(|q| *q != p);
+        if let Some(part) = self.parts.get_mut(&p) {
+            part.update_connectivity = false;
+        }
     }
 
     /// `ConnectivityHandler.formMulti` from the tank at `start`: every tank block reachable
@@ -904,7 +906,7 @@ impl Tanks {
             self.parts.get_mut(&pos).unwrap().window = self.multis[&pos].window;
             self.cleared.push(pos);
             self.touched.push(pos);
-            self.pending.push(pos);
+            self.parts.get_mut(&pos).unwrap().update_connectivity = true;
         }
     }
 }
@@ -962,11 +964,38 @@ pub fn tooltip(tank: Tank, capacity: u32) -> Vec<crate::gauge::Line> {
 mod tests {
     use super::*;
 
+    fn tick_all(t: &mut Tanks) {
+        let mut positions: Vec<_> = t.parts.keys().copied().collect();
+        positions.sort_by_key(|p| (p[1], p[0], p[2]));
+        for p in positions {
+            t.tick(p);
+        }
+    }
+
+    #[test]
+    fn split_connectivity_waits_for_the_entity_tick() {
+        let mut t = Tanks::default();
+        for y in 4..7 {
+            for x in 0..2 {
+                for z in 0..2 {
+                    t.place([x, y, z]);
+                    tick_all(&mut t);
+                }
+            }
+        }
+        t.remove([0, 4, 0]);
+        assert_eq!(size(&t, [0, 5, 0]), ([0, 5, 0], 1, 1));
+        tick_all(&mut t);
+        assert_eq!(size(&t, [0, 5, 0]), ([0, 5, 0], 2, 2));
+        assert_eq!(t.get([0, 5, 0]).unwrap().1.capacity(), 64000);
+    }
+
     #[test]
     fn removed_controller_restores_member_windows() {
         let mut t = placed(&[[0, 4, 0], [0, 4, 1], [1, 4, 0], [1, 4, 1]]);
         t.get_mut([0, 4, 0]).unwrap().1.window = false;
         t.remove([0, 4, 0]);
+        tick_all(&mut t);
         for p in [[0, 4, 1], [1, 4, 0], [1, 4, 1]] {
             assert_eq!(t.block_shape(p).unwrap().shape, Shape::Window);
         }
@@ -979,11 +1008,13 @@ mod tests {
             for x in 0..2 {
                 for z in 0..2 {
                     t.place([x, y, z]);
+                    tick_all(&mut t);
                 }
             }
         }
         t.get_mut([0, 4, 0]).unwrap().1.window = false;
         t.remove([0, 4, 0]);
+        tick_all(&mut t);
         assert_eq!(size(&t, [0, 5, 0]), ([0, 5, 0], 2, 2));
         assert_eq!(t.get([0, 5, 0]).unwrap().1.capacity(), 64000);
         for p in [[0, 4, 1], [1, 4, 0], [1, 4, 1]] {
@@ -996,7 +1027,9 @@ mod tests {
     fn a_carried_tank_comes_back_whole_with_its_fluid() {
         let mut t = Tanks::default();
         t.place([0, 0, 0]);
+        tick_all(&mut t);
         t.place([0, 1, 0]);
+        tick_all(&mut t);
         let (c, m) = t.get([0, 1, 0]).map(|(c, m)| (c, *m)).unwrap();
         assert_eq!((c, m.height), ([0, 0, 0], 2));
         t.get_mut(c)
@@ -1008,13 +1041,17 @@ mod tests {
         let taken = t.take([0, 0, 0]);
         assert_eq!(t.take([0, 1, 0]), None);
         t.remove([0, 0, 0]);
+        tick_all(&mut t);
         t.remove([0, 1, 0]);
+        tick_all(&mut t);
         assert!(t.parts.is_empty() && t.multis.is_empty());
         // Put back two blocks east: placed, they take what they held.
         t.arriving.insert([2, 0, 0], taken);
         t.arriving.insert([2, 1, 0], None);
         t.place([2, 1, 0]);
+        tick_all(&mut t);
         t.place([2, 0, 0]);
+        tick_all(&mut t);
         let (c, m) = t.get([2, 1, 0]).map(|(c, m)| (c, *m)).unwrap();
         assert_eq!(c, [2, 0, 0]);
         assert_eq!((m.height, m.tank.amount), (2, 5000));
@@ -1127,6 +1164,7 @@ mod tests {
         let mut t = Tanks::default();
         for &p in blocks {
             t.place(p);
+            tick_all(&mut t);
         }
         t
     }
@@ -1209,6 +1247,7 @@ mod tests {
         // A second layer: one 2x2x2 tank, the bottom layer bottom, the top top.
         for p in [[0, 1, 0], [1, 1, 0], [0, 1, 1], [1, 1, 1]] {
             t.place(p);
+            tick_all(&mut t);
         }
         assert_eq!(t.multis.len(), 1);
         assert_eq!(size(&t, [1, 1, 1]), ([0, 0, 0], 2, 2));
@@ -1253,6 +1292,7 @@ mod tests {
         let mut t = placed(&layer);
         for z in 0..3 {
             t.place([3, 0, z]);
+            tick_all(&mut t);
         }
         assert_eq!(size(&t, [2, 0, 2]), ([0, 0, 0], 3, 1));
         assert_eq!(size(&t, [3, 0, 2]), ([3, 0, 2], 1, 1));
@@ -1262,24 +1302,32 @@ mod tests {
     fn tanks_pour_their_fluid_together_unless_it_differs() {
         let mut t = Tanks::default();
         t.place([0, 0, 0]);
+        tick_all(&mut t);
         t.multis.get_mut(&[0, 0, 0]).unwrap().tank = water(3000);
         t.place([1, 0, 0]);
+        tick_all(&mut t);
         t.multis.get_mut(&[1, 0, 0]).unwrap().tank = water(5000);
         t.place([0, 0, 1]);
+        tick_all(&mut t);
         t.place([1, 0, 1]);
+        tick_all(&mut t);
         assert_eq!(t.multis.len(), 1);
         assert_eq!(t.multis[&[0, 0, 0]].tank, water(8000));
         // Lava beside water forms nothing.
         let mut t = Tanks::default();
         t.place([0, 0, 0]);
+        tick_all(&mut t);
         t.multis.get_mut(&[0, 0, 0]).unwrap().tank = water(3000);
         t.place([1, 0, 0]);
+        tick_all(&mut t);
         t.multis.get_mut(&[1, 0, 0]).unwrap().tank = Tank {
             fluid: Some(Fluid::Lava),
             amount: 1000,
         };
         t.place([0, 0, 1]);
+        tick_all(&mut t);
         t.place([1, 0, 1]);
+        tick_all(&mut t);
         assert_eq!(t.multis.len(), 4);
     }
 
@@ -1292,6 +1340,7 @@ mod tests {
         t.multis.get_mut(&[0, 0, 0]).unwrap().tank = water(32_000);
         t.touched.clear();
         t.remove([1, 0, 1]);
+        tick_all(&mut t);
         assert_eq!(t.multis.len(), 3);
         for p in [[0, 0, 0], [0, 0, 1], [1, 0, 0]] {
             assert_eq!(size(&t, p), (p, 1, 1));
@@ -1303,6 +1352,7 @@ mod tests {
         let mut t = placed(&square);
         t.multis.get_mut(&[0, 0, 0]).unwrap().tank = water(20_000);
         t.remove([0, 0, 0]);
+        tick_all(&mut t);
         assert_eq!(t.multis[&[0, 0, 1]].tank, water(8000));
         assert_eq!(t.multis[&[1, 0, 0]].tank, water(8000));
         assert_eq!(t.multis[&[1, 0, 1]].tank, water(4000));
@@ -1314,6 +1364,7 @@ mod tests {
         assert_eq!(size(&t, [1, 1, 1]), ([0, 0, 0], 2, 2));
         t.multis.get_mut(&[0, 0, 0]).unwrap().tank = water(60_000);
         t.remove([1, 1, 1]);
+        tick_all(&mut t);
         assert_eq!(size(&t, [1, 0, 1]), ([0, 0, 0], 2, 1));
         assert_eq!(t.multis.len(), 4);
         let total: u32 = t.multis.values().map(|m| m.tank.amount).sum();
