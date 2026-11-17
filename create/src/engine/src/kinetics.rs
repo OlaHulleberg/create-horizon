@@ -555,11 +555,13 @@ impl Kinetics {
                 self.handle_removed(existing, &mut events);
                 self.remove_source(existing);
                 self.nodes[existing as usize].part = part;
+                self.nodes[existing as usize].state.update_speed = true;
             }
             self.pending_events.extend(events);
             let n = &mut self.nodes[existing as usize];
             n.stamp = self.stamp;
             n.fresh = true;
+            self.scheduler.validate_later(self.now, existing, n.stamp);
             self.dirty.push(existing);
             return;
         }
@@ -593,15 +595,19 @@ impl Kinetics {
 
     /// Removes every part at `pos`; its neighbours re-solve.
     pub fn remove(&mut self, pos: [i32; 3]) {
-        let Some(ids) = self.at.get(&pos).copied() else {
+        let Some(ids) = self.at.remove(&pos) else {
             return;
         };
+        // destroyBlock makes the position absent before block entity removal callbacks.
+        // Existing propagation frames retain their old entity's speed, as Java references do.
+        for id in ids.into_iter().filter(|&i| i != NONE) {
+            self.nodes[id as usize].live = false;
+        }
         let mut breaks = Vec::new();
         for id in ids.into_iter().filter(|&i| i != NONE) {
             self.handle_removed(id, &mut breaks);
         }
         self.pending_events.extend(breaks);
-        self.at.remove(&pos);
         for p in self.far.get(&pos).into_iter().flatten() {
             if let Some(n) = self.at.get(p) {
                 self.dirty.extend(n.iter().copied().filter(|&i| i != NONE));
@@ -779,8 +785,10 @@ impl Kinetics {
         let old = self.far.remove(&pos).unwrap_or_default();
         for p in old.iter().chain(&to).chain(std::iter::once(&pos)) {
             if let Some(ids) = self.at.get(p) {
-                self.dirty
-                    .extend(ids.iter().copied().filter(|&i| i != NONE));
+                for &id in ids.iter().filter(|&&id| id != NONE) {
+                    self.nodes[id as usize].state.update_speed = true;
+                    self.dirty.push(id);
+                }
             }
         }
         if !to.is_empty() {
@@ -864,7 +872,10 @@ impl Kinetics {
             if !self.nodes[id as usize].live {
                 continue;
             }
-            self.propagate_new_source(id, events);
+            if self.nodes[id as usize].state.update_speed {
+                self.nodes[id as usize].state.update_speed = false;
+                self.propagate_new_source(id, events);
+            }
             if !self.nodes[id as usize].live {
                 continue;
             }
@@ -900,9 +911,22 @@ impl Kinetics {
         let mut touched_nets = HashSet::new();
         for (id, n) in self.nodes.iter_mut().enumerate().filter(|(_, n)| n.live) {
             let (stress, capacity, _) = self.networks.figures(n.state.net);
+            if n.state.stress != stress || n.state.capacity != capacity {
+                touched_nets.insert(n.state.net);
+            }
             n.state.stress = stress;
             n.state.capacity = capacity;
-            n.state.overstressed = stress > capacity;
+            let overstressed = stress > capacity;
+            if n.state.overstressed != overstressed {
+                let shown = if overstressed {
+                    0.0
+                } else {
+                    n.state.theoretical
+                };
+                n.state.flicker = n.state.flicker(self.now) + flicker_gain(n.state.speed, shown);
+                n.state.flicker_at = self.now;
+            }
+            n.state.overstressed = overstressed;
             n.state.speed = if n.state.overstressed {
                 0.0
             } else {
@@ -1033,6 +1057,24 @@ mod tests {
         assert!(k.has_dirty());
         solve(&mut k);
         assert_eq!(k.speed([1, 0, 0], 0), Some(0.0));
+    }
+
+    #[test]
+    fn removing_an_overpowered_member_updates_capacity_without_reattaching_the_source() {
+        let mut k = Kinetics::new();
+        k.set([0, 0, 0], 0, motor(Dir::East, 16.0));
+        k.set([1, 0, 0], 0, Part::shaft(Axis::X));
+        k.set([2, 0, 0], 0, motor(Dir::West, -8.0));
+        solve(&mut k);
+        k.watch([1, 0, 0], true);
+        k.remove([2, 0, 0]);
+        let e = solve(&mut k);
+        assert!(!e.iter().any(|e| matches!(e, Event::Break { .. })));
+        assert_eq!(k.network([1, 0, 0], 0).unwrap().2, 16.0 * 64.0);
+        assert_eq!(k.speed([1, 0, 0], 0), Some(16.0));
+        let mut touched = Vec::new();
+        k.take_touched(&mut touched);
+        assert_eq!(touched, [[1, 0, 0]]);
     }
 
     /// A creative motor set to `rpm`, turning the shaft on `face` (CreativeMotorBlockEntity).

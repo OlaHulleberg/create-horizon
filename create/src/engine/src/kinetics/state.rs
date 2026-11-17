@@ -24,6 +24,8 @@ pub(super) struct KineticState {
     pub(super) net: u32,
     /// Added since the last solve (not a replaced part): a block entity that has not ticked yet.
     pub(super) new_part: bool,
+    /// KineticBlockEntity.updateSpeed: attach on the next server tick.
+    pub(super) update_speed: bool,
     pub(super) source: u32,
     pub(super) reactivate_source: bool,
 }
@@ -40,6 +42,7 @@ impl Default for KineticState {
             flicker_at: 0,
             net: NONE,
             new_part: true,
+            update_speed: true,
             source: NONE,
             reactivate_source: false,
         }
