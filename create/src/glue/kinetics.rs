@@ -447,13 +447,18 @@ fn tick_brackets(lv: &mut ServerLevel<'_>) {
 fn tick_solve(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let mut events = Vec::new();
-    let Some((removed, unsaved)) = with_world(|w| {
+    let Some((steps, removed, unsaved)) = with_world(|w| {
         w.settle_belts(dim);
-        w.tick(dim, &mut events);
-        (w.dims[dim].kinetics.take_removed(), w.take_unsaved(dim))
+        let (_, steps) = w.tick_kinetics(dim, &mut events);
+        (
+            steps,
+            w.dims[dim].kinetics.take_removed(),
+            w.take_unsaved(dim),
+        )
     }) else {
         return;
     };
+    apply_sequencer_steps(lv, steps);
     for (cx, cz) in unsaved {
         persist::mark_unsaved(dim, [cx, cz]);
     }
@@ -509,10 +514,9 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
 }
 
 /// Sequenced gearshifts: those whose neighbour changed look at their power
-/// (`SequencedGearshiftBlock.tick`), those running an instruction tick; their blocks show the
-/// step (`state`).
+/// (`SequencedGearshiftBlock.tick`). Instruction ticks run after the base kinetic tick in
+/// `CreateWorld::tick_kinetics`.
 fn tick_sequencers(lv: &mut ServerLevel<'_>) {
-    use create_engine::sequencer::Step;
     let dim = lv.dim;
     let mut steps = Vec::new();
     let mut checked = Vec::new();
@@ -525,7 +529,6 @@ fn tick_sequencers(lv: &mut ServerLevel<'_>) {
         }
         checked.push(pos);
     }
-    steps.extend(with_world(|w| w.tick_sequencers(dim)).unwrap_or_default());
     // Those inside a turn or delay are saved now and then too, as the structures they move
     // save their offsets and limits (`SequencedGearshiftBlockEntity.write`'s progress).
     if lv.game_time() % 10 == 0 {
@@ -540,10 +543,20 @@ fn tick_sequencers(lv: &mut ServerLevel<'_>) {
         .unwrap_or_default();
         checked.extend(running);
     }
-    for &pos in checked.iter().chain(steps.iter().map(|(p, _)| p)) {
+    for pos in checked {
         super::sequencer::save_run(lv, pos);
     }
+    apply_sequencer_steps(lv, steps);
+}
+
+/// Write the state requested by the engine after the corresponding kinetic phase.
+fn apply_sequencer_steps(
+    lv: &mut ServerLevel<'_>,
+    steps: Vec<([i32; 3], create_engine::sequencer::Step)>,
+) {
+    use create_engine::sequencer::Step;
     for (pos, step) in steps {
+        super::sequencer::save_run(lv, pos);
         let state = match step {
             Step::Run(n) => n,
             Step::Idle => 0,

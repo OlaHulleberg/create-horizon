@@ -2059,6 +2059,19 @@ impl CreateWorld {
         self.place(dim, pos, state);
     }
 
+    /// `SequencedGearshiftBlockEntity.tick`: the base kinetic tick attaches first;
+    /// only afterwards can the instruction advance and detach again. Commit the returned
+    /// block-state changes after this call, without another solve until the next tick.
+    pub fn tick_kinetics(
+        &mut self,
+        dim: usize,
+        events: &mut Vec<Event>,
+    ) -> (SolveStats, Vec<([i32; 3], crate::sequencer::Step)>) {
+        let stats = self.tick(dim, events);
+        let steps = self.tick_sequencers(dim);
+        (stats, steps)
+    }
+
     /// Re-solves what changed in a dimension: nothing at all when nothing did.
     #[inline]
     pub fn tick(&mut self, dim: usize, events: &mut Vec<Event>) -> SolveStats {
@@ -5669,6 +5682,81 @@ mod tests {
         // The drive's neighbour changes: it is shaped again (no change here).
         w.neighbor_changed(0, [0, 0, 1], 11);
         assert!(w.take_chain_shapes(0).is_empty());
+        states::clear_range();
+    }
+
+    #[test]
+    fn sequencer_instruction_change_attaches_on_the_following_tick() {
+        use crate::sequencer::{Instruction, Kind, Step};
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
+        let names = [
+            ("create:sequenced_gearshift", seq("0")),
+            ("create:sequenced_gearshift", seq("1")),
+            ("create:sequenced_gearshift", seq("2")),
+            ("create:creative_motor", vec![("facing", "east")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        fn level_tick(w: &mut CreateWorld) -> Vec<([i32; 3], Step)> {
+            let (_, steps) = w.tick_kinetics(0, &mut Vec::new());
+            for &(pos, step) in &steps {
+                if let Step::Run(n) = step {
+                    let old = w.state_at(0, pos).unwrap();
+                    w.block_changed(0, pos, old, 10 + u32::from(n));
+                }
+            }
+            steps
+        }
+        let pos = [0, 8, 0];
+        w.block_changed(0, [-1, 8, 0], 0, 13);
+        w.set_motor(0, [-1, 8, 0], 32.0);
+        w.block_changed(0, pos, 0, 10);
+        w.tick_kinetics(0, &mut Vec::new());
+        w.set_sequencer_instructions(
+            0,
+            pos,
+            vec![
+                Instruction::new(Kind::TurnAngle, 90),
+                Instruction::new(Kind::Delay, 3),
+                Instruction::new(Kind::Await, -1),
+            ],
+            false,
+        );
+        assert_eq!(
+            w.sequencer_redstone(0, pos, true, false),
+            Some(Step::Run(1))
+        );
+        w.block_changed(0, pos, 10, 11);
+        // Java at 32 rpm: ceil(90 / 9.6) + 2 = 12 ticks, then run(1).
+        for _ in 0..12 {
+            assert!(level_tick(&mut w).is_empty());
+        }
+        assert_eq!(level_tick(&mut w), [(pos, Step::Run(2))]);
+        // Java issue #20 tick 36: DELAY starts with no source or speed.
+        let saved = w.dims[0].kinetics.saved_state(pos, 0).unwrap();
+        assert_eq!(saved.speed, 0.0);
+        assert!(saved.source.is_none());
+        let run = w.sequencer_run(0, pos).unwrap();
+        assert_eq!(
+            (run.current, run.duration, run.progress, run.timer),
+            (1, 3, 0.0, 0)
+        );
+        // Tick 37: super.tick attaches before the delay counts its first tick.
+        assert!(level_tick(&mut w).is_empty());
+        assert_eq!(w.speed(0, pos), Some(32.0));
+        assert!(
+            w.dims[0]
+                .kinetics
+                .saved_state(pos, 0)
+                .unwrap()
+                .source
+                .is_some()
+        );
+        assert_eq!(w.sequencer_run(0, pos).unwrap().progress, 1.0);
         states::clear_range();
     }
 
