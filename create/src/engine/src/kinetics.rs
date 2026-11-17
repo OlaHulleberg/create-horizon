@@ -1,23 +1,13 @@
 //! Rotation networks, after Create's `RotationPropagator`, `KineticNetwork` and `KineticBlockEntity`.
 //!
-//! Create propagates speed block entity by block entity, from source to source, each tick a change
-//! happens. Here a world's kinetic parts are nodes in a table, and a change marks its connected
-//! component dirty. `solve` re-solves only dirty components, at most once per call, which the game
-//! makes once per tick at most. A steady factory costs nothing per tick.
-//!
-//! Solving a component keeps Create's rules:
-//! - two parts are connected with a speed ratio (`ratio`, Create's `getRotationSpeedModifier`):
-//!   facing shafts carry the speed (through a gearbox's or split shaft's face signs), small cogs
-//!   beside each other reverse it, a large cog turns a small one diagonally at -2 (and back at -0.5),
-//!   and two large cogs on crossed axes at ±1, encased chain drives along their chain at the
-//!   adjustable gearshift's modifier;
-//! - a speed controller sets the large cog above it to its target, and a sequenced gearshift its
-//!   far half to the running instruction's modifier, from whichever side turns (`Couple`);
-//! - the generator whose speed reaches the network fastest drives it; one turning the other way, or a
-//!   loop whose ratios disagree, breaks the newest part (Create destroys the block that caused it), and
-//!   so does any part past the maximum speed (256 RPM);
-//! - stress is the sum of each part's impact times its speed, capacity the sum of each generator's
-//!   capacity times its own generated speed; a network whose stress exceeds its capacity stops.
+//! Per-node sources and network identities follow Create's block entity propagation.
+
+mod networks;
+mod propagation;
+mod scheduling;
+mod state;
+use networks::TorquePropagator;
+use state::KineticState;
 
 use std::collections::{HashMap, HashSet};
 
@@ -431,45 +421,13 @@ struct Node {
     pos: [i32; 3],
     sub: u8,
     part: Part,
-    /// When it was set, to find the newest part of a conflict.
+    /// Incarnation and placement order for queued block entity work.
     stamp: u64,
-    /// The speed it shows now (0 when overstressed).
-    speed: f32,
-    /// The speed its network turns it at, overstressed or not (`getTheoreticalSpeed`).
-    theoretical: f32,
-    overstressed: bool,
-    /// The network's stress and capacity at the last solve (`KineticBlockEntity.stress`,
-    /// `capacity`).
-    stress: f32,
-    capacity: f32,
+    state: KineticState,
     live: bool,
     /// Set or replaced since the last solve: reported even when its speed is unchanged, so the
     /// game shows every part (a still one too).
     fresh: bool,
-    /// The sequence context it took from what turns it (`copySequenceContextFrom`): its
-    /// holder's, and the value per RPM of its own speed (`SequenceContext.relativeValue`).
-    seq: Option<(Context, f32)>,
-    /// `KineticBlockEntity.flickerTally` as of tick `flicker_at`: 5 more each time its speed
-    /// starts, stops or turns round (`onSpeedChanged`), one less each tick (`tick`).
-    flicker: i32,
-    flicker_at: u64,
-    /// What drove its network at the last solve, standing in for Create's network id
-    /// (`KineticBlockEntity.network`, its source generator's position): NONE when it stood still.
-    net: u32,
-    /// Added since the last solve (not a replaced part): a block entity that has not ticked yet.
-    new_part: bool,
-    /// A generator that drove its side at the last solve: Create's network source, the one
-    /// generator of a network with no source of its own (`hasSource`). Every other generator on a
-    /// turning network is a member, turned by it.
-    drove: bool,
-}
-
-impl Node {
-    /// Its flicker score at tick `now`.
-    fn flicker(&self, now: u64) -> i32 {
-        let gone = now.saturating_sub(self.flicker_at).min(i32::MAX as u64) as i32;
-        (self.flicker - gone).max(0)
-    }
 }
 
 /// The kinetic parts of one dimension.
@@ -483,14 +441,13 @@ pub struct Kinetics {
     /// `ChainConveyorBlockEntity.propagateRotationTo`): both sides list each other.
     far: HashMap<[i32; 3], Vec<[i32; 3]>>,
     dirty: Vec<u32>,
+    pending_events: Vec<Event>,
+    networks: TorquePropagator,
+    scheduler: scheduling::TickScheduler,
+    reactivation_due: Vec<(u32, u64)>,
     /// Positions whose parts left since the last `take_removed`.
     removed: Vec<[i32; 3]>,
     stamp: u64,
-    /// Scratch for solving, kept to avoid allocating per solve.
-    factor: HashMap<u32, f32>,
-    /// Which side of a coupling each part solved is on.
-    side: HashMap<u32, u32>,
-    queue: Vec<u32>,
     /// Positions whose network's figures someone reads (gauges), and those of them a solve
     /// looked at since the last `take_touched`.
     watched: HashSet<[i32; 3]>,
@@ -500,9 +457,6 @@ pub struct Kinetics {
 }
 
 const NONE: u32 = u32::MAX;
-
-/// A step of `propagation_victim`'s walk: a part, its neighbours with their ratios, the next one.
-type Frame = (u32, Vec<(u32, f32)>, usize);
 
 /// The networks a solve looked at, for tests and benchmarks.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -526,11 +480,43 @@ impl Kinetics {
 
     pub fn has_dirty(&self) -> bool {
         !self.dirty.is_empty()
+            || !self.reactivation_due.is_empty()
+            || !self.pending_events.is_empty()
     }
 
     /// One tick went by: every part's flicker score falls by one (`KineticBlockEntity.tick`).
     pub fn advance(&mut self) {
         self.now += 1;
+        while let Some(due) = self.scheduler.take_reactivation(self.now) {
+            self.reactivation_due.extend(due);
+        }
+        while let Some(due) = self.scheduler.take_due(self.now) {
+            for (id, stamp) in due {
+                if !self.nodes[id as usize].live || self.nodes[id as usize].stamp != stamp {
+                    continue;
+                }
+                let source = self.nodes[id as usize].state.source;
+                // KineticBlockEntity.validateKinetics reads the source's theoretical speed.
+                if source != NONE
+                    && (self.nodes[id as usize].state.net == NONE
+                        || !self.nodes[source as usize].live
+                        || self.nodes[source as usize].state.theoretical == 0.0)
+                {
+                    self.remove_source(id);
+                    self.dirty.push(id);
+                    let mut events = Vec::new();
+                    self.handle_removed(id, &mut events);
+                    self.pending_events.extend(events);
+                } else if source == NONE
+                    && self.nodes[id as usize].part.generated == 0.0
+                    && self.nodes[id as usize].state.theoretical != 0.0
+                {
+                    self.change_speed(id, 0.0);
+                    self.dirty.push(id);
+                }
+                self.scheduler.validate_later(self.now, id, stamp);
+            }
+        }
     }
 
     /// Whether the part at `pos` is waiting for its first solve: a part just placed or loaded
@@ -545,7 +531,7 @@ impl Kinetics {
     pub fn flicker_score(&self, pos: [i32; 3]) -> i32 {
         self.at
             .get(&pos)
-            .and_then(|s| (s[0] != NONE).then(|| self.nodes[s[0] as usize].flicker(self.now)))
+            .and_then(|s| (s[0] != NONE).then(|| self.nodes[s[0] as usize].state.flicker(self.now)))
             .unwrap_or(0)
     }
 
@@ -555,11 +541,23 @@ impl Kinetics {
         let slot = self.at.entry(pos).or_insert([NONE, NONE]);
         let existing = slot[sub as usize];
         if existing != NONE {
-            let n = &mut self.nodes[existing as usize];
-            if n.part == part {
+            if self.nodes[existing as usize].part == part {
                 return;
             }
-            n.part = part;
+            let old = self.nodes[existing as usize].part;
+            let mut events = Vec::new();
+            // Scroll settings invoke updateGeneratedRotation immediately. Connection changes
+            // detach the old state before installing the new state (GearshiftBlock).
+            if old.generated != part.generated {
+                self.nodes[existing as usize].part = part;
+                self.update_generated_rotation(existing, &mut events);
+            } else {
+                self.handle_removed(existing, &mut events);
+                self.remove_source(existing);
+                self.nodes[existing as usize].part = part;
+            }
+            self.pending_events.extend(events);
+            let n = &mut self.nodes[existing as usize];
             n.stamp = self.stamp;
             n.fresh = true;
             self.dirty.push(existing);
@@ -570,19 +568,9 @@ impl Kinetics {
             sub,
             part,
             stamp: self.stamp,
-            speed: 0.0,
-            theoretical: 0.0,
-            overstressed: false,
-            stress: 0.0,
-            capacity: 0.0,
+            state: KineticState::default(),
             live: true,
             fresh: true,
-            seq: None,
-            flicker: 0,
-            flicker_at: 0,
-            net: NONE,
-            new_part: true,
-            drove: false,
         };
         let id = match self.free.pop() {
             Some(id) => {
@@ -605,9 +593,15 @@ impl Kinetics {
 
     /// Removes every part at `pos`; its neighbours re-solve.
     pub fn remove(&mut self, pos: [i32; 3]) {
-        let Some(ids) = self.at.remove(&pos) else {
+        let Some(ids) = self.at.get(&pos).copied() else {
             return;
         };
+        let mut breaks = Vec::new();
+        for id in ids.into_iter().filter(|&i| i != NONE) {
+            self.handle_removed(id, &mut breaks);
+        }
+        self.pending_events.extend(breaks);
+        self.at.remove(&pos);
         for p in self.far.get(&pos).into_iter().flatten() {
             if let Some(n) = self.at.get(p) {
                 self.dirty.extend(n.iter().copied().filter(|&i| i != NONE));
@@ -650,7 +644,7 @@ impl Kinetics {
         self.nodes
             .iter()
             .filter(|n| n.live)
-            .map(|n| (n.pos, n.sub, n.speed, n.overstressed))
+            .map(|n| (n.pos, n.sub, n.state.speed, n.state.overstressed))
     }
 
     /// `SequenceContext.getEffectiveValue` of the context the part at `pos` took, when it is a
@@ -659,8 +653,8 @@ impl Kinetics {
     pub fn sequence_limit(&self, pos: [i32; 3], sub: u8, distance: bool) -> Option<f32> {
         let id = *self.at.get(&pos)?.get(sub as usize)?;
         let n = self.nodes.get(id as usize).filter(|_| id != NONE)?;
-        let (c, relative) = n.seq?;
-        (c.distance == distance).then(|| (relative * n.theoretical).abs())
+        let (c, relative) = n.state.seq?;
+        (c.distance == distance).then(|| (relative * n.state.theoretical).abs())
     }
 
     /// A part's theoretical speed, its network's stress and capacity, and whether it is
@@ -669,7 +663,12 @@ impl Kinetics {
         let id = *self.at.get(&pos)?.get(sub as usize)?;
         (id != NONE).then(|| {
             let n = &self.nodes[id as usize];
-            (n.theoretical, n.stress, n.capacity, n.overstressed)
+            (
+                n.state.theoretical,
+                n.state.stress,
+                n.state.capacity,
+                n.state.overstressed,
+            )
         })
     }
 
@@ -681,7 +680,7 @@ impl Kinetics {
 
     pub fn speed(&self, pos: [i32; 3], sub: u8) -> Option<f32> {
         let id = *self.at.get(&pos)?.get(sub as usize)?;
-        (id != NONE).then(|| self.nodes[id as usize].speed)
+        (id != NONE).then(|| self.nodes[id as usize].state.speed)
     }
 
     /// The speed the part's network turns it at, shown or not (`getTheoreticalSpeed`), and
@@ -690,7 +689,7 @@ impl Kinetics {
         let id = *self.at.get(&pos)?.get(sub as usize)?;
         (id != NONE).then(|| {
             let n = &self.nodes[id as usize];
-            (n.theoretical, n.overstressed)
+            (n.state.theoretical, n.state.overstressed)
         })
     }
 
@@ -705,29 +704,7 @@ impl Kinetics {
         if start == NONE {
             return false;
         }
-        let mut seen: HashSet<u32> = HashSet::from([start]);
-        let mut queue = vec![start];
-        let (mut edges, mut couplings, mut pull) = (Vec::new(), Vec::new(), Vec::new());
-        while let Some(id) = queue.pop() {
-            if id != start && self.nodes[id as usize].part.generated != 0.0 {
-                return true;
-            }
-            self.edges(id, &mut edges);
-            pull.clear();
-            couplings.clear();
-            self.couplings(id, &mut couplings, &mut pull);
-            let next = edges
-                .iter()
-                .map(|(m, _)| *m)
-                .chain(couplings.iter().flat_map(|c| [c.from, c.to]))
-                .chain(pull.iter().copied());
-            for m in next {
-                if seen.insert(m) {
-                    queue.push(m);
-                }
-            }
-        }
-        false
+        self.nodes[start as usize].state.source != NONE
     }
 
     /// The nodes connected to `id`, with the ratio from it to each.
@@ -787,6 +764,18 @@ impl Kinetics {
     /// The parts at `pos` and at each of `to` turn together (ratio 1) where both list each
     /// other; the networks of all of them solve again.
     pub fn set_far(&mut self, pos: [i32; 3], to: Vec<[i32; 3]>) {
+        let mut events = Vec::new();
+        if let Some(ids) = self.at.get(&pos).copied() {
+            for id in ids.into_iter().filter(|&i| i != NONE) {
+                self.handle_removed(id, &mut events);
+            }
+        }
+        self.pending_events.extend(events);
+        if let Some(ids) = self.at.get(&pos).copied() {
+            for id in ids.into_iter().filter(|&i| i != NONE) {
+                self.remove_source(id);
+            }
+        }
         let old = self.far.remove(&pos).unwrap_or_default();
         for p in old.iter().chain(&to).chain(std::iter::once(&pos)) {
             if let Some(ids) = self.at.get(p) {
@@ -814,7 +803,6 @@ impl Kinetics {
                         from: id,
                         to: cog,
                         kind: Couple::Controller(target),
-                        dir: 0,
                     });
                     pull.push(cog);
                 }
@@ -825,7 +813,6 @@ impl Kinetics {
                         from: first,
                         to: id,
                         kind: Couple::Relay(m),
-                        dir: 0,
                     });
                     pull.push(first);
                 }
@@ -852,553 +839,107 @@ impl Kinetics {
         }
     }
 
-    /// Re-solves every component holding a changed part, and reports what changed.
-    ///
-    /// Parts set across by a `Couple` solve together, each side with its own factors: the side
-    /// whose own generators turn it drives the other, then sides reached that way drive theirs.
-    /// Stress and capacity are the whole group's, as Create's controller and cog share one
-    /// network (`KineticBlockEntity.setSource` takes the source's network).
+    /// Runs queued block entity attachments and generator updates, then syncs network stress.
     pub fn solve(&mut self, events: &mut Vec<Event>) -> SolveStats {
-        let mut stats = SolveStats::default();
-        let mut done: HashMap<u32, ()> = HashMap::new();
-        let mut edges = Vec::new();
-        let mut couplings: Vec<Coupling> = Vec::new();
-        let mut pull: Vec<u32> = Vec::new();
-        let mut root: Vec<f32> = Vec::new();
-        let mut driver: Vec<u32> = Vec::new();
-        let mut loops: Vec<(u32, u32)> = Vec::new();
-        let mut gens: Vec<u32> = Vec::new();
-        while let Some(start) = self.dirty.pop() {
-            if !self.nodes[start as usize].live || done.contains_key(&start) {
-                continue;
-            }
-            // Factors relative to each side's first part, by breadth-first search; a loop that
-            // disagrees breaks the newest part on it, once its side turns.
-            self.factor.clear();
-            loops.clear();
-            self.side.clear();
-            self.queue.clear();
-            couplings.clear();
-            pull.clear();
-            pull.push(start);
-            let mut sides = 0u32;
-            let mut head = 0;
-            let mut conflict: Option<u32> = None;
-            while let Some(first) = pull.pop() {
-                if self.factor.contains_key(&first) {
-                    continue;
-                }
-                self.factor.insert(first, 1.0);
-                self.side.insert(first, sides);
-                self.queue.push(first);
-                while head < self.queue.len() {
-                    let id = self.queue[head];
-                    head += 1;
-                    let f = self.factor[&id];
-                    self.edges(id, &mut edges);
-                    for &(m, r) in &edges {
-                        let want = f * r;
-                        match self.factor.get(&m) {
-                            None => {
-                                self.factor.insert(m, want);
-                                self.side.insert(m, sides);
-                                self.queue.push(m);
-                            }
-                            Some(&have)
-                                if (have - want).abs() > have.abs().max(want.abs()) * 1e-4 =>
-                            {
-                                loops.push((self.newer(m, id), sides));
-                            }
-                            _ => {}
-                        }
-                    }
-                    self.couplings(id, &mut couplings, &mut pull);
-                }
-                sides += 1;
-            }
-            stats.components += 1;
-            stats.nodes += self.queue.len() as u32;
-            for &id in &self.queue {
-                done.insert(id, ());
-            }
-            // Generators. A network has one source, which drives it; every other generator on it
-            // turns with it (`KineticBlockEntity.source`) and only adds its capacity. Those that
-            // drove before keep driving: the fastest of them where a new part joined two (Create's
-            // overpowering), and one the other way breaks the newest part, which joined them.
-            root.clear();
-            root.resize(sides as usize, 0.0);
-            driver.clear();
-            driver.resize(sides as usize, NONE);
-            let mut capacity = 0.0f32;
-            gens.clear();
-            for &id in &self.queue {
-                let g = self.nodes[id as usize].part.generated;
-                if g == 0.0 {
-                    continue;
-                }
-                capacity += self.nodes[id as usize].part.capacity * g.abs();
-                gens.push(id);
-            }
-            // A setting changed acts at once (a motor's scroll value calls
-            // `updateGeneratedRotation`); a new part at its first tick, after them.
-            gens.sort_by_key(|&id| {
-                let n = &self.nodes[id as usize];
-                (n.new_part, n.stamp)
-            });
-            for &id in &gens {
-                let n = &self.nodes[id as usize];
-                if n.fresh || !n.drove {
-                    continue;
-                }
-                let s = self.side[&id] as usize;
-                let r = n.part.generated / self.factor[&id];
-                if driver[s] == NONE {
-                    (root[s], driver[s]) = (r, id);
-                } else if r.signum() != root[s].signum() {
-                    let newest = self.queue.iter().copied().reduce(|a, b| self.newer(a, b));
-                    conflict = conflict.or(newest);
-                } else if r.abs() > root[s].abs() {
-                    (root[s], driver[s]) = (r, id);
-                }
-            }
-            // A side nothing drove that gains several generators at once (a column loaded, or
-            // blocks placed together) takes as its source the first that every other one could
-            // turn with as a member, as Create's saved networks hold (each member passes
-            // `initialize` as it is): its own speed no faster its way, or no faster at all
-            // the same way.
-            let member =
-                |g: f32, t: f32| g <= t || (t.abs() >= g.abs() && t.signum() == g.signum());
-            for s in 0..sides as usize {
-                if root[s] != 0.0 {
-                    continue;
-                }
-                let new: Vec<u32> = gens
-                    .iter()
-                    .copied()
-                    .filter(|&id| self.side[&id] as usize == s && self.nodes[id as usize].new_part)
-                    .collect();
-                if new.len() < 2 {
-                    continue;
-                }
-                let source = new.iter().copied().find(|&d| {
-                    let r = self.nodes[d as usize].part.generated / self.factor[&d];
-                    new.iter().all(|&m| {
-                        m == d || member(self.nodes[m as usize].part.generated, r * self.factor[&m])
-                    })
-                });
-                if let Some(d) = source {
-                    (root[s], driver[s]) =
-                        (self.nodes[d as usize].part.generated / self.factor[&d], d);
-                }
-            }
-            // Then those that changed, in that order, against what the rest turns them at
-            // (`GeneratingKineticBlockEntity.applyNewSpeed` with a source): no faster breaks one
-            // the other way and leaves one the same way a member; faster takes over the network,
-            // or breaks one the other way. A new creative motor attaches before it starts, and
-            // starts only when faster in its own direction (`CreativeMotorBlockEntity.initialize`:
-            // `getGeneratedSpeed() > getTheoreticalSpeed()`). A member whose side nothing else
-            // drives takes over (`reActivateSource`).
-            for &id in &gens {
-                let n = &self.nodes[id as usize];
-                if !n.fresh && n.drove {
-                    continue;
-                }
-                let s = self.side[&id] as usize;
-                let g = n.part.generated;
-                let r = g / self.factor[&id];
-                let t = root[s] * self.factor[&id];
-                if t == 0.0 {
-                    (root[s], driver[s]) = (r, id);
-                    continue;
-                }
-                if !n.fresh || (n.new_part && g <= t) {
-                    continue;
-                }
-                if t.abs() >= g.abs() {
-                    if t.signum() != g.signum() {
-                        conflict = conflict.or(Some(id));
-                    }
-                } else if t.signum() != g.signum() {
-                    conflict = conflict.or(Some(id));
-                } else {
-                    (root[s], driver[s]) = (r, id);
-                }
-            }
-            // Couplings carry speed from a side that turns to the other, as far as it reaches;
-            // a side turned the other way by its own generators breaks the newer part.
-            for _ in 0..=couplings.len() {
-                let mut changed = false;
-                for c in couplings.iter_mut() {
-                    let (a, b) = (self.side[&c.from] as usize, self.side[&c.to] as usize);
-                    if a == b {
-                        continue;
-                    }
-                    if c.dir == 0 {
-                        c.dir = if root[a] != 0.0 {
-                            1
-                        } else if root[b] != 0.0 {
-                            -1
-                        } else {
-                            continue;
-                        };
-                    }
-                    let (src, dst) = if c.dir > 0 {
-                        (c.from, c.to)
-                    } else {
-                        (c.to, c.from)
-                    };
-                    let (s, d) = (self.side[&src] as usize, self.side[&dst] as usize);
-                    let want = match c.kind {
-                        Couple::Controller(target) => target,
-                        Couple::Relay(m) => root[s] * self.factor[&src] * m,
-                    };
-                    if root[s] == 0.0 || want == 0.0 {
-                        continue;
-                    }
-                    let r = want / self.factor[&dst];
-                    if root[d] == 0.0 {
-                        root[d] = r;
-                        changed = true;
-                    } else if r.signum() != root[d].signum() {
-                        let newer = self.newer(src, dst);
-                        conflict = conflict.or(Some(newer));
-                    } else if r.abs() > root[d].abs() * (1.0 + 1e-4) {
-                        root[d] = r;
-                        changed = true;
-                    }
-                }
-                if !changed {
-                    break;
-                }
-            }
-            // `RotationPropagator.propagateNewSource` meets a loop's disagreement only as speed
-            // goes round it: a loop on a side nothing turns breaks nothing
-            // (`newSpeed == 0 && oppositeSpeed == 0`).
-            let turning = loops
-                .iter()
-                .filter(|&&(_, s)| root[s as usize] != 0.0)
-                .map(|&(v, _)| v)
-                .reduce(|a, b| self.newer(a, b));
-            conflict = turning.or(conflict);
-            // A coupling whose ends a loop already joins: Create does not overpower its own
-            // network (`RotationPropagator.propagateNewSource`), it breaks the block when the
-            // speed conveyed is faster than, or opposed to, what the other end turns at.
-            for c in &couplings {
-                let s = self.side[&c.from] as usize;
-                if s != self.side[&c.to] as usize || root[s] == 0.0 {
-                    continue;
-                }
-                let (from, to) = (root[s] * self.factor[&c.from], root[s] * self.factor[&c.to]);
-                let breaks = match c.kind {
-                    // `SpeedControllerBlockEntity.getConveyedSpeed`: the larger of the target and
-                    // the cog's speed, or the target when their signs differ; Create's epsilon is
-                    // the cog's speed / 256 / 256.
-                    Couple::Controller(target) => {
-                        target != 0.0
-                            && (target.signum() != to.signum()
-                                || target.abs() > to.abs() + to.abs() / 256.0 / 256.0)
-                    }
-                    // The far half at the modifier times the near one's, as any loop's ratio
-                    // (`getRotationSpeedModifier`; 0 cuts, conveying nothing either way).
-                    Couple::Relay(m) => {
-                        m != 0.0 && (to - from * m).abs() > to.abs().max((from * m).abs()) * 1e-4
-                    }
-                };
-                if breaks {
-                    let newer = self.newer(c.from, c.to);
-                    conflict = Some(conflict.map_or(newer, |x| self.newer(x, newer)));
-                }
-            }
-            if conflict.is_none() {
-                // Too fast anywhere breaks the newest part that turns too fast.
-                let mut fastest: Option<u32> = None;
-                for &id in &self.queue {
-                    if (root[self.side[&id] as usize] * self.factor[&id]).abs() > MAX_SPEED {
-                        fastest = Some(fastest.map_or(id, |f| self.newer(f, id)));
-                    }
-                }
-                conflict = fastest;
-            }
-            if let Some(found) = conflict {
-                // Create breaks whichever blocks its propagation from the change stands on when
-                // it meets the conflict; the solve's own pick when that walk meets none.
-                let origin = self.queue.iter().copied().reduce(|a, b| self.newer(a, b));
-                let mut victims: Vec<u32> = origin
-                    .map(|o| self.propagation_victims(o))
-                    .unwrap_or_default();
-                victims.retain(|v| self.side.contains_key(v));
-                if victims.is_empty() {
-                    victims.push(found);
-                }
-                let positions: Vec<[i32; 3]> = victims
-                    .iter()
-                    .map(|&v| self.nodes[v as usize].pos)
-                    .collect();
-                // The rest re-solves without them.
-                for &id in &self.queue {
-                    done.remove(&id);
-                }
-                for pos in positions {
-                    if !events.contains(&Event::Break { pos }) {
-                        events.push(Event::Break { pos });
-                    }
-                    self.remove(pos);
-                }
-                continue;
-            }
-            let theoretical = |k: &Self, id: u32| root[k.side[&id] as usize] * k.factor[&id];
-            let stress: f32 = self
-                .queue
-                .iter()
-                .map(|&id| self.nodes[id as usize].part.impact * theoretical(self, id).abs())
-                .sum();
-            let overstressed = stress > capacity;
-            // `RotationPropagator.propagateNewSource`: speed reaching a part whose speed changed
-            // too often (`getFlickerScore() > MAX_FLICKER_SCORE`, its tally counting this change)
-            // breaks it, the nearest to the change first. A split shaft's far half is the same
-            // block entity as its near one in Create, which keeps one tally for both.
-            let victim = self.queue.iter().copied().find(|&id| {
-                let n = &self.nodes[id as usize];
-                let turned = theoretical(self, id);
-                if n.sub != 0 || turned == 0.0 || (n.theoretical == turned && !n.fresh) {
-                    return false;
-                }
-                let shown = if overstressed { 0.0 } else { turned };
-                n.flicker(self.now) + flicker_gain(n.speed, shown) > MAX_FLICKER_SCORE
-            });
-            if let Some(victim) = victim {
-                let pos = self.nodes[victim as usize].pos;
-                events.push(Event::Break { pos });
-                for &id in &self.queue {
-                    done.remove(&id);
-                }
-                self.remove(pos);
-                continue;
-            }
-            // `copySequenceContextFrom`: a side turned by a generator holding a context (a valve
-            // handle in use) takes it, and so does the side a sequenced gearshift turns; the value
-            // goes as one per RPM of the holder's turned speed (`SequenceContext.fromGearshift`).
-            let mut held: Vec<Option<(Context, f32)>> = vec![None; sides as usize];
-            for &id in &self.queue {
-                let p = &self.nodes[id as usize].part;
-                if p.generated != 0.0
-                    && let Some(c) = p.context
-                {
-                    held[self.side[&id] as usize] = Some((c, theoretical(self, id)));
-                }
-            }
-            for c in &couplings {
-                let Couple::Relay(_) = c.kind else { continue };
-                let Some(ctx) = self.nodes[c.to as usize].part.context else {
-                    continue;
-                };
-                let dst = match c.dir {
-                    1 => c.to,
-                    -1 => c.from,
-                    _ => continue,
-                };
-                let s = self.side[&dst] as usize;
-                if s != self.side[&(if c.dir > 0 { c.from } else { c.to })] as usize {
-                    held[s] = Some((ctx, theoretical(self, dst)));
-                }
-            }
-            if !self.watched.is_empty() {
-                for &id in &self.queue {
-                    let pos = self.nodes[id as usize].pos;
-                    if self.nodes[id as usize].sub == 0 && self.watched.contains(&pos) {
-                        self.touched.push(pos);
-                    }
-                }
-            }
-            for i in 0..self.queue.len() {
-                let id = self.queue[i];
-                let turned = theoretical(self, id);
-                let shown = if overstressed { 0.0 } else { turned };
-                let seq = held[self.side[&id] as usize]
-                    .map(|(c, base)| (c, if base == 0.0 { 0.0 } else { c.value / base }));
-                let side = self.side[&id];
-                let net = match driver[side as usize] {
-                    NONE if root[side as usize] != 0.0 => NONE - 1 - side,
-                    d => d,
-                };
-                let n = &mut self.nodes[id as usize];
-                n.stress = stress;
-                n.capacity = capacity;
-                n.net = if turned == 0.0 { NONE } else { net };
-                n.new_part = false;
-                n.drove = driver[side as usize] == id;
-                // Create calls `onSpeedChanged` when the theoretical speed changes too, shown or
-                // not (`RotationPropagator` sets it on overstressed networks as well).
-                if n.fresh
-                    || n.speed != shown
-                    || n.theoretical != turned
-                    || n.overstressed != overstressed
-                    || n.seq != seq
-                {
-                    let gain = flicker_gain(n.speed, shown);
-                    if gain != 0 && n.sub == 0 {
-                        n.flicker = n.flicker(self.now) + gain;
-                        n.flicker_at = self.now;
-                    }
-                    n.seq = seq;
-                    n.fresh = false;
-                    n.speed = shown;
-                    n.theoretical = turned;
-                    n.overstressed = overstressed;
-                    events.push(Event::Speed {
-                        pos: n.pos,
-                        sub: n.sub,
-                        speed: shown,
-                        overstressed,
-                        theoretical: turned,
-                    });
-                }
-            }
+        if !self.has_dirty() {
+            return SolveStats::default();
         }
-        stats
-    }
-
-    /// The newer of two parts (set later): the one Create breaks in a conflict.
-    /// The blocks `RotationPropagator.propagateNewSource` destroys, in order, run from `origin` (the
-    /// part whose change starts it) over the speeds of the last solve, in Create's neighbour order
-    /// (`getPotentialNeighbourLocations`: the six faces, then the diagonals, x fastest). A speed
-    /// conveyed or received too fast, or the other way to a turning neighbour's, breaks the part
-    /// it is conveyed from; a faster speed into its own network (a loop) does too. Create carries
-    /// on after a break: each caller still holds the neighbours it listed before, a broken one
-    /// with its last speed, so one conflict can break more; what a broken part drove stops
-    /// (`propagateMissingSource`). Empty when the walk meets no conflict, or runs too long.
-    fn propagation_victims(&self, origin: u32) -> Vec<u32> {
-        const MAX_VICTIMS: usize = 8;
-        let o = &self.nodes[origin as usize];
-        let mut speed: HashMap<u32, f32> = HashMap::new();
-        let mut net: HashMap<u32, u32> = HashMap::new();
-        // What set each part's speed in this walk (`KineticBlockEntity.source`).
-        let mut source: HashMap<u32, u32> = HashMap::new();
-        let mut broken: Vec<u32> = Vec::new();
-        // applyNewSpeed detaches an existing source before propagating its new speed.
-        // Its former members lose their source and network in propagateMissingSource.
-        if o.fresh && !o.new_part && o.drove {
-            for (id, node) in self.nodes.iter().enumerate() {
-                if id as u32 != origin && node.net == o.net && o.net != NONE {
-                    speed.insert(id as u32, 0.0);
-                    net.insert(id as u32, NONE);
-                }
-            }
-        }
-        // A generator starts from its own speed and network (`applyNewSpeed`); another part from
-        // what it turned at.
-        let start = if o.part.generated != 0.0 {
-            o.part.generated
-        } else {
-            o.theoretical
-        };
-        speed.insert(origin, start);
-        net.insert(
-            origin,
-            if o.part.generated != 0.0 {
-                origin
-            } else {
-                o.net
-            },
-        );
-        let speed_of = |m: &HashMap<u32, f32>, id: u32| {
-            m.get(&id)
-                .copied()
-                .unwrap_or(self.nodes[id as usize].theoretical)
-        };
-        let net_of = |m: &HashMap<u32, u32>, id: u32| {
-            m.get(&id).copied().unwrap_or(self.nodes[id as usize].net)
-        };
-        // A part breaks: it is listed, and every part it drove in this walk stops.
-        let destroy = |id: u32,
-                       broken: &mut Vec<u32>,
-                       speed: &mut HashMap<u32, f32>,
-                       net: &mut HashMap<u32, u32>,
-                       source: &mut HashMap<u32, u32>| {
-            broken.push(id);
-            let mut gone = vec![id];
-            while let Some(g) = gone.pop() {
-                let driven: Vec<u32> = source
-                    .iter()
-                    .filter(|&(_, &s)| s == g)
-                    .map(|(&d, _)| d)
-                    .collect();
-                for d in driven {
-                    source.remove(&d);
-                    speed.insert(d, 0.0);
-                    net.insert(d, NONE);
-                    gone.push(d);
-                }
-            }
-        };
-        let fresh = |id: u32, broken: &[u32]| {
-            let mut e = self.java_order(id);
-            e.retain(|(m, _)| !broken.contains(m));
-            e
-        };
-        // Each frame: a part, its neighbours as listed when it started, the next to look at.
-        let mut stack: Vec<Frame> = vec![(origin, fresh(origin, &broken), 0)];
-        let mut steps = 0;
-        while let Some((cur, edges, i)) = stack.last_mut() {
-            steps += 1;
-            if steps > 100_000 || broken.len() >= MAX_VICTIMS {
-                break;
-            }
-            let cur = *cur;
-            let Some(&(n, r)) = edges.get(*i) else {
-                stack.pop();
-                continue;
-            };
-            *i += 1;
-            let (sc, sn) = (speed_of(&speed, cur), speed_of(&speed, n));
-            let new = sc * r;
-            let opposite = sn / r;
-            if new == 0.0 && opposite == 0.0 {
+        events.append(&mut self.pending_events);
+        let before: Vec<_> = self
+            .nodes
+            .iter()
+            .map(|n| {
+                (
+                    n.state.speed,
+                    n.state.theoretical,
+                    n.state.overstressed,
+                    n.state.seq,
+                )
+            })
+            .collect();
+        let mut pending = std::mem::take(&mut self.dirty);
+        pending.sort_by_key(|&id| self.nodes[id as usize].stamp);
+        pending.dedup();
+        for id in pending {
+            if !self.nodes[id as usize].live {
                 continue;
             }
-            // Too fast, or the other way: this part breaks and its call returns.
-            if new.abs() > MAX_SPEED
-                || opposite.abs() > MAX_SPEED
-                || (new.signum() != sn.signum() && new != 0.0 && sn != 0.0)
+            self.propagate_new_source(id, events);
+            if !self.nodes[id as usize].live {
+                continue;
+            }
+            let n = &self.nodes[id as usize];
+            if n.state.new_part
+                && (n.state.source == NONE || n.part.generated > n.state.theoretical)
             {
-                if !broken.contains(&cur) {
-                    destroy(cur, &mut broken, &mut speed, &mut net, &mut source);
-                }
-                stack.pop();
-                continue;
+                self.update_generated_rotation(id, events);
             }
-            // The neighbour is faster: it overpowers this part, which propagates again.
-            if opposite.abs() > sc.abs() {
-                speed.insert(cur, opposite);
-                net.insert(cur, net_of(&net, n));
-                source.insert(cur, n);
-                stack.pop();
-                if !broken.contains(&cur) {
-                    stack.push((cur, fresh(cur, &broken), 0));
-                }
-                continue;
+            if self.nodes[id as usize].state.new_part {
+                self.scheduler
+                    .validate_later(self.now, id, self.nodes[id as usize].stamp);
             }
-            if new.abs() >= sn.abs() {
-                let own = net_of(&net, cur);
-                // Not over its own network: a loop that comes back faster breaks it, and the
-                // call goes on.
-                if own == NONE || own == net_of(&net, n) {
-                    if new.abs() > sn.abs() + sn.abs() / 256.0 / 256.0 && !broken.contains(&cur) {
-                        destroy(cur, &mut broken, &mut speed, &mut net, &mut source);
-                    }
-                    continue;
-                }
-            } else if (sn - new).abs() <= 1e-4 {
-                continue;
-            }
-            speed.insert(n, new);
-            net.insert(n, net_of(&net, cur));
-            source.insert(n, cur);
-            if !broken.contains(&n) {
-                stack.push((n, fresh(n, &broken), 0));
+            self.nodes[id as usize].state.new_part = false;
+        }
+        // Scheduled block attachments precede GeneratingKineticBlockEntity.tick.
+        for (id, stamp) in std::mem::take(&mut self.reactivation_due) {
+            let n = &self.nodes[id as usize];
+            if n.live && n.stamp == stamp && n.state.reactivate_source {
+                self.nodes[id as usize].state.reactivate_source = false;
+                self.update_generated_rotation(id, events);
             }
         }
-        broken
+        self.dirty.clear();
+        // KineticNetwork.calculateCapacity / calculateStress: all members, generated RPM for sources.
+        self.networks.clear_members();
+        for n in self.nodes.iter().filter(|n| n.live && n.state.net != NONE) {
+            self.networks
+                .add(n.state.net, n.pos, n.sub, n.part, n.state.theoretical);
+        }
+        self.networks.update_networks();
+        let mut stats = SolveStats::default();
+        let mut touched_nets = HashSet::new();
+        for (id, n) in self.nodes.iter_mut().enumerate().filter(|(_, n)| n.live) {
+            let (stress, capacity, _) = self.networks.figures(n.state.net);
+            n.state.stress = stress;
+            n.state.capacity = capacity;
+            n.state.overstressed = stress > capacity;
+            n.state.speed = if n.state.overstressed {
+                0.0
+            } else {
+                n.state.theoretical
+            };
+            if n.fresh
+                || before[id]
+                    != (
+                        n.state.speed,
+                        n.state.theoretical,
+                        n.state.overstressed,
+                        n.state.seq,
+                    )
+            {
+                events.push(Event::Speed {
+                    pos: n.pos,
+                    sub: n.sub,
+                    speed: n.state.speed,
+                    theoretical: n.state.theoretical,
+                    overstressed: n.state.overstressed,
+                });
+                n.fresh = false;
+                touched_nets.insert(n.state.net);
+            }
+        }
+        for n in self
+            .nodes
+            .iter()
+            .filter(|n| n.live && touched_nets.contains(&n.state.net))
+        {
+            stats.nodes += 1;
+            if n.sub == 0 && self.watched.contains(&n.pos) {
+                self.touched.push(n.pos);
+            }
+        }
+        stats.components = touched_nets.len() as u32;
+        stats
     }
 
     /// `edges`, in the order Create visits neighbours: a split shaft's other half (the same
@@ -1423,14 +964,6 @@ impl Kinetics {
         out.sort_by_key(|&(m, _)| key(m));
         out
     }
-
-    fn newer(&self, a: u32, b: u32) -> u32 {
-        if self.nodes[a as usize].stamp > self.nodes[b as usize].stamp {
-            a
-        } else {
-            b
-        }
-    }
 }
 
 /// What `KineticBlockEntity.onSpeedChanged` adds to a part's flicker tally when its speed goes
@@ -1448,7 +981,6 @@ struct Coupling {
     from: u32,
     to: u32,
     kind: Couple,
-    dir: i8,
 }
 
 /// `RotationPropagator.isLargeCogToSpeedController`: a large cog on a horizontal axis right above
@@ -1649,8 +1181,10 @@ mod tests {
         k.set([1, 1, 1], 0, Part::cog(Axis::Z, true));
         k.set([2, 2, 1], 0, Part::cog(Axis::Z, false));
         let e = solve(&mut k);
-        assert!(e.contains(&Event::Break { pos: [2, 2, 1] }), "{e:?}");
-        assert_eq!(k.speed([1, 1, 1], 0), Some(-256.0));
+        // RotationPropagator: "if (tooFast || speedChangedTooOften) { world.destroyBlock(pos, true); return; }"
+        // The conveying large cog is currentTE, even though the small cog was placed later.
+        assert!(e.contains(&Event::Break { pos: [1, 1, 1] }), "{e:?}");
+        assert_eq!(k.speed([2, 2, 1], 0), Some(0.0));
     }
 
     #[test]
@@ -1751,9 +1285,8 @@ mod tests {
     }
 
     #[test]
-    fn motors_loaded_together_keep_the_source_they_saved() {
-        // A motor and one turning with it the other way, loaded in either order: the one whose
-        // members all fit (`initialize` leaves a member as it is) drives, and nothing breaks.
+    fn newly_initialized_motors_use_the_signed_speed_rule() {
+        // Fresh entities initialized in opposite orders exercise the signed motor rule.
         for flip in [false, true] {
             let mut k = Kinetics::new();
             let parts = [
@@ -1770,11 +1303,10 @@ mod tests {
                 k.set(*p, 0, *part);
             }
             let e = solve(&mut k);
-            assert!(
-                !e.iter().any(|x| matches!(x, Event::Break { .. })),
-                "{flip}: {e:?}"
-            );
-            assert_eq!(k.speed([1, 0, 0], 0), Some(16.0), "{flip}");
+            // CreativeMotorBlockEntity.initialize: "if (!hasSource() || getGeneratedSpeed() > getTheoreticalSpeed())"
+            // compares signed speeds. No saved sources are supplied by this test's set calls.
+            assert_eq!(e.contains(&Event::Break { pos: [0, 0, 0] }), flip, "{e:?}");
+            assert_eq!(k.speed([1, 0, 0], 0), Some(if flip { -16.0 } else { 16.0 }));
         }
     }
 
@@ -2154,9 +1686,8 @@ mod tests {
     }
 
     #[test]
-    fn a_controller_geared_back_into_its_own_network_breaks_unless_slower() {
-        // Motor -> controller -> small cog, up to a large cog and across to the controlled one:
-        // the controlled cog already turns at 8 from the controller's own network.
+    fn a_controller_feedback_loop_follows_ordered_network_checks() {
+        // Motor -> controller -> small cog -> large cog -> controlled cog.
         let build = |target: f32| {
             let mut k = Kinetics::new();
             k.set([0, 0, 0], 0, motor(Dir::East, 16.0));
@@ -2167,27 +1698,24 @@ mod tests {
             let e = solve(&mut k);
             (k, e)
         };
-        let (k, _) = build(0.0);
-        let wheel = k.speed([1, 1, 0], 0).unwrap();
-        assert_eq!(wheel.abs(), 8.0);
-        // Slower than the cog turns, the same way: the loop holds at the cog's speed
-        // (`getConveyedSpeed` is the larger).
-        let (k, e) = build(wheel / 2.0);
-        assert!(!e.iter().any(|x| matches!(x, Event::Break { .. })), "{e:?}");
-        assert_eq!(k.speed([1, 1, 0], 0), Some(wheel));
-        assert!(
-            !build(wheel)
-                .1
-                .iter()
-                .any(|x| matches!(x, Event::Break { .. }))
-        );
-        // Faster, or the other way: Create breaks it (`propagateNewSource`).
-        for target in [wheel * 8.0, -wheel / 2.0] {
-            let (_, e) = build(target);
-            assert!(
-                e.contains(&Event::Break { pos: [1, 1, 0] }),
+        // RotationPropagator: "if (!currentTE.hasNetwork() || currentTE.network.equals(neighbourTE.network))"
+        // checks the source network during the walk, rather than solving the loop globally.
+        for target in [-8.0, 0.0, 4.0, 8.0, 64.0, -4.0] {
+            let (k, e) = build(target);
+            // SpeedControllerBlockEntity.getConveyedSpeed: "return Math.max(desiredOutputSpeed, compareSpeed);"
+            // and getDesiredOutputSpeed: "if (targetSpeed == 0) return 0;".
+            // An agreeing loop survives; others break during propagation, before a global solution.
+            assert_eq!(
+                e.iter().any(|e| matches!(e, Event::Break { .. })),
+                target != -8.0,
                 "{target}: {e:?}"
             );
+            if target == -8.0 {
+                assert_eq!(k.speed([1, 1, 0], 0), Some(-8.0));
+            }
+            if target == 0.0 {
+                assert!(e.contains(&Event::Break { pos: [2, 1, 1] }));
+            }
         }
     }
 
