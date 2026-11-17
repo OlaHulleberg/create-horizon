@@ -209,6 +209,8 @@ pub(super) fn hovered_slot(host: &dyn ClientHost) -> Option<([i32; 3], Dir, [f64
     if !hits_value_box(host, pos, hit.face, hit.point) {
         return None;
     }
+    // Read before borrowing the table: `client_active` borrows it itself.
+    let active = values::client_active(host, pos);
     let slot = super::super::client_table(host, |t| {
         super::values::value_box_slot(
             t,
@@ -216,7 +218,7 @@ pub(super) fn hovered_slot(host: &dyn ClientHost) -> Option<([i32; 3], Dir, [f64
             crate::glue::logistics::client::ejector_charged,
             pos,
             side,
-            values::client_active(host, pos),
+            active,
         )
     })
     .flatten()?;
@@ -230,6 +232,8 @@ fn hits_value_box(host: &dyn ClientHost, pos: [i32; 3], face: [i32; 3], point: [
     };
     let local = [0, 1, 2].map(|i| point[i] - f64::from(pos[i]));
     let wrench = host.local_player().is_some_and(|p| holds_wrench(host, p));
+    // Read before borrowing the table: `client_active` borrows it itself.
+    let active = values::client_active(host, pos);
     super::super::client_table(host, |t| {
         super::values::wrench_fits(t, block_at(host, pos), wrench)
             && value_box_hit(
@@ -238,7 +242,7 @@ fn hits_value_box(host: &dyn ClientHost, pos: [i32; 3], face: [i32; 3], point: [
                 crate::glue::logistics::client::ejector_charged,
                 pos,
                 side,
-                values::client_active(host, pos),
+                active,
                 local,
             )
     }) == Some(true)

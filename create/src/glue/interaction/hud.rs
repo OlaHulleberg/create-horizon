@@ -591,6 +591,8 @@ pub(super) fn value_box_outline(
         .flatten();
         let cells = block.map_or(&[][..], super::values::option_icons);
         let cell = super::board::seen(pos).and_then(|v| cells.get(usize::try_from(v).ok()?));
+        // Read before borrowing the table: `client_active` borrows it itself.
+        let active = super::values::client_active(host, pos);
         let slot = super::super::client_table(host, |t| {
             super::values::value_box_slot(
                 t,
@@ -598,7 +600,7 @@ pub(super) fn value_box_outline(
                 crate::glue::logistics::client::ejector_charged,
                 pos,
                 side,
-                super::values::client_active(host, pos),
+                active,
             )
         })
         .flatten();

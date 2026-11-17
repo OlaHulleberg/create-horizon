@@ -133,6 +133,8 @@ pub(crate) fn draw(host: &dyn ClientHost, pos: [i32; 3], draw: &mut dyn BlockEnt
     let Some(text) = text_of(block, value, &degrees) else {
         return;
     };
+    // Read before borrowing the table: `client_active` borrows it itself.
+    let active = values::client_active(host, pos);
     let Some(slot) = super::super::client_table(host, |t| {
         values::value_box_slot(
             t,
@@ -140,7 +142,7 @@ pub(crate) fn draw(host: &dyn ClientHost, pos: [i32; 3], draw: &mut dyn BlockEnt
             crate::glue::logistics::client::ejector_charged,
             pos,
             side,
-            values::client_active(host, pos),
+            active,
         )
     })
     .flatten() else {
