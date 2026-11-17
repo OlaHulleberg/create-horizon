@@ -94,13 +94,16 @@ impl KineticNetwork {
             .insert(Entity(nodes[id as usize].pos), capacity);
     }
     pub(super) fn update_stress_for(&mut self, id: u32, stress: f32, nodes: &[Node]) {
-        if !self.members.contains_key(&Entity(nodes[id as usize].pos)) {
-            self.add(id, nodes);
-        }
-        self.members
-            .get_mut(&Entity(nodes[id as usize].pos))
-            .unwrap()
-            .stress = stress;
+        // KineticNetwork.updateStressFor: `members.put(be, stress)`, nothing else.
+        let member = self
+            .members
+            .entry(Entity(nodes[id as usize].pos))
+            .or_insert_with(|| Member {
+                ports: HashSet::new(),
+                stress,
+            });
+        member.ports.insert(id);
+        member.stress = stress;
     }
     fn calculate_capacity(&mut self, nodes: &[Node]) -> f32 {
         self.sources
