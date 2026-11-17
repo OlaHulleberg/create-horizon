@@ -11,7 +11,7 @@ Sunrise at the pin with an SDK built from the same checkout, signed with a throw
 |---|---|---|
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
-| `create/` | `cargo +1.99.1 test` | Pass (83 glue tests) |
+| `create/` | `cargo +1.99.1 test` | Pass (84 glue tests) |
 | `create/` | `cargo +1.99.1 test -p create-engine` | Pass (685 engine tests) |
 | `create/` | `cargo horizon-mod check` | Pass ("Create uses 3574 items of the API … Made for b77574e.") |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
@@ -117,6 +117,7 @@ above:
 | A speed change never re-enrols a detached member (247556e) | No gameplay path known | `KineticBlockEntity.setSpeed`/`onSpeedChanged` leave the network alone; `detached_member_speed_change_does_not_enroll_it_again` fails without it; fuzzer seeds 0-10299 unchanged |
 | A motor changed in place to another axis (#15) | Pass | Motor up at -32, `/setblock` to west, then 32 pasted from a clipboard: turns at -32 with network capacity 0 and added capacity 16384, as in Create; after reload capacity 524288 (`initFromTE`, `addSilently`, `updateCapacity`). Right after the `/setblock` the saved data has no `Network`, as Create's `write` (it was merged, keeping the old one); reload turns at -16 in a fresh network |
 | A block entity's owned data written whole (#16) | Pass | A table cloth given `Shop` and `Price` with `/data merge`, then an apple put on it by the player: its saved `TableCloth` is rewritten as Create writes it, without them (a merge kept them). Motor `/setblock` up → west: no `Network` left in `KineticState`; reload turns at -16 |
+| A busy valve handle's value box (#22) | Pass | Copper valve on stone, turned at 32 by an empty-hand use, then red dye clicked on its centre while it turns: it becomes red (`showValue` hides the box while in use). The first build crashed on launch (a nested client-table borrow in `render_gui_post`), fixed before this check |
 | Kinetic state saved and loaded (#10) | Pass | Two member-motor pairs keep their roles over two save/reload cycles; a world saved before #10 loads with both pairs intact and keeps them after saving again |
 
 Known differences left: the category editor's inventory shows the inventory as it was at the last change made in
