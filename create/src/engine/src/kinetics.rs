@@ -1271,21 +1271,21 @@ impl Kinetics {
         }
     }
 
-    /// HandCrankBlockEntity.tick calls its kinetic base before consuming InUse.
+    /// SmartBlockEntity initializes once, before HandCrankBlockEntity consumes InUse.
     pub fn tick_generator_base(&mut self, pos: [i32; 3]) {
         let Some(ids) = self.at.get(&pos).copied() else {
             return;
         };
         let mut events = Vec::new();
         for id in ids {
-            if id != NONE {
-                self.tick_base(id, &mut events);
+            if id != NONE && self.nodes[id as usize].state.new_part {
+                self.tick_base(id, self.now + 1, &mut events);
             }
         }
         self.pending_events.extend(events);
     }
 
-    fn tick_base(&mut self, id: u32, events: &mut Vec<Event>) {
+    fn tick_base(&mut self, id: u32, tick: u64, events: &mut Vec<Event>) {
         if !self.nodes[id as usize].live {
             return;
         }
@@ -1324,7 +1324,7 @@ impl Kinetics {
         }
         if self.nodes[id as usize].state.new_part {
             self.scheduler
-                .validate_later(self.now, id, self.nodes[id as usize].stamp);
+                .validate_later(tick, id, self.nodes[id as usize].stamp);
         }
         self.nodes[id as usize].state.new_part = false;
     }
@@ -1340,7 +1340,7 @@ impl Kinetics {
         pending.sort_by_key(|&id| self.nodes[id as usize].stamp);
         pending.dedup();
         for id in pending {
-            self.tick_base(id, events);
+            self.tick_base(id, self.now, events);
         }
         // Scheduled block attachments precede GeneratingKineticBlockEntity.tick.
         for (id, stamp) in std::mem::take(&mut self.reactivation_due) {
