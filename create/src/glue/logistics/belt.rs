@@ -674,20 +674,16 @@ pub(super) fn eject_item(
     }
 }
 
-/// Belts: segments broken next to a broken one become shafts or air, a broken belt's items
-/// drop, then belts holding items move them (`BeltInventory.tick`); belts at rest or empty cost
-/// nothing.
-pub fn tick_belts(lv: &mut ServerLevel<'_>) {
-    let dim = lv.dim;
-    let (breaks, drops) = with_world(|w| {
-        let d = &mut w.dims[dim];
-        (
-            std::mem::take(&mut d.belt_breaks),
-            std::mem::take(&mut d.belt_drops),
-        )
-    })
-    .unwrap_or_default();
-    for b in breaks {
+/// World writes for the engine's `BeltBlock.onRemove` cascade.
+struct BeltBreakWorld<'a, 'l>(&'a mut ServerLevel<'l>);
+
+impl belt::BreakWorld for BeltBreakWorld<'_, '_> {
+    fn take_breaks(&mut self) -> Vec<create_engine::world::BeltBreak> {
+        with_world(|w| std::mem::take(&mut w.dims[self.0.dim].belt_breaks)).unwrap_or_default()
+    }
+
+    fn replace(&mut self, b: create_engine::world::BeltBreak) {
+        let lv = &mut *self.0;
         let state = {
             let facts = lv.host.block_states();
             match b.shaft {
@@ -707,6 +703,15 @@ pub fn tick_belts(lv: &mut ServerLevel<'_>) {
             lv.set_state(b.pos, state, update_all());
         }
     }
+}
+
+/// Belts: segments broken next to a broken one become shafts or air, a broken belt's items
+/// drop, then belts holding items move them (`BeltInventory.tick`); belts at rest or empty cost
+/// nothing.
+pub fn tick_belts(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    belt::break_cascade(&mut BeltBreakWorld(lv));
+    let drops = with_world(|w| std::mem::take(&mut w.dims[dim].belt_drops)).unwrap_or_default();
     for (c, seg, length, item) in drops {
         eject_item(lv, c, &seg, length, 0.0, &item);
     }

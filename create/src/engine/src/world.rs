@@ -5047,6 +5047,57 @@ mod tests {
     }
 
     #[test]
+    fn belt_break_cascade_reaches_far_pulley_before_returning() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names = ["start", "middle", "end"].map(|part| {
+            (
+                "create:belt",
+                vec![
+                    ("facing", "south"),
+                    ("slope", "horizontal"),
+                    ("part", part),
+                    ("casing", "false"),
+                    ("waterlogged", "false"),
+                ],
+            )
+        });
+        states::set_range(10, 4);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names
+                .iter()
+                .map(|(n, p)| (*n, p.iter().copied()))
+                .chain(std::iter::once((
+                    "create:shaft",
+                    [("axis", "x")].iter().copied(),
+                ))),
+        ));
+        for z in 0..3 {
+            w.block_changed(0, [0, 8, z], 0, 10 + z as u32);
+        }
+        w.settle_belts(0);
+        w.block_changed(0, [0, 8, 0], 10, 0);
+        struct Ground<'a>(&'a mut CreateWorld);
+        impl crate::belt::BreakWorld for Ground<'_> {
+            fn take_breaks(&mut self) -> Vec<BeltBreak> {
+                std::mem::take(&mut self.0.dims[0].belt_breaks)
+            }
+            fn replace(&mut self, b: BeltBreak) {
+                let old = self.0.dims[0].states[&b.pos];
+                assert_eq!(b.shaft, (b.pos[2] == 2).then_some(crate::kinetics::Axis::X));
+                self.0
+                    .block_changed(0, b.pos, old, if b.shaft.is_some() { 13 } else { 0 });
+            }
+        }
+        crate::belt::break_cascade(&mut Ground(&mut w));
+        // Java cascade.min.json: tick 101 has air at z=1, shaft(axis=x) at z=2.
+        assert!(!w.dims[0].states.contains_key(&[0, 8, 1]));
+        assert_eq!(w.dims[0].states.get(&[0, 8, 2]), Some(&13));
+        assert!(w.dims[0].belt_breaks.is_empty());
+        states::clear_range();
+    }
+
+    #[test]
     fn a_sloped_belt_turns_as_one_across_its_diagonal_segments() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let belt = |part: &'static str| {

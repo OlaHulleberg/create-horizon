@@ -5,6 +5,25 @@
 
 use crate::kinetics::{Axis, Dir};
 
+/// World operations used by `BeltBlock.onRemove`'s synchronous chain destruction.
+/// Replacing a segment must report its block change to the engine before returning.
+pub trait BreakWorld {
+    /// Take removals discovered by the engine's `BeltBlock.onRemove` translation.
+    fn take_breaks(&mut self) -> Vec<crate::world::BeltBreak>;
+    /// Write the shaft or air replacement, including the normal block-change notification.
+    fn replace(&mut self, broken: crate::world::BeltBreak);
+}
+
+/// Complete `BeltBlock.onRemove`: `world.setBlock` runs the next segment's removal
+/// before returning, so every descendant is replaced before the next sibling.
+/// Both game glue and standalone drivers must use this entry before settling belts.
+pub fn break_cascade(world: &mut impl BreakWorld) {
+    for broken in world.take_breaks() {
+        world.replace(broken);
+        break_cascade(world);
+    }
+}
+
 /// `BeltSlope`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Slope {
