@@ -11,8 +11,8 @@ Sunrise at the pin with an SDK built from the same checkout, signed with a throw
 |---|---|---|
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
-| `create/` | `cargo +1.99.1 test` | Pass (81 glue tests) |
-| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (665 engine tests) |
+| `create/` | `cargo +1.99.1 test` | Pass (83 glue tests) |
+| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (677 engine tests) |
 | `create/` | `cargo horizon-mod check` | Pass ("Create uses 3570 items of the API … Made for b77574e.") |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/src/engine/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
@@ -99,8 +99,10 @@ commands, screenshots read back, `/data get` and the mod's `create_debug` readou
 ### Kinetics against Create's Java
 
 The [create-fuzz](https://github.com/OlaHulleberg/create-fuzz) differential fuzzer runs random kinetic networks in
-Create 6.0.11 (NeoForge 1.21.1) and in the engine and compares where they settle; 1275 of seeds 0-1299 match. Its
-fixes, each tried in game on the build above:
+Create 6.0.11 (NeoForge 1.21.1) and in the engine and compares where they settle. Since the kinetic propagation was
+ported from Create (#9: sources, networks and Create's order) and its state is saved and loaded as Create does (#10),
+10299 of seeds 0-10299 match; the one left is #7, which waits on the mod API. Each fix, tried in game on the build
+above:
 
 | Change | Result | Evidence |
 |---|---|---|
@@ -108,6 +110,8 @@ fixes, each tried in game on the build above:
 | A motor placed facing a turning motor | Pass | Placed by the player and with `/setblock`: both stay; the second shows `Gen: -16`, turning at 16 with the first; the shaft turns between frames; same after reload |
 | Three large cogs at right angles, then a motor | Pass | The x and z cogs break and drop, the y cog stays still, as in Create |
 | A motor's speed set to overspeed the cogs it drives (#2) | Pass | Small and large cog, motor on the large one; 183 rpm pasted onto it from a clipboard: the large cog breaks, the motor runs at 183 |
+| Kinetic propagation ported (#9) | Pass | Press line at 16; member motors placed by the player and with `/setblock` (`Gen: -16`, turning at 16); three large cogs: x and z break, y stays still; motor pasted to 183 breaks the conveying cog |
+| Kinetic state saved and loaded (#10) | Pass | Two member-motor pairs keep their roles over two save/reload cycles; a world saved before #10 loads with both pairs intact and keeps them after saving again |
 
 Known differences left: the category editor's inventory shows the inventory as it was at the last change made in
 it, so items picked up while it is open appear after the next change (Create's menu syncs them at once). The game
