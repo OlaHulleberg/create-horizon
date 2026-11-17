@@ -57,39 +57,89 @@ pub fn use_depot(
     let Some(selected) = p.selected_slot(&*lv.host) else {
         return true;
     };
-    let Some(e) = items::entity(lv, pos) else {
+    let Some(_) = items::entity(lv, pos) else {
         // No block entity: the stack stays in hand.
         return true;
     };
-    let hand = p
-        .inventory_slots(&*lv.host)
-        .unwrap_or_default()
+    let hand = selected_stack(lv, p, selected);
+    let mechanical_arm = hand
+        .as_ref()
+        .is_some_and(|s| items::id_of(&*lv.host, s) == "create:mechanical_arm");
+    depot::use_top(
+        &mut DepotUse {
+            lv,
+            pos,
+            player: p,
+            player_id: player,
+            selected,
+        },
+        hand.is_none(),
+        mechanical_arm,
+    );
+    true
+}
+
+fn selected_stack(
+    lv: &ServerLevel<'_>,
+    p: PlayerRef,
+    selected: usize,
+) -> Option<mod_api::ItemStack> {
+    p.inventory_slots(&*lv.host)?
         .into_iter()
         .find(|(i, _)| *i as usize == selected)
-        .map(|(_, s)| s);
-    let facing = player_yaw(lv, p).map_or(depot::Side::North, depot::Side::of_yaw);
-    let put = hand.as_ref().map(|s| {
-        let id = items::id_of(&*lv.host, s);
-        depot::Held::put_by_player(random_angle(lv, pos), upright(&*lv.host, &id), facing)
-    });
-    let taken: Vec<_> = (0..depot::SLOTS as u32)
-        .filter_map(|i| e.item_slot(&*lv.host, i).ok().flatten())
-        .collect();
-    let mut set: Vec<(u32, Option<mod_api::ItemStack>)> =
-        (1..depot::SLOTS as u32).map(|i| (i, None)).collect();
-    set.push((0, hand.clone()));
-    if !items::set_slots(lv, pos, set) {
-        return true;
+        .map(|(_, s)| s)
+}
+
+struct DepotUse<'a, 'b> {
+    lv: &'a mut ServerLevel<'b>,
+    pos: [i32; 3],
+    player: PlayerRef,
+    player_id: u128,
+    selected: usize,
+}
+
+impl depot::PlayerUse for DepotUse<'_, '_> {
+    type Stack = mod_api::ItemStack;
+
+    fn take_contents(&mut self) -> Option<Vec<Self::Stack>> {
+        let stacks = items::slots(self.lv, self.pos, depot::SLOTS as u32)?;
+        if !items::set_slots(
+            self.lv,
+            self.pos,
+            (0..depot::SLOTS as u32).map(|i| (i, None)),
+        ) {
+            return None;
+        }
+        let dim = self.lv.dim;
+        with_world(|w| w.depot_put(dim, self.pos, None));
+        Some(stacks.into_iter().flatten().collect())
     }
-    if hand.is_some() {
-        let _ = p.set_inventory_slot(&mut *lv.host, selected as u32, None);
+
+    fn give_back(&mut self, stack: Self::Stack) {
+        items::give(&mut *self.lv.host, self.player_id, stack);
     }
-    for s in taken {
-        items::give(&mut *lv.host, player, s);
+
+    fn place_hand(&mut self) {
+        let hand = selected_stack(self.lv, self.player, self.selected);
+        let facing =
+            player_yaw(self.lv, self.player).map_or(depot::Side::North, depot::Side::of_yaw);
+        let put = hand.as_ref().map(|s| {
+            let id = items::id_of(&*self.lv.host, s);
+            depot::Held::put_by_player(
+                random_angle(self.lv, self.pos),
+                upright(&*self.lv.host, &id),
+                facing,
+            )
+        });
+        if !items::set_slots(self.lv, self.pos, vec![(0, hand)]) {
+            return;
+        }
+        let _ = self
+            .player
+            .set_inventory_slot(&mut *self.lv.host, self.selected as u32, None);
+        let dim = self.lv.dim;
+        with_world(|w| w.depot_put(dim, self.pos, put));
     }
-    let dim = lv.dim;
-    with_world(|w| w.depot_put(dim, pos, put));
-    true
 }
 
 /// The player's yaw.

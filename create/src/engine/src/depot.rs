@@ -220,18 +220,28 @@ pub fn output_place(i: usize, count: u32, block_item: bool, package: bool) -> (V
     (poses, 45.0 * i as f32)
 }
 
-/// What a player's use of a depot's top does (`SharedDepotBlockMethods.onUse`): every stack it
-/// holds goes to the player, then the one in hand (if any) is put down.
-#[derive(Debug, PartialEq)]
-pub struct Use {
-    pub to_player: Vec<usize>,
-    pub put_down: bool,
+/// Inventory boundary for `SharedDepotBlockMethods.onUse`. Giving stacks back may
+/// grow the selected stack; `place_hand` must read it after every refund.
+pub trait PlayerUse {
+    type Stack;
+    /// Remove the held stack and output buffer, in that order. None means no commit.
+    fn take_contents(&mut self) -> Option<Vec<Self::Stack>>;
+    fn give_back(&mut self, stack: Self::Stack);
+    fn place_hand(&mut self);
 }
 
-pub fn use_top(slots_full: impl Fn(usize) -> bool, hand_empty: bool) -> Use {
-    Use {
-        to_player: (0..SLOTS).filter(|&s| slots_full(s)).collect(),
-        put_down: !hand_empty,
+/// `SharedDepotBlockMethods.onUse`: remember placement eligibility before refunds,
+/// refund held and output stacks, then place the now updated hand. An initially
+/// empty hand or a mechanical arm only collects, even if refunds fill the hand.
+pub fn use_top(inventory: &mut impl PlayerUse, hand_empty: bool, mechanical_arm: bool) {
+    let Some(contents) = inventory.take_contents() else {
+        return;
+    };
+    for stack in contents {
+        inventory.give_back(stack);
+    }
+    if !hand_empty && !mechanical_arm {
+        inventory.place_hand();
     }
 }
 
@@ -405,16 +415,45 @@ mod tests {
     }
 
     #[test]
-    fn using_the_top_gives_back_everything_then_puts_down() {
-        let u = use_top(|s| s == 0 || s == 3, false);
-        assert_eq!(
-            u,
-            Use {
-                to_player: vec![0, 3],
-                put_down: true
+    fn using_the_top_refunds_before_reading_the_hand() {
+        // Java issue #26: 16 iron, then use one iron -> 17 on the depot;
+        // an empty-hand use retrieves all 17. Also exercise the 64-item boundary.
+        struct Inventory {
+            hand: u32,
+            depot: u32,
+            pocket: u32,
+        }
+        impl PlayerUse for Inventory {
+            type Stack = u32;
+            fn take_contents(&mut self) -> Option<Vec<u32>> {
+                Some(vec![std::mem::take(&mut self.depot)])
             }
-        );
-        assert!(!use_top(|_| false, true).put_down);
+            fn give_back(&mut self, count: u32) {
+                let merged = count.min(64 - self.hand);
+                self.hand += merged;
+                self.pocket += count - merged;
+            }
+            fn place_hand(&mut self) {
+                self.depot = std::mem::take(&mut self.hand);
+            }
+        }
+        let mut inv = Inventory {
+            hand: 1,
+            depot: 16,
+            pocket: 0,
+        };
+        use_top(&mut inv, false, false);
+        assert_eq!((inv.hand, inv.depot, inv.pocket), (0, 17, 0));
+        use_top(&mut inv, true, false);
+        assert_eq!((inv.hand, inv.depot), (17, 0));
+        inv.hand = 60;
+        inv.depot = 16;
+        use_top(&mut inv, false, false);
+        assert_eq!((inv.hand, inv.depot, inv.pocket), (0, 64, 12));
+        inv.hand = 1;
+        inv.depot = 16;
+        use_top(&mut inv, false, true);
+        assert_eq!((inv.hand, inv.depot), (17, 0));
     }
 
     #[test]
