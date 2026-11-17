@@ -3,10 +3,19 @@
 //! runs per tick unless something changed.
 
 use crate::Block;
+use crate::block_entity_order::{BlockEntityOrder, View, Walk};
 use crate::kinetics::{Event, Kinetics, SolveStats};
 use crate::parts::{Settings, StateInfo, is_generating, is_kinetic, parts};
 use crate::states;
 use std::collections::{HashMap, HashSet};
+
+fn entity_view(block: Block) -> Option<View> {
+    match block {
+        Block::Depot | Block::Belt => Some(View::Transport),
+        Block::FluidValve | Block::FluidTank | Block::CreativeFluidTank => Some(View::Fluid),
+        _ => None,
+    }
+}
 
 /// Whether Create keeps the block entity when `old` is replaced by `new`: the same block, or one
 /// whose `onRemove` keeps it for its own kind (`ValveHandleBlock`, `NixieTubeBlock` and
@@ -52,6 +61,7 @@ pub struct StateTable {
     block: Vec<Block>,
     info: Vec<StateInfo>,
     kinetic: Vec<bool>,
+    entity: Vec<bool>,
 }
 
 impl StateTable {
@@ -65,6 +75,7 @@ impl StateTable {
             block: Vec::new(),
             info: Vec::new(),
             kinetic: Vec::new(),
+            entity: Vec::new(),
         };
         for (name, props) in states {
             let block = name
@@ -74,7 +85,21 @@ impl StateTable {
                 .unwrap_or(Block::AndesiteCasing);
             t.kinetic.push(keeps_state(block));
             t.block.push(block);
-            t.info.push(StateInfo::read(props));
+            let mut track_entity = false;
+            let mut upper = false;
+            t.info.push(StateInfo::read(props.inspect(|&(key, value)| {
+                if key == "has_be" {
+                    track_entity = value == "true";
+                }
+                if key == "half" {
+                    upper = value == "upper";
+                }
+            })));
+            t.entity.push(
+                has_block_entity(block)
+                    && (block != Block::Track || track_entity)
+                    && (!crate::dye::is_sliding_door(block) || !upper),
+            );
         }
         t
     }
@@ -91,6 +116,11 @@ impl StateTable {
     #[inline]
     pub fn is_kinetic(&self, state: u32) -> bool {
         states::index(state).is_some_and(|i| self.kinetic.get(i as usize).copied().unwrap_or(false))
+    }
+
+    /// Whether this state creates an entity (TrackBlock.HAS_BE and lower door halves included).
+    fn has_block_entity(&self, state: u32) -> bool {
+        states::index(state).is_some_and(|i| self.entity.get(i as usize).copied().unwrap_or(false))
     }
 
     pub fn first(&self) -> u32 {
@@ -569,6 +599,67 @@ pub fn keeps_state(block: Block) -> bool {
     is_kinetic(block) || has_state(block)
 }
 
+/// Create's AllBlockEntityTypes.validBlocks, extending the engine's stateful blocks.
+/// Some world-state consumers (contacts, structural wheel blocks, controls) have no entity.
+pub fn has_block_entity(block: Block) -> bool {
+    (keeps_state(block)
+        && !matches!(
+            block,
+            Block::PoweredLatch
+                | Block::PoweredToggleLatch
+                | Block::RoseQuartzLamp
+                | Block::RedstoneContact
+                | Block::WaterWheelStructure
+                | Block::SteamWhistleExtension
+                | Block::ControllerRail
+                | Block::Controls
+        ))
+        || matches!(
+            block,
+            Block::Schematicannon
+                | Block::SchematicTable
+                | Block::LinearChassis
+                | Block::SecondaryLinearChassis
+                | Block::RadialChassis
+                | Block::ChainConveyor
+                | Block::MechanicalArm
+                | Block::ItemHatch
+                | Block::StockLink
+                | Block::RedstoneRequester
+                | Block::CreativeCrate
+                | Block::Placard
+                | Block::CopperBacktank
+                | Block::NetheriteBacktank
+                | Block::FakeTrack
+                | Block::SmallBogey
+                | Block::LargeBogey
+                | Block::CopycatPanel
+                | Block::CopycatStep
+                | Block::Clipboard
+                | Block::AndesiteTableCloth
+                | Block::BrassTableCloth
+                | Block::CopperTableCloth
+                | Block::WhiteTableCloth
+                | Block::OrangeTableCloth
+                | Block::MagentaTableCloth
+                | Block::LightBlueTableCloth
+                | Block::YellowTableCloth
+                | Block::LimeTableCloth
+                | Block::PinkTableCloth
+                | Block::GrayTableCloth
+                | Block::LightGrayTableCloth
+                | Block::CyanTableCloth
+                | Block::PurpleTableCloth
+                | Block::BlueTableCloth
+                | Block::BrownTableCloth
+                | Block::GreenTableCloth
+                | Block::RedTableCloth
+                | Block::BlackTableCloth
+        )
+        || crate::dye::is_toolbox(block)
+        || crate::dye::is_sliding_door(block)
+}
+
 /// Blocks that keep state of their own here but are not kinetic: depots.
 fn has_state(block: Block) -> bool {
     matches!(
@@ -731,24 +822,6 @@ pub struct Belt {
     pub items: crate::belt::Inventory,
 }
 
-/// Level registration order shared by kinetic, fluid and transport block entities. State changes retain a
-/// registration; replacement and unload remove it, and load registers anew.
-#[derive(Default)]
-struct BlockEntityOrder(Vec<[i32; 3]>);
-impl BlockEntityOrder {
-    fn register(&mut self, pos: [i32; 3]) {
-        if !self.0.contains(&pos) {
-            self.0.push(pos);
-        }
-    }
-    fn remove(&mut self, pos: [i32; 3]) {
-        self.0.retain(|p| *p != pos);
-    }
-    fn unload(&mut self, cx: i32, cz: i32) {
-        self.0.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-    }
-}
-
 /// Work at a level block entity's turn, rather than a subsystem phase.
 #[derive(Debug, PartialEq)]
 pub enum TransportTick {
@@ -759,7 +832,7 @@ pub enum TransportTick {
 /// Resumable level transport walk; inventories are inspected at their turn.
 pub struct TransportTicks {
     dim: usize,
-    entities: std::vec::IntoIter<[i32; 3]>,
+    entities: Walk,
 }
 impl TransportTicks {
     fn controller_turn(world: &mut CreateWorld, dim: usize, c: [i32; 3]) -> bool {
@@ -778,7 +851,7 @@ impl TransportTicks {
         false
     }
     pub fn next(&mut self, world: &mut CreateWorld) -> Option<TransportTick> {
-        for p in self.entities.by_ref() {
+        while let Some(p) = self.entities.next(&world.dims[self.dim].block_entities) {
             if world.block_at(self.dim, p) == Some(Block::Depot) {
                 return Some(TransportTick::Depot(p));
             }
@@ -864,20 +937,30 @@ impl CreateWorld {
         }
     }
 
+    /// Level entity registration survives state changes and same-entity recolouring.
+    fn register_block_entity(&mut self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+        let entities = &mut self.dims[dim].block_entities;
+        let retains = self.table.has_block_entity(new)
+            && self
+                .table
+                .get(old)
+                .zip(self.table.get(new))
+                .is_some_and(|((old, _), (new, _))| keeps_block_entity(old, new));
+        if !retains {
+            entities.remove(pos);
+        }
+        if self.table.has_block_entity(new) {
+            let view = entity_view(self.table.get(new).unwrap().0);
+            entities.register(pos, view);
+        }
+    }
+
     fn place(&mut self, dim: usize, pos: [i32; 3], state: u32) {
         let Some((block, &info)) = self.table.get(state) else {
             return;
         };
         let info = &info;
         let d = &mut self.dims[dim];
-        if d.states
-            .get(&pos)
-            .and_then(|s| self.table.get(*s))
-            .is_some_and(|(old, _)| old != block)
-        {
-            d.block_entities.remove(pos);
-        }
-        d.block_entities.register(pos);
         d.lifts.placed(pos, block, info);
         d.displays.placed(pos, block);
         match block {
@@ -1331,6 +1414,7 @@ impl CreateWorld {
     /// range tests that miss for every non-Create block.
     #[inline]
     pub fn block_changed(&mut self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+        self.register_block_entity(dim, pos, old, new);
         if self
             .table
             .get(new)
@@ -1793,7 +1877,6 @@ impl CreateWorld {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
             let d = &mut self.dims[dim];
-            d.block_entities.remove(pos);
             if d.depots.remove(&pos).is_some() {
                 d.sliding.retain(|p| *p != pos);
                 d.depot_changes.push(pos);
@@ -1900,6 +1983,10 @@ impl CreateWorld {
     /// One block the world keeps came into a loaded level (its block entity loaded), as
     /// `section_loaded` finds them in a section.
     pub fn block_loaded(&mut self, dim: usize, pos: [i32; 3], state: u32) {
+        if self.table.has_block_entity(state) {
+            let view = entity_view(self.table.get(state).unwrap().0);
+            self.dims[dim].block_entities.register(pos, view);
+        }
         if self.table.is_kinetic(state) {
             self.place(dim, pos, state);
         }
@@ -1907,13 +1994,13 @@ impl CreateWorld {
 
     pub fn section_loaded(&mut self, dim: usize, base: [i32; 3], states: &[u32; 4096]) {
         for (i, &s) in states.iter().enumerate() {
-            if self.table.is_kinetic(s) {
+            if self.table.is_kinetic(s) || self.table.has_block_entity(s) {
                 let pos = [
                     base[0] + (i & 15) as i32,
                     base[1] + (i >> 8) as i32,
                     base[2] + ((i >> 4) & 15) as i32,
                 ];
-                self.place(dim, pos, s);
+                self.block_loaded(dim, pos, s);
             }
         }
     }
@@ -2537,7 +2624,7 @@ impl CreateWorld {
         let mut stopped = Vec::new();
         let d = &mut self.dims[dim];
         let mut positions: Vec<_> = d.handles.keys().copied().collect();
-        positions.sort_by_key(|&pos| d.kinetics.registration_order(pos));
+        positions.sort_by_key(|&pos| d.block_entities.registration_order(pos).unwrap_or(u64::MAX));
         for pos in &positions {
             let handle = d.handles.get_mut(pos).unwrap();
             d.kinetics.initialize_through(*pos);
@@ -4503,7 +4590,7 @@ impl CreateWorld {
     pub fn transport_ticks(&mut self, dim: usize) -> TransportTicks {
         TransportTicks {
             dim,
-            entities: self.dims[dim].block_entities.0.clone().into_iter(),
+            entities: self.dims[dim].block_entities.walk(View::Transport),
         }
     }
 
@@ -4722,9 +4809,9 @@ impl CreateWorld {
         dim: usize,
         open: impl Fn([i32; 3]) -> Option<bool>,
     ) -> Vec<([i32; 3], bool)> {
-        let positions = self.dims[dim].block_entities.0.clone();
+        let mut positions = self.dims[dim].block_entities.walk(View::Fluid);
         let mut out = Vec::new();
-        for pos in positions {
+        while let Some(pos) = positions.next(&self.dims[dim].block_entities) {
             let d = &mut self.dims[dim];
             if d.plumbing.valves.contains_key(&pos) {
                 d.kinetics.initialize_through(pos);
@@ -4943,6 +5030,49 @@ mod tests {
         w.settle_belts(0);
         w.tick(0, &mut Vec::new());
         w
+    }
+
+    #[test]
+    fn registrations_include_only_create_block_entities() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names = [
+            ("create:depot", vec![]),
+            ("create:depot", vec![("waterlogged", "true")]),
+            ("create:shaft", vec![("axis", "x")]),
+            ("create:andesite_casing", vec![]),
+            ("create:redstone_contact", vec![]),
+            ("create:steam_whistle_extension", vec![]),
+            ("create:clipboard", vec![]),
+            ("create:track", vec![("has_be", "false")]),
+            ("create:track", vec![("has_be", "true")]),
+            ("create:train_door", vec![("half", "upper")]),
+            ("create:train_door", vec![("half", "lower")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names
+                .iter()
+                .map(|(name, props)| (*name, props.iter().copied())),
+        ));
+        for (i, _) in names.iter().enumerate() {
+            let state = 10 + i as u32;
+            let pos = [i as i32, 0, 0];
+            w.block_loaded(0, pos, state);
+            assert_eq!(
+                w.dims[0].block_entities.registration_order(pos).is_some(),
+                matches!(state, 10 | 11 | 12 | 16 | 18 | 20)
+            );
+        }
+        let a = [0, 0, 0];
+        let original = w.dims[0].block_entities.registration_order(a);
+        w.block_changed(0, a, 10, 11);
+        assert_eq!(w.dims[0].block_entities.registration_order(a), original);
+        w.block_changed(0, a, 11, 12);
+        assert!(w.dims[0].block_entities.registration_order(a) > original);
+        w.block_changed(0, [6, 0, 0], 16, 13);
+        assert_eq!(w.dims[0].block_entities.registration_order([6, 0, 0]), None);
+        states::clear_range();
     }
 
     #[test]

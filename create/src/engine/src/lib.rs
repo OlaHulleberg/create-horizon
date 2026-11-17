@@ -7,6 +7,7 @@ pub mod basin;
 pub mod belt;
 pub mod belt_connector;
 pub mod bezier;
+mod block_entity_order;
 pub mod board;
 pub mod burner;
 pub mod cart;
