@@ -76,6 +76,8 @@ pub fn use_depot(
         hand.is_none(),
         mechanical_arm,
     );
+    // DepotBehaviour.write saves HeldItem's motion at the accepted interaction.
+    super::super::persist::publish(lv);
     true
 }
 

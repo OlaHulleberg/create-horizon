@@ -342,7 +342,9 @@ impl Kinetics {
             self.apply_new_speed(id, prev, generated, source, events);
         }
         let n = &self.nodes[id as usize];
-        if n.live && n.state.net.is_some() {
+        // destroyBlock does not unwind updateGeneratedRotation: the retained
+        // generator still updates its network after applyNewSpeed destroys it.
+        if n.state.net.is_some() {
             let net = n.state.net;
             let capacity = if generated == 0.0 {
                 0.0
@@ -398,8 +400,12 @@ impl Kinetics {
         } else {
             self.handle_removed(id, events);
             self.change_speed(id, generated);
-            self.nodes[id as usize].state.source = None;
-            self.set_network(id, Some(network_id(self.nodes[id as usize].pos)));
+            // applyNewSpeed only creates an identity when overpowering a source.
+            // Reapplying an independent generator retains its current network.
+            if source.is_some() {
+                self.nodes[id as usize].state.source = None;
+                self.set_network(id, Some(network_id(self.nodes[id as usize].pos)));
+            }
             self.propagate_new_source(id, events);
         }
     }

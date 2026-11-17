@@ -2646,7 +2646,20 @@ impl CreateWorld {
             .handles
             .insert(pos, crate::valve::Handle { saved, cooldown: 0 });
         // HandCrankBlockEntity.read restores fields without updateGeneratedRotation.
-        let settings = Settings { crank, ..old };
+        // ValveHandleBlockEntity.read retains the use's SequenceContext. Keep
+        // the owned input alongside it so later speed changes do not clear it.
+        let context = (crate::dye::is_valve_handle(self.block_at(dim, pos).unwrap())
+            && saved.in_use > 0)
+            .then_some(crate::kinetics::Context {
+                distance: false,
+                value: saved.angle.unsigned_abs() as f32,
+                run: 0,
+            });
+        let settings = Settings {
+            crank,
+            context,
+            ..old
+        };
         self.dims[dim].settings.insert(pos, settings);
         if let Some((block, info)) = self.table.get(state) {
             let [a, b] = parts(block, info, &settings);
@@ -6359,6 +6372,41 @@ mod tests {
         assert_eq!(
             w.dims[0].kinetics.sequence_limit(shaft, 0, false),
             Some(41.0)
+        );
+        states::clear_range();
+    }
+
+    #[test]
+    fn valve_same_tick_reload_keeps_owned_sequence() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        states::set_range(10, 1);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            [("create:copper_valve_handle", [("facing", "up")].into_iter())].into_iter(),
+        ));
+        let p = [0, 8, 0];
+        w.block_changed(0, p, 0, 10);
+        w.tick(0, &mut Vec::new());
+        assert!(w.use_valve(0, p, false, -180));
+        let handle = w.saved_handle(0, p).unwrap();
+        let kinetic = w.dims[0].kinetics.saved_state(p, 0).unwrap();
+        w.column_unloaded(0, 0, 0);
+        w.block_loaded(0, p, 10);
+        w.restore_handle(0, p, handle);
+        w.dims[0].kinetics.restore_state(p, 0, kinetic);
+        w.tick_cranks(0);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.dims[0].settings[&p].context.unwrap().value, 180.0);
+        assert_eq!(
+            w.dims[0]
+                .kinetics
+                .saved_state(p, 0)
+                .unwrap()
+                .sequence
+                .unwrap()
+                .0
+                .value,
+            180.0
         );
         states::clear_range();
     }

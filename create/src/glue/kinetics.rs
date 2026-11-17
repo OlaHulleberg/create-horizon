@@ -530,6 +530,23 @@ fn tick_brackets(lv: &mut ServerLevel<'_>) {
     }
 }
 
+/// Apply synchronous generator/propagation effects before interaction publication.
+pub(crate) fn publish_interaction_effects(lv: &mut ServerLevel<'_>) {
+    loop {
+        let events =
+            with_world(|w| w.dims[lv.dim].kinetics.take_pending_events()).unwrap_or_default();
+        if events.is_empty() {
+            break;
+        }
+        for event in events {
+            if let Event::Break { pos } = event {
+                lv.destroy_block(pos, true);
+                apply_chain_shapes(lv);
+            }
+        }
+    }
+}
+
 /// A level's solve: the network solved, the blocks Create breaks broken, and every changed
 /// part's speed put in its block entity's data for its clients.
 fn tick_solve(lv: &mut ServerLevel<'_>) {

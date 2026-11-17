@@ -642,6 +642,12 @@ impl Kinetics {
         true
     }
 
+    /// Effects of synchronous RotationPropagator calls (including destroyBlock).
+    /// Hosts apply these before publishing an accepted interaction, without ticking.
+    pub fn take_pending_events(&mut self) -> Vec<Event> {
+        std::mem::take(&mut self.pending_events)
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -1675,6 +1681,38 @@ mod tests {
             }
         )));
         assert_eq!(k.network([0, 0, 0], 0).unwrap().1, 0.0);
+    }
+
+    #[test]
+    fn destroyed_generator_finishes_network_updates() {
+        let mut k = Kinetics::new();
+        let (a, b) = ([5, 7, -3], [5, 8, -3]);
+        let motor = |face, rpm| Part {
+            capacity: 16384.0,
+            ..motor(face, rpm)
+        };
+        k.set(a, 0, motor(Dir::Up, -32.0));
+        solve(&mut k);
+        k.set(b, 0, motor(Dir::Down, 16.0));
+        solve(&mut k);
+        k.set(a, 0, motor(Dir::Up, 32.0));
+        k.set(b, 0, motor(Dir::Down, 32.0));
+        let saved = k.saved_state(a, 0).unwrap().network.unwrap();
+        assert_eq!(saved.capacity, 524288.0);
+        assert_eq!(saved.size, 1);
+    }
+
+    #[test]
+    fn reapplying_generator_retains_network_identity() {
+        let mut k = Kinetics::new();
+        let p = [5, 7, -3];
+        k.set(p, 0, motor(Dir::Up, -32.0));
+        solve(&mut k);
+        let id = k.at[&p][0];
+        // applyNewSpeed's independent reapply branch does not call setNetwork.
+        k.set_network(id, Some(123));
+        k.set(p, 0, motor(Dir::Up, 32.0));
+        assert_eq!(k.nodes[id as usize].state.net, Some(123));
     }
 
     #[test]
