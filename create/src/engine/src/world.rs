@@ -4450,6 +4450,50 @@ mod tests {
     }
 
     #[test]
+    fn gauges_reset_comparators_when_their_source_stops() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names = [
+            ("create:creative_motor", vec![("facing", "east")]),
+            (
+                "create:speedometer",
+                vec![("facing", "up"), ("axis_along_first", "true")],
+            ),
+            (
+                "create:stressometer",
+                vec![("facing", "up"), ("axis_along_first", "true")],
+            ),
+            ("create:mechanical_press", vec![("facing", "east")]),
+        ];
+        states::set_range(2, names.len() as u32);
+        let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
+        let mut w = CreateWorld::new(table);
+        for (x, state) in [2, 3, 4, 5].into_iter().enumerate() {
+            w.block_changed(0, [x as i32, 64, 0], 0, state);
+            w.tick(0, &mut Vec::new());
+        }
+        // Java: 16 rpm gives ceil(.24 * 14) = 4; press stress / motor capacity
+        // is 128 / 262144, giving comparator 1.
+        for (x, expected) in [(1, 4), (2, 1)] {
+            assert_eq!(
+                crate::gauge::analog_output(w.dims[0].gauges[&[x, 64, 0]].shown.dial),
+                expected
+            );
+        }
+        w.take_gauge_changes(0);
+        w.block_changed(0, [0, 64, 0], 2, 0);
+        w.tick(0, &mut Vec::new());
+        for x in [1, 2] {
+            assert_eq!(
+                crate::gauge::analog_output(w.dims[0].gauges[&[x, 64, 0]].shown.dial),
+                0
+            );
+        }
+        let mut changed = w.take_gauge_changes(0);
+        changed.sort();
+        assert_eq!(changed, [[1, 64, 0], [2, 64, 0]]);
+    }
+
+    #[test]
     fn worlds_solve_on_change_and_pay_nothing_when_steady() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = world();

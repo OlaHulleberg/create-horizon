@@ -1093,6 +1093,11 @@ impl Kinetics {
                 touched_nets.insert(n.state.net);
             } else {
                 stats.nodes += 1;
+                // KineticBlockEntity.removeSource calls onSpeedChanged after setNetwork(null).
+                // Gauges must read the stopped part even though no network can enumerate it.
+                if n.sub == 0 && self.watched.contains(&n.pos) {
+                    self.touched.push(n.pos);
+                }
             }
         }
         changed.clear();
