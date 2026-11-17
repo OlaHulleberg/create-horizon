@@ -129,6 +129,7 @@ above:
 | A depot used with the same item (#26) | Pass | 16 iron put on a depot, then one more iron used on it: the depot holds 17 and the hand is empty, as Create (`SharedDepotBlockMethods.onUse` gives back before placing) |
 | A belt stack behind one that enters a depot (#27) | Not separately visible | One tick of follow-on movement; checked by create-fuzz (the three item cases match, 129 seeds changed to match, none newly differ) |
 | A gearbox's and a split shaft's own speed (#28) | Pass | Motor east into a gearbox: the gearbox's saved speed is the incoming 16, the side shaft 16, the far shaft -16, the same signs as Create for that input (create-fuzz), and the same after reload |
+| A crank's or valve's use saved and restored (#29) | Partly in game | A crank turned with ticks frozen saves `HandleState` with `InUse: 8` while turning at 32 (written only when it changes), and the world reloads without errors; the 8 ticks run out while the world loads, so the restore itself is checked by `crank_use_survives_cold_load`, `valve_use_survives_cold_load` and create-fuzz's reload cases |
 | Kinetic state saved and loaded (#10) | Pass | Two member-motor pairs keep their roles over two save/reload cycles; a world saved before #10 loads with both pairs intact and keeps them after saving again |
 
 Known differences left: the category editor's inventory shows the inventory as it was at the last change made in
