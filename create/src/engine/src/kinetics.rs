@@ -2,7 +2,9 @@
 //!
 //! Per-node sources and network identities follow Create's block entity propagation.
 
+mod legacy_load;
 mod networks;
+use legacy_load::LoadOrigin;
 mod propagation;
 mod scheduling;
 mod state;
@@ -430,6 +432,7 @@ struct Node {
     /// game shows every part (a still one too).
     fresh: bool,
     report_queued: bool,
+    load_origin: LoadOrigin,
 }
 
 /// The kinetic parts of one dimension.
@@ -443,6 +446,8 @@ pub struct Kinetics {
     /// `ChainConveyorBlockEntity.propagateRotationTo`): both sides list each other.
     far: HashMap<[i32; 3], Vec<[i32; 3]>>,
     dirty: Vec<u32>,
+    legacy_loads: Vec<(u32, u64)>,
+    legacy_loading: bool,
     changed: Vec<u32>,
     saved_dirty: HashSet<[i32; 3]>,
     pending_events: Vec<Event>,
@@ -500,6 +505,9 @@ impl Kinetics {
     pub fn saved_state(&self, pos: [i32; 3], sub: u8) -> Option<SavedKineticState> {
         let id = *self.at.get(&pos)?.get(sub as usize)?;
         let n = self.nodes.get(id as usize)?;
+        if n.load_origin == LoadOrigin::Legacy {
+            return None;
+        }
         Some(SavedKineticState {
             speed: n.state.theoretical,
             sequence: n.state.seq,
@@ -531,6 +539,7 @@ impl Kinetics {
             return false;
         }
         let n = &mut self.nodes[id as usize];
+        n.load_origin = LoadOrigin::Saved;
         n.state.theoretical = saved.speed;
         n.state.seq = saved.sequence;
         n.state.source = saved.source;
@@ -551,6 +560,9 @@ impl Kinetics {
         };
         // read deliberately leaves the constructor's updateSpeed=true, as Create does.
         n.state.update_speed = true;
+        if self.legacy_loading {
+            self.legacy_loads.push((id, n.stamp));
+        }
         self.mark_changed(id);
         true
     }
@@ -568,7 +580,8 @@ impl Kinetics {
     }
 
     pub fn has_dirty(&self) -> bool {
-        !self.dirty.is_empty()
+        !self.legacy_loads.is_empty()
+            || !self.dirty.is_empty()
             || !self.reactivation_due.is_empty()
             || !self.pending_events.is_empty()
             || !self.changed.is_empty()
@@ -637,6 +650,9 @@ impl Kinetics {
             if self.nodes[existing as usize].part == part {
                 return;
             }
+            if self.prepare_legacy_part_change(existing, part) {
+                return;
+            }
             let old = self.nodes[existing as usize].part;
             let mut events = Vec::new();
             // Scroll settings invoke updateGeneratedRotation immediately. Connection changes
@@ -668,6 +684,7 @@ impl Kinetics {
             live: true,
             fresh: true,
             report_queued: false,
+            load_origin: LoadOrigin::Placement,
         };
         let id = match self.free.pop() {
             Some(id) => {
@@ -1008,12 +1025,16 @@ impl Kinetics {
         if !self.has_dirty() {
             return SolveStats::default();
         }
+        self.migrate_saves_without_kinetic_state();
         events.append(&mut self.pending_events);
         let mut pending = std::mem::take(&mut self.dirty);
         pending.sort_by_key(|&id| self.nodes[id as usize].stamp);
         pending.dedup();
         for id in pending {
             if !self.nodes[id as usize].live {
+                continue;
+            }
+            if self.nodes[id as usize].load_origin == LoadOrigin::Legacy {
                 continue;
             }
             if self.nodes[id as usize].state.update_speed {
