@@ -12,7 +12,7 @@ Sunrise at the pin with an SDK built from the same checkout, signed with a throw
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `create/` | `cargo +1.99.1 test` | Pass (87 glue tests) |
-| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (717 engine tests) |
+| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (719 engine tests) |
 | `create/` | `cargo horizon-mod check` | Pass ("Create uses 3578 items of the API … Made for b77574e.") |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/src/engine/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
@@ -136,6 +136,7 @@ above:
 | Entity state published after every subsystem's tick (#32, #35) | Pass | A sequenced gearshift running its default turn, ticks frozen and stepped by 3: its saved `Timer` 3, 6, 9 and `InstructionProgress` 14.4, 28.8, 43.2 follow the live run each step (it was saved every 10 ticks); a depot filled by a belt is published after the belt phase, checked by create-fuzz's reload cases |
 | A belt's saved inventory follows its items (#36) | Not separately visible | Belt items live in the column attachment, which `/data` can't show; checked by create-fuzz (the case matches: saved positions follow the moving items, published only when changed) |
 | Loaded entities: sequencer timing and first-tick network enrolment (#37, #38) | Partly in game | A sequencer saved at tick 8 of its 21-tick turn reloads and ends its turn normally (the rest runs out while the world loads), with no errors; the continued timing and the enrolment order are checked by create-fuzz's reload cases, all matching |
+| Fluid tanks split and reform as Create (#39, #40) | Pass | A 2x2x3 tank made with `/fill`, a lower corner broken: the upper 2x2x2 reforms as one tank (bottom at y+1, top at y+2) and the remaining lower block stands alone, as Create; window flags stay per member (create-fuzz) |
 | Kinetic state saved and loaded (#10) | Pass | Two member-motor pairs keep their roles over two save/reload cycles; a world saved before #10 loads with both pairs intact and keeps them after saving again |
 
 Known differences left: the category editor's inventory shows the inventory as it was at the last change made in
