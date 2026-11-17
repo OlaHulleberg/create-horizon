@@ -12,7 +12,7 @@ Sunrise at the pin with an SDK built from the same checkout, signed with a throw
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `create/` | `cargo +1.99.1 test` | Pass (84 glue tests) |
-| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (701 engine tests) |
+| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (703 engine tests) |
 | `create/` | `cargo horizon-mod check` | Pass ("Create uses 3578 items of the API … Made for b77574e.") |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/src/engine/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
@@ -128,6 +128,7 @@ above:
 | Empty running belts tick (#25) | Not separately visible | A 1/8-block start offset and a one-tick handoff; checked by create-fuzz (both cases match, 129 seeds changed to match, none newly differ) |
 | A depot used with the same item (#26) | Pass | 16 iron put on a depot, then one more iron used on it: the depot holds 17 and the hand is empty, as Create (`SharedDepotBlockMethods.onUse` gives back before placing) |
 | A belt stack behind one that enters a depot (#27) | Not separately visible | One tick of follow-on movement; checked by create-fuzz (the three item cases match, 129 seeds changed to match, none newly differ) |
+| A gearbox's and a split shaft's own speed (#28) | Pass | Motor east into a gearbox: the gearbox's saved speed is the incoming 16, the side shaft 16, the far shaft -16, the same signs as Create for that input (create-fuzz), and the same after reload |
 | Kinetic state saved and loaded (#10) | Pass | Two member-motor pairs keep their roles over two save/reload cycles; a world saved before #10 loads with both pairs intact and keeps them after saving again |
 
 Known differences left: the category editor's inventory shows the inventory as it was at the last change made in
