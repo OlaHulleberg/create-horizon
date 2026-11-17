@@ -753,6 +753,17 @@ impl Kinetics {
         self.dirty.push(id);
     }
 
+    /// `ChainGearshiftBlockEntity.neighbourChanged`: defer the analog change until its tick.
+    pub fn chain_signal_changed(&mut self, pos: [i32; 3], modifier: f32) {
+        if let Some(ids) = self.at.get(&pos)
+            && ids[0] != NONE
+        {
+            let id = ids[0];
+            self.nodes[id as usize].state.chain_signal = Some(modifier);
+            self.dirty.push(id);
+        }
+    }
+
     /// `GearshiftBlock.detachKinetics`: remove downstream rotation and attach next tick,
     /// retaining the entity's own source and network.
     pub fn detach_transmission(&mut self, pos: [i32; 3]) {
@@ -1152,6 +1163,15 @@ impl Kinetics {
             }
             if !self.nodes[id as usize].live {
                 continue;
+            }
+            // ChainGearshiftBlockEntity.tick runs the base tick before analogSignalChanged.
+            if let Some(modifier) = self.nodes[id as usize].state.chain_signal.take() {
+                self.handle_removed(id, events);
+                self.remove_source(id);
+                if let Some(chain) = &mut self.nodes[id as usize].part.chain {
+                    chain.modifier = modifier;
+                }
+                self.propagate_new_source(id, events);
             }
             let n = &self.nodes[id as usize];
             if n.state.new_part

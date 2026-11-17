@@ -28,6 +28,8 @@ pub(super) struct KineticState {
     pub(super) update_speed: bool,
     pub(super) source: Option<PartLocation>,
     pub(super) reactivate_source: bool,
+    /// ChainGearshiftBlockEntity.signalChanged: input applied after the base tick.
+    pub(super) chain_signal: Option<f32>,
 }
 impl Default for KineticState {
     fn default() -> Self {
@@ -45,6 +47,7 @@ impl Default for KineticState {
             update_speed: true,
             source: None,
             reactivate_source: false,
+            chain_signal: None,
         }
     }
 }

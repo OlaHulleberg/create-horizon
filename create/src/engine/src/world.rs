@@ -1215,6 +1215,17 @@ impl CreateWorld {
         }
     }
 
+    /// `Level.setBlock` with UPDATE_KNOWN_SHAPE skips updateIndirectNeighbourShapes.
+    /// Record the committed state before the normal block-change notification so the
+    /// surviving block entity keeps its kinetic information.
+    pub fn setting_known_shape(&mut self, dim: usize, pos: [i32; 3], new: u32) {
+        if let Some(old) = self.dims[dim].states.get_mut(&pos)
+            && self.table.get(*old).map(|(b, _)| b) == self.table.get(new).map(|(b, _)| b)
+        {
+            *old = new;
+        }
+    }
+
     /// `GearshiftBlock.neighborChanged`: detach before committing a redstone power change.
     /// Direct state replacement does not run this callback.
     pub fn transmission_power_changing(&mut self, dim: usize, pos: [i32; 3]) {
@@ -2672,14 +2683,16 @@ impl CreateWorld {
     /// chain gearshift at `pos` (`getBestNeighborSignal`); its chain turns again when it changed.
     pub fn set_chain_signal(&mut self, dim: usize, pos: [i32; 3], signal: i32) {
         let d = &mut self.dims[dim];
-        let Some(&state) = d.states.get(&pos) else {
+        if !d.states.contains_key(&pos) {
             return;
-        };
+        }
         let signal = signal.clamp(0, 15) as i8;
         let known = d.settings.get(&pos).copied();
         if known.is_none_or(|s| s.signal != signal) {
             let old = known.unwrap_or_default();
-            self.set_settings(dim, pos, state, Settings { signal, ..old });
+            d.settings.insert(pos, Settings { signal, ..old });
+            d.kinetics
+                .chain_signal_changed(pos, crate::chain::modifier_for_signal(i32::from(signal)));
         }
     }
 
@@ -5625,6 +5638,75 @@ mod tests {
         w.column_unloaded(0, 1, 2);
         assert_eq!(w.speed(0, [18, 64, 32]), None);
         assert!(w.dims[0].kinetics.is_empty());
+        states::clear_range();
+    }
+
+    #[test]
+    fn analog_chain_sweep_breaks_on_tick_118() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names = [
+            ("create:creative_motor", vec![("facing", "east")]),
+            (
+                "create:adjustable_chain_gearshift",
+                vec![("axis", "x"), ("powered", "false")],
+            ),
+            (
+                "create:adjustable_chain_gearshift",
+                vec![("axis", "x"), ("powered", "true")],
+            ),
+        ];
+        states::set_range(10, 3);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let pos = [0, 8, 0];
+        let strengths = [
+            7, 5, 0, 5, 13, 1, 14, 0, 10, 12, 1, 6, 8, 5, 7, 5, 10, 14, 5, 3, 11,
+        ];
+        let mut state = 11;
+        for tick in 0..120 {
+            if tick == 1 {
+                w.block_changed(0, [-1, 8, 0], 0, 10);
+            }
+            if tick == 2 {
+                w.set_settings(
+                    0,
+                    [-1, 8, 0],
+                    10,
+                    Settings {
+                        motor_rpm: 32.0,
+                        ..Settings::default()
+                    },
+                );
+            }
+            if tick == 10 {
+                w.block_changed(0, pos, 0, state);
+            }
+            if (38..=118).contains(&tick) && (tick - 38) % 4 == 0 {
+                let signal = strengths[(tick - 38) / 4];
+                let next = if signal == 0 { 11 } else { 12 };
+                if next != state {
+                    w.setting_known_shape(0, pos, next);
+                    w.block_changed(0, pos, state, next);
+                    state = next;
+                }
+                w.set_chain_signal(0, pos, signal);
+            }
+            let mut events = Vec::new();
+            w.tick(0, &mut events);
+            let broke = events
+                .iter()
+                .any(|e| matches!(e, Event::Break {pos: p} if *p == pos));
+            assert_eq!(
+                broke,
+                tick == 118,
+                "Java stays at 32 rpm until signal 11 on tick 118 (checkpoint 119 is air), tick {tick}"
+            );
+            if (10..118).contains(&tick) {
+                assert_eq!(w.speed(0, pos), Some(32.0));
+            }
+        }
         states::clear_range();
     }
 

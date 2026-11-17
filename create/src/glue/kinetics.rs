@@ -14,6 +14,7 @@ use create_engine::kinetics::{
     Axis, Context, Dir, Event, PartLocation, SavedKineticState, SavedNetwork,
 };
 use create_engine::world::keeps_state;
+use mod_api::HostBlockStates;
 use mod_api::{
     BlockEntityDrawContext, BlockEntityOnLoadEvent, BlockEntityPart, BlockEntitySubmitEvent,
     BlockEntityTypeKey, BlockEntityUpdateTagEvent, BlockKey, BlockPart, ClientHost, Compound,
@@ -388,7 +389,23 @@ fn tick_inputs(lv: &mut ServerLevel<'_>) {
         if now != was {
             with_world(|w| w.transmission_power_changing(dim, pos));
             let value = if now { "true" } else { "false" };
-            lv.set_property(pos, "powered", value, super::server::UPDATE_CLIENTS);
+            if with_world(|w| w.reads_signal(state)) == Some(true) {
+                if let Some(next) = lv
+                    .block_state(pos)
+                    .and_then(|s| s.with(&lv.host.block_states(), "powered", value).ok())
+                {
+                    with_world(|w| {
+                        w.setting_known_shape(dim, pos, super::states::id_or_none(next))
+                    });
+                    lv.set_state(
+                        pos,
+                        next,
+                        super::server::UPDATE_CLIENTS | mod_api::BlockUpdateFlags::KNOWN_SHAPE,
+                    );
+                }
+            } else {
+                lv.set_property(pos, "powered", value, super::server::UPDATE_CLIENTS);
+            }
         }
         // `ChainGearshiftBlockEntity.neighbourChanged`: the signal's strength sets its chain.
         if with_world(|w| w.reads_signal(state)) == Some(true) {
