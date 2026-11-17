@@ -165,7 +165,7 @@ impl Kinetics {
                     continue;
                 }
                 if old.net != state.net {
-                    self.networks.remove(old.net, id);
+                    self.networks.remove(old.net, id, &self.nodes);
                 }
                 let first = old.new_part;
                 state.new_part = false;

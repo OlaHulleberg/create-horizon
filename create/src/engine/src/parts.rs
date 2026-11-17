@@ -316,6 +316,7 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
             // CreativeMotorBlock.hasShaftTowards: its facing; getGeneratedSpeed converts the
             // setting to that face's direction.
             one(Part {
+                initialization: crate::kinetics::GeneratorInitialization::EveryLoad,
                 generated: convert_to_direction(settings.motor_rpm, f),
                 ..Part::half(f)
             })
@@ -324,6 +325,7 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
             // HandCrankBlock.hasShaftTowards: the face it hangs from; HandCrankBlockEntity
             // .getGeneratedSpeed: 32 while turned (negated backwards), in its facing's direction.
             one(Part {
+                initialization: crate::kinetics::GeneratorInitialization::Placement,
                 generated: convert_to_direction(f32::from(settings.crank) * CRANK_RPM, f),
                 ..Part::half(f.opposite())
             })
@@ -333,6 +335,7 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         b if crate::dye::is_valve_handle(b) => s.facing.map_or([None, None], |f| {
             [
                 Some(Part {
+                    initialization: crate::kinetics::GeneratorInitialization::Placement,
                     generated: convert_to_direction(f32::from(settings.crank) * CRANK_RPM, f),
                     impact: Block::CopperValveHandle.impact(),
                     capacity: Block::CopperValveHandle.capacity(),

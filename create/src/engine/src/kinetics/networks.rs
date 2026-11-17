@@ -2,12 +2,13 @@
 use super::Node;
 use std::collections::{HashMap, HashSet};
 
-/// Identity of Create's KineticBlockEntity within this dimension. Shaft faces are ports,
+/// Generation identity of Create's KineticBlockEntity within this dimension. Shaft faces are ports,
 /// not separate entities (`SplitShaftBlockEntity.getRotationSpeedModifier`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct Entity([i32; 3]);
+struct Entity(u64);
 
 /// One Java network member, with all engine ports that must receive its figures.
+#[derive(Clone)]
 struct Member {
     ports: HashSet<u32>,
     stress: f32,
@@ -17,7 +18,7 @@ struct Member {
 #[derive(Default)]
 pub(super) struct KineticNetwork {
     members: HashMap<Entity, Member>,
-    sources: HashMap<Entity, f32>,
+    sources: HashMap<Entity, Member>,
     stress: f32,
     capacity: f32,
     initialized: bool,
@@ -26,6 +27,11 @@ pub(super) struct KineticNetwork {
     unloaded_members: u32,
 }
 impl KineticNetwork {
+    #[cfg(test)]
+    pub(super) fn unloaded_count(&self) -> u32 {
+        self.unloaded_members
+    }
+
     /// KineticNetwork.initFromTE accounts for members not yet loaded.
     pub(super) fn init_from_te(&mut self, capacity: f32, stress: f32, size: u32) {
         if self.initialized {
@@ -47,7 +53,7 @@ impl KineticNetwork {
         last_stress: f32,
     ) {
         let n = &nodes[id as usize];
-        if self.members.contains_key(&Entity(n.pos)) {
+        if self.members.contains_key(&Entity(n.entity)) {
             self.add(id, nodes);
             return;
         }
@@ -65,9 +71,9 @@ impl KineticNetwork {
     pub(super) fn add(&mut self, id: u32, nodes: &mut [Node]) -> bool {
         self.initialized = true;
         let n = &mut nodes[id as usize];
-        let enrolled = self.members.contains_key(&Entity(n.pos));
+        let enrolled = self.members.contains_key(&Entity(n.entity));
         self.members
-            .entry(Entity(n.pos))
+            .entry(Entity(n.entity))
             .or_insert_with(|| Member {
                 ports: HashSet::new(),
                 stress: n.part.impact,
@@ -81,13 +87,22 @@ impl KineticNetwork {
         n.calculate_stress_applied();
         if n.part.generated != 0.0 {
             n.calculate_added_stress_capacity();
-            self.sources.insert(Entity(n.pos), n.part.capacity);
+            self.sources.insert(
+                Entity(n.entity),
+                Member {
+                    ports: HashSet::from([id]),
+                    stress: n.part.capacity,
+                },
+            );
         }
         true
     }
     /// Detach a port; the entity leaves only when its last enrolled port leaves.
-    pub(super) fn remove(&mut self, id: u32) {
+    pub(super) fn remove(&mut self, id: u32, nodes: &[Node]) {
         self.members.retain(|entity, member| {
+            if entity.0 != nodes[id as usize].entity {
+                return true;
+            }
             member.ports.remove(&id);
             if member.ports.is_empty() {
                 self.sources.remove(entity);
@@ -98,14 +113,19 @@ impl KineticNetwork {
         });
     }
     pub(super) fn update_capacity_for(&mut self, id: u32, capacity: f32, nodes: &[Node]) {
-        self.sources
-            .insert(Entity(nodes[id as usize].pos), capacity);
+        self.sources.insert(
+            Entity(nodes[id as usize].entity),
+            Member {
+                ports: HashSet::from([id]),
+                stress: capacity,
+            },
+        );
     }
     pub(super) fn update_stress_for(&mut self, id: u32, stress: f32, nodes: &[Node]) {
         // KineticNetwork.updateStressFor: `members.put(be, stress)`, nothing else.
         let member = self
             .members
-            .entry(Entity(nodes[id as usize].pos))
+            .entry(Entity(nodes[id as usize].entity))
             .or_insert_with(|| Member {
                 ports: HashSet::new(),
                 stress,
@@ -114,33 +134,33 @@ impl KineticNetwork {
         member.stress = stress;
     }
     fn calculate_capacity(&mut self, nodes: &[Node]) -> f32 {
+        // KineticNetwork.calculateCapacity prunes sources independently of members.
+        self.sources.retain(|entity, source| {
+            source
+                .ports
+                .retain(|&id| nodes[id as usize].live && nodes[id as usize].entity == entity.0);
+            !source.ports.is_empty()
+        });
         self.sources
-            .iter()
-            .map(|(entity, capacity)| {
-                let speed = self
-                    .members
-                    .get(entity)
-                    .into_iter()
-                    .flat_map(|m| &m.ports)
-                    .map(|&id| nodes[id as usize].part.generated.abs())
-                    .fold(0.0_f32, f32::max);
-                capacity * speed
+            .values()
+            .map(|source| {
+                source.stress
+                    * source
+                        .ports
+                        .iter()
+                        .map(|&id| nodes[id as usize].part.generated.abs())
+                        .fold(0.0_f32, f32::max)
             })
             .sum::<f32>()
             + self.unloaded_capacity
     }
     fn calculate_stress(&mut self, nodes: &[Node]) -> f32 {
+        // Java compares the world block entity with the retained object reference.
         self.members.retain(|entity, member| {
-            member.ports.retain(|&id| {
-                // Java checks world block-entity identity, not its network field.
-                nodes[id as usize].live
-            });
-            if member.ports.is_empty() {
-                self.sources.remove(entity);
-                false
-            } else {
-                true
-            }
+            member
+                .ports
+                .retain(|&id| nodes[id as usize].live && nodes[id as usize].entity == entity.0);
+            !member.ports.is_empty()
         });
         self.members
             .values()
@@ -171,7 +191,7 @@ impl KineticNetwork {
             return None;
         }
         self.capacity = capacity;
-        Some(self.sync())
+        Some(self.sync(nodes))
     }
     /// KineticNetwork.updateStress recalculates and syncs stress changes immediately.
     pub(super) fn update_stress(&mut self, nodes: &[Node]) -> Option<NetworkSync> {
@@ -180,7 +200,7 @@ impl KineticNetwork {
             return None;
         }
         self.stress = stress;
-        Some(self.sync())
+        Some(self.sync(nodes))
     }
     /// KineticNetwork.updateNetwork: calculate once and sync only when totals changed.
     pub(super) fn update_network(&mut self, nodes: &[Node]) -> Option<NetworkSync> {
@@ -191,15 +211,19 @@ impl KineticNetwork {
         }
         self.stress = stress;
         self.capacity = capacity;
-        Some(self.sync())
+        Some(self.sync(nodes))
     }
     /// KineticNetwork.sync enumerates only this network's members.
-    fn sync(&self) -> NetworkSync {
+    fn sync(&self, nodes: &[Node]) -> NetworkSync {
         NetworkSync {
             members: self
                 .members
-                .values()
-                .flat_map(|m| m.ports.iter().copied())
+                .iter()
+                .flat_map(|(entity, m)| {
+                    m.ports.iter().copied().filter(|&id| {
+                        nodes[id as usize].live && nodes[id as usize].entity == entity.0
+                    })
+                })
                 .collect(),
             stress: self.stress,
             capacity: self.capacity,
@@ -236,12 +260,12 @@ impl TorquePropagator {
     pub(super) fn take_dirty(&mut self) -> HashSet<Option<i64>> {
         std::mem::take(&mut self.dirty)
     }
-    pub(super) fn remove(&mut self, net: Option<i64>, id: u32) {
+    pub(super) fn remove(&mut self, net: Option<i64>, id: u32, nodes: &[Node]) {
         let Some(key) = net else {
             return;
         };
         if let Some(n) = self.networks.get_mut(&key) {
-            n.remove(id);
+            n.remove(id, nodes);
             if n.members.is_empty() {
                 self.networks.remove(&key);
                 self.dirty.remove(&net);
@@ -257,10 +281,20 @@ impl TorquePropagator {
     ) -> Option<NetworkSync> {
         self.networks.get_mut(&id?)?.update_network(nodes)
     }
-    pub(super) fn members(&self, id: Option<i64>) -> impl Iterator<Item = u32> + '_ {
+    pub(super) fn members<'a>(
+        &'a self,
+        id: Option<i64>,
+        nodes: &'a [Node],
+    ) -> impl Iterator<Item = u32> + 'a {
         id.and_then(|id| self.networks.get(&id))
             .into_iter()
-            .flat_map(|n| n.members.values().flat_map(|m| m.ports.iter().copied()))
+            .flat_map(|n| {
+                n.members.iter().flat_map(|(entity, m)| {
+                    m.ports.iter().copied().filter(|&id| {
+                        nodes[id as usize].live && nodes[id as usize].entity == entity.0
+                    })
+                })
+            })
     }
     pub(super) fn figures(&self, id: Option<i64>) -> (f32, f32, u32) {
         id.and_then(|id| self.networks.get(&id))

@@ -1873,7 +1873,7 @@ impl CreateWorld {
         }
     }
 
-    /// A column left the level: its parts leave the network (their neighbours re-solve).
+    /// A column left the level: invalidate entities without detaching their networks.
     pub fn column_unloaded(&mut self, dim: usize, cx: i32, cz: i32) {
         let d = &mut self.dims[dim];
         // Its track leaves the graph; trains standing in it leave with it (saved with it).
@@ -1888,7 +1888,7 @@ impl CreateWorld {
         }
         if let Some(list) = d.columns.remove(&(cx, cz)) {
             for pos in list {
-                d.kinetics.remove(pos);
+                d.kinetics.unload(pos);
                 d.states.remove(&pos);
                 d.handles.remove(&pos);
             }
@@ -2563,7 +2563,19 @@ impl CreateWorld {
         self.dims[dim]
             .handles
             .insert(pos, crate::valve::Handle { saved, cooldown: 0 });
-        self.set_settings(dim, pos, state, Settings { crank, ..old });
+        // HandCrankBlockEntity.read restores fields without updateGeneratedRotation.
+        let settings = Settings { crank, ..old };
+        self.dims[dim].settings.insert(pos, settings);
+        if let Some((block, info)) = self.table.get(state) {
+            let [a, b] = parts(block, info, &settings);
+            for (sub, part) in [(0, a), (1, b)] {
+                if let Some(part) = part {
+                    self.dims[dim]
+                        .kinetics
+                        .change_block_state(pos, sub, part, true);
+                }
+            }
+        }
     }
 
     /// Settings saved with a column, before its blocks are scanned.
@@ -5600,7 +5612,10 @@ mod tests {
                     .network
                     .unwrap();
                 assert_eq!(network.capacity, 256.0);
+                // Java getSize counts the old object and the fresh object; the
+                // cached size remains 1 until a changed network total causes sync.
                 assert_eq!(network.size, 1);
+                assert_eq!(w.dims[0].kinetics.network_membership(pos, 0).unwrap().1, 2);
                 for _ in 1..saved.in_use {
                     w.tick_cranks(0);
                 }

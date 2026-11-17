@@ -161,6 +161,8 @@ impl ShaftRotation {
 /// One kinetic part as the solver sees it: what it connects to and what it adds.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Part {
+    /// Generator initialization entry point used when a saved entity returns.
+    pub initialization: GeneratorInitialization,
     /// The rotation axis.
     pub axis: Axis,
     /// Faces with a shaft end (`Dir::bit`), Create's `hasShaftTowards`.
@@ -192,6 +194,14 @@ pub struct Part {
     /// A gantry shaft or carriage, which a powered shaft and the carriage on it join across
     /// (`GantryShaftBlockEntity.isCustomConnection`, `propagateRotationTo`).
     pub gantry: Option<Gantry>,
+}
+
+/// CreativeMotorBlockEntity.initialize updates generation on every load; hand cranks
+/// inherit KineticBlockEntity.initialize and only change generation on use/expiry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GeneratorInitialization {
+    EveryLoad,
+    Placement,
 }
 
 /// The gantry's side of a part: a gantry shaft's facing and power, or a carriage's facing.
@@ -272,6 +282,7 @@ impl Part {
     /// A part on `axis` with shafts at both ends of it.
     pub fn shaft(axis: Axis) -> Part {
         Part {
+            initialization: GeneratorInitialization::Placement,
             axis,
             shafts: Dir::from_axis(axis, true).bit() | Dir::from_axis(axis, false).bit(),
             rotation: ShaftRotation::Straight,
@@ -464,6 +475,7 @@ pub enum Event {
 #[derive(Clone, Debug)]
 struct Node {
     pos: [i32; 3],
+    entity: u64,
     sub: u8,
     part: Part,
     /// Registration order of this block entity, unchanged by kinetic reconfiguration.
@@ -738,8 +750,15 @@ impl Kinetics {
             self.dirty.push(existing);
             return;
         }
+        let entity = slot
+            .iter()
+            .copied()
+            .find(|&id| id != NONE)
+            .map(|id| self.nodes[id as usize].entity)
+            .unwrap_or(self.stamp);
         let node = Node {
             pos,
+            entity,
             sub,
             part,
             registered_at: self.stamp,
@@ -853,6 +872,19 @@ impl Kinetics {
         self.at.get(&pos).is_some_and(|p| p[sub as usize] != NONE)
     }
 
+    /// SmartBlockEntity.onChunkUnloaded/setRemoved: invalidate the world identity,
+    /// retaining network references until calculateStress/calculateCapacity prune them.
+    pub fn unload(&mut self, pos: [i32; 3]) {
+        let Some(ids) = self.at.remove(&pos) else {
+            return;
+        };
+        for id in ids.into_iter().filter(|&id| id != NONE) {
+            self.nodes[id as usize].live = false;
+            self.free.push(id);
+        }
+        self.removed.push(pos);
+    }
+
     /// Removes every part at `pos`; its neighbours re-solve.
     pub fn remove(&mut self, pos: [i32; 3]) {
         let Some(ids) = self.at.remove(&pos) else {
@@ -862,7 +894,7 @@ impl Kinetics {
         // Existing propagation frames retain their old entity's speed, as Java references do.
         for id in ids.into_iter().filter(|&i| i != NONE) {
             let net = self.nodes[id as usize].state.net;
-            self.networks.remove(net, id);
+            self.networks.remove(net, id, &self.nodes);
             self.nodes[id as usize].live = false;
         }
         let mut breaks = Vec::new();
@@ -1188,8 +1220,11 @@ impl Kinetics {
     fn leave_network(&mut self, id: u32) {
         let old = self.nodes[id as usize].state.net;
         // KineticNetwork.remove only calls updateFromNetwork for an enrolled member.
-        let enrolled = self.networks.members(old).any(|member| member == id);
-        self.networks.remove(old, id);
+        let enrolled = self
+            .networks
+            .members(old, &self.nodes)
+            .any(|member| member == id);
+        self.networks.remove(old, id, &self.nodes);
         if enrolled {
             self.update_from_network(id, 0.0, 0.0, 0);
         }
@@ -1253,6 +1288,8 @@ impl Kinetics {
             }
             let n = &self.nodes[id as usize];
             if n.state.new_part
+                && (n.load_origin == LoadOrigin::Placement
+                    || n.part.initialization == GeneratorInitialization::EveryLoad)
                 && (n.state.source.is_none() || n.part.generated > n.state.theoretical)
             {
                 self.update_generated_rotation(id, events);
@@ -1310,7 +1347,7 @@ impl Kinetics {
         changed.clear();
         self.changed = changed;
         for &net in &touched_nets {
-            for id in self.networks.members(net) {
+            for id in self.networks.members(net, &self.nodes) {
                 let n = &self.nodes[id as usize];
                 stats.nodes += 1;
                 if n.sub == 0 && self.watched.contains(&n.pos) {
@@ -1840,6 +1877,43 @@ mod tests {
     }
 
     #[test]
+    fn unloaded_generation_survives_until_independent_network_pruning() {
+        // Issue #34: Java crank 32 rpm, capacity 256, getSize 1 -> 2.
+        let pos = [0, 8, 0];
+        let part = Part {
+            initialization: GeneratorInitialization::Placement,
+            capacity: 8.0,
+            ..motor(Dir::Up, 32.0)
+        };
+        let mut k = Kinetics::new();
+        k.set(pos, 0, part);
+        solve(&mut k);
+        let saved = k.saved_state(pos, 0).unwrap();
+        let net = saved.network.unwrap().id;
+        assert_eq!(k.networks.figures(Some(net)), (0.0, 256.0, 1));
+        k.unload(pos);
+        assert_eq!(k.networks.figures(Some(net)).2, 1);
+        k.set(pos, 0, part);
+        k.restore_state(pos, 0, saved);
+        solve(&mut k);
+        assert_eq!(k.networks.figures(Some(net)), (0.0, 256.0, 2));
+        assert_eq!(
+            k.networks
+                .get_or_create_network_for(Some(net))
+                .unloaded_count(),
+            0
+        );
+        let network = k.networks.get_or_create_network_for(Some(net));
+        // calculateCapacity removes sources only, leaving both member identities.
+        network.update_capacity(&k.nodes);
+        assert_eq!(k.networks.figures(Some(net)).2, 2);
+        k.networks
+            .get_or_create_network_for(Some(net))
+            .update_stress(&k.nodes);
+        assert_eq!(k.networks.figures(Some(net)).2, 1);
+    }
+
+    #[test]
     fn driven_crank_calculation_is_saved_across_reload() {
         // Seed 113: Observations.kinetic calls calculateAddedStressCapacity
         // on the dormant, externally driven hand crank before Persistence.reload.
@@ -2017,7 +2091,7 @@ mod tests {
         solve(&mut k);
         let id = k.at[&[2, 8, 0]][0];
         let net = k.nodes[id as usize].state.net;
-        k.networks.remove(net, id);
+        k.networks.remove(net, id, &k.nodes);
         k.change_speed(id, 0.0);
         assert_eq!(k.networks.figures(net).2, 2);
     }
