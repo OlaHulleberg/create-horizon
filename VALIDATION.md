@@ -107,6 +107,7 @@ fixes, each tried in game on the build above:
 | A cog loop whose ratios disagree, nothing turning | Pass | Two small and two large cogs placed with `/setblock`: none breaks (one did before) |
 | A motor placed facing a turning motor | Pass | Placed by the player and with `/setblock`: both stay; the second shows `Gen: -16`, turning at 16 with the first; the shaft turns between frames; same after reload |
 | Three large cogs at right angles, then a motor | Pass | The x and z cogs break and drop, the y cog stays still, as in Create |
+| A motor's speed set to overspeed the cogs it drives (#2) | Pass | Small and large cog, motor on the large one; 183 rpm pasted onto it from a clipboard: the large cog breaks, the motor runs at 183 |
 
 Known differences left: the category editor's inventory shows the inventory as it was at the last change made in
 it, so items picked up while it is open appear after the next change (Create's menu syncs them at once). The game
