@@ -550,7 +550,7 @@ fn tick_sequencers(lv: &mut ServerLevel<'_>) {
 }
 
 /// Write the state requested by the engine after the corresponding kinetic phase.
-fn apply_sequencer_steps(
+pub(super) fn apply_sequencer_steps(
     lv: &mut ServerLevel<'_>,
     steps: Vec<([i32; 3], create_engine::sequencer::Step)>,
 ) {

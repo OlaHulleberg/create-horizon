@@ -2796,28 +2796,25 @@ impl CreateWorld {
 
     /// `ConfigureSequencedGearshiftPacket.applySettings`: the running sequence stops
     /// (`run(-1)`, its block's `state` back to 0 unless powered) and the new instructions are
-    /// its own. With `stop` false (its block entity loading them) nothing else changes.
+    /// its own. Return the stop's state change immediately: the caller must commit it in
+    /// the packet phase, before the next kinetic tick (not with that tick's instruction steps).
+    /// With `stop` false (its block entity loading them) nothing else changes or is returned.
     pub fn set_sequencer_instructions(
         &mut self,
         dim: usize,
         pos: [i32; 3],
         instructions: Vec<crate::sequencer::Instruction>,
         stop: bool,
-    ) -> bool {
-        let Some(s) = self.dims[dim].sequencers.get_mut(&pos) else {
-            return false;
-        };
+    ) -> crate::sequencer::State {
+        let s = self.dims[dim].sequencers.get_mut(&pos)?;
         let step = if stop { s.run(-1) } else { None };
         s.instructions = if instructions.is_empty() {
             crate::sequencer::default_instructions()
         } else {
             instructions
         };
-        if let Some(step) = step {
-            self.dims[dim].sequencer_steps.push((pos, step));
-        }
         self.sequencer_stepped(dim, pos);
-        true
+        step
     }
 
     /// One tick of the sequenced gearshifts whose instruction runs (`tick`), and the steps they
@@ -5686,6 +5683,78 @@ mod tests {
         // The drive's neighbour changes: it is shaped again (no change here).
         w.neighbor_changed(0, [0, 0, 1], 11);
         assert!(w.take_chain_shapes(0).is_empty());
+        states::clear_range();
+    }
+
+    #[test]
+    fn replacing_a_sequencer_program_commits_before_the_next_kinetic_tick() {
+        use crate::sequencer::{Instruction, Kind, Run, Step};
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
+        let names = [
+            ("create:sequenced_gearshift", seq("0")),
+            ("create:sequenced_gearshift", seq("3")),
+            ("create:creative_motor", vec![("facing", "east")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        // ConfigureSequencedGearshiftPacket.applySettings calls run(-1) even while
+        // AWAIT's modifier is zero (no detachKinetics), then commits state 0 now.
+        for kind in [Kind::Await, Kind::TurnDistance] {
+            let mut w = CreateWorld::new(StateTable::new(
+                10,
+                names.iter().map(|(n, p)| (*n, p.iter().copied())),
+            ));
+            let pos = [0, 8, 0];
+            w.block_changed(0, [-1, 8, 0], 0, 12);
+            w.set_motor(0, [-1, 8, 0], 32.0);
+            w.block_changed(0, pos, 0, 11);
+            let instructions = vec![
+                Instruction::new(Kind::TurnAngle, 90),
+                Instruction::new(Kind::Delay, 3),
+                Instruction::new(kind, 1),
+            ];
+            w.set_sequencer_instructions(0, pos, instructions.clone(), false);
+            w.restore_sequencer(
+                0,
+                pos,
+                Run {
+                    current: 2,
+                    duration: if kind == Kind::Await { -1 } else { 18 },
+                    progress: 0.0,
+                    timer: 0,
+                    powered_before: false,
+                },
+            );
+            w.tick(0, &mut Vec::new());
+            assert_eq!(w.speed(0, pos), Some(32.0));
+            let commit = |w: &mut CreateWorld, step| {
+                if step == Step::Ended {
+                    let old = w.state_at(0, pos).unwrap();
+                    w.block_changed(0, pos, old, 10);
+                }
+            };
+            // Java transmission-sequencer tick 100: the unpowered packet stops it.
+            if let Some(step) = w.set_sequencer_instructions(0, pos, instructions, true) {
+                commit(&mut w, step);
+            }
+            // Tick 101: attach happens after the packet's state commit, so its source
+            // is present. Replaying the old deferred commit leaves it cleared here.
+            let (_, steps) = w.tick(0, &mut Vec::new());
+            for (_, step) in steps {
+                commit(&mut w, step);
+            }
+            assert_eq!(w.state_at(0, pos), Some(10));
+            assert_eq!(w.speed(0, pos), Some(32.0));
+            assert!(
+                w.dims[0]
+                    .kinetics
+                    .saved_state(pos, 0)
+                    .unwrap()
+                    .source
+                    .is_some()
+            );
+            assert_eq!(w.sequencer_run(0, pos).unwrap().current, -1);
+        }
         states::clear_range();
     }
 
