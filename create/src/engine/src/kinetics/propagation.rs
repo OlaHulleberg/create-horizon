@@ -361,7 +361,8 @@ impl Kinetics {
             network.update_stress_for(id, impact, &self.nodes);
             let sync = network.update_stress(&self.nodes);
             self.sync_network(sync);
-            self.networks.mark_dirty(net);
+            // updateGeneratedRotation updates the figures synchronously. It does
+            // not set networkDirty: later addSilently calls must not trigger a sync.
         }
     }
 

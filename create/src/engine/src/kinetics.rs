@@ -594,7 +594,7 @@ impl Kinetics {
         })
     }
 
-    /// KineticBlockEntity.read + initialize, before the first attach. Source positions may
+    /// KineticBlockEntity.read, before the first tick. Source positions may
     /// refer to entities whose columns have not loaded yet.
     pub fn restore_state(&mut self, pos: [i32; 3], sub: u8, saved: SavedKineticState) -> bool {
         let Some(id) = self
@@ -621,9 +621,6 @@ impl Kinetics {
             n.state.last_stress = net.added_stress;
             n.state.last_capacity = net.added_capacity;
             n.state.overstressed = net.capacity < net.stress;
-            let network = self.networks.get_or_create_network_for(Some(net.id));
-            network.init_from_te(net.capacity, net.stress, net.size);
-            network.add_silently(id, &mut self.nodes, net.added_capacity, net.added_stress);
         }
         let n = &mut self.nodes[id as usize];
         n.state.speed = if n.state.overstressed {
@@ -1253,6 +1250,16 @@ impl Kinetics {
         }
     }
 
+    /// KineticBlockEntity.initialize: enroll this entity only on its first tick.
+    fn initialize_network(&mut self, id: u32) {
+        let state = self.nodes[id as usize].state.clone();
+        if let Some(net) = state.net {
+            let network = self.networks.get_or_create_network_for(Some(net));
+            network.init_from_te(state.capacity, state.stress, state.network_size);
+            network.add_silently(id, &mut self.nodes, state.last_capacity, state.last_stress);
+        }
+    }
+
     /// Runs queued block entity attachments and generator updates, then syncs network stress.
     pub fn solve(&mut self, events: &mut Vec<Event>) -> SolveStats {
         if !self.has_dirty() {
@@ -1276,6 +1283,11 @@ impl Kinetics {
             }
             if !self.nodes[id as usize].live {
                 continue;
+            }
+            // SmartBlockEntity.tick invokes KineticBlockEntity.initialize after
+            // attachKinetics, before the generator's own initialize callback.
+            if self.nodes[id as usize].state.new_part {
+                self.initialize_network(id);
             }
             // ChainGearshiftBlockEntity.tick runs the base tick before analogSignalChanged.
             if let Some(modifier) = self.nodes[id as usize].state.chain_signal.take() {
@@ -1874,6 +1886,44 @@ mod tests {
         // The conveying large cog is currentTE, even though the small cog was placed later.
         assert!(e.contains(&Event::Break { pos: [1, 1, 1] }), "{e:?}");
         assert_eq!(k.speed([2, 2, 1], 0), Some(0.0));
+    }
+
+    #[test]
+    fn loaded_motor_initializes_before_press_enrollment() {
+        // Issue #38: Java completed tick 23 caches stress=0, size=1 on
+        // the motor, although addSilently later makes the actual size two.
+        let positions = [[-1, 8, 0], [0, 8, 0]];
+        let parts = [
+            Part {
+                initialization: GeneratorInitialization::EveryLoad,
+                capacity: 16384.0,
+                ..motor(Dir::East, 32.0)
+            },
+            Part {
+                impact: 8.0,
+                ..Part::shaft(Axis::X)
+            },
+        ];
+        let mut k = Kinetics::new();
+        for (pos, part) in positions.into_iter().zip(parts) {
+            k.set(pos, 0, part);
+            solve(&mut k);
+        }
+        let saved = positions.map(|pos| k.saved_state(pos, 0).unwrap());
+        for pos in positions {
+            k.unload(pos);
+        }
+        for ((pos, part), saved) in positions.into_iter().zip(parts).zip(saved) {
+            k.set(pos, 0, part);
+            assert!(k.restore_state(pos, 0, saved));
+        }
+        solve(&mut k);
+        let motor = k.saved_state(positions[0], 0).unwrap().network.unwrap();
+        assert_eq!(
+            (motor.stress, motor.size, motor.capacity),
+            (0.0, 1, 524288.0)
+        );
+        assert_eq!(k.networks.figures(Some(motor.id)).2, 2);
     }
 
     #[test]
