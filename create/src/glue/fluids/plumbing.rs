@@ -285,7 +285,7 @@ fn tick_valves(lv: &mut ServerLevel<'_>) {
     .unwrap_or_default();
     for (pos, open) in changes {
         // `switchToBlockState`: the pipes see it open or shut (`propagateChangedPipe`).
-        lv.set_property(pos, "enabled", flag(open), all());
+        crate::glue::items::wrench::switch_property(lv, pos, "enabled", flag(open));
     }
 }
 

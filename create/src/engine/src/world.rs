@@ -1239,7 +1239,7 @@ impl CreateWorld {
         }
     }
 
-    /// `KineticBlockEntity.switchToBlockState`, before the world commits a wrench rotation.
+    /// `KineticBlockEntity.switchToBlockState`, before the world commits an interaction state change.
     pub fn switching_block_state(&mut self, dim: usize, pos: [i32; 3], new: u32) {
         let d = &mut self.dims[dim];
         let Some(old) = d.states.get(&pos).copied() else {
@@ -4528,6 +4528,55 @@ mod tests {
         states::set_range(2, names.len() as u32);
         let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
         CreateWorld::new(table)
+    }
+
+    #[test]
+    fn pulley_switch_keeps_driven_network_capacity() {
+        // BeltBlock.useItemOn -> KineticBlockEntity.switchToBlockState.
+        // Issue #24 Java: middle -> pulley keeps 32 rpm and 524288 capacity.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let belt = |part| {
+            (
+                "create:belt",
+                vec![("facing", "south"), ("slope", "horizontal"), ("part", part)],
+            )
+        };
+        let names = [
+            ("create:creative_motor", vec![("facing", "east")]),
+            belt("start"),
+            belt("middle"),
+            belt("end"),
+            belt("pulley"),
+        ];
+        states::set_range(10, 5);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let mut events = Vec::new();
+        let middle = [0, 8, 1];
+        for (p, id) in [
+            ([-1, 8, 0], 10),
+            ([0, 8, 0], 11),
+            (middle, 12),
+            ([0, 8, 2], 13),
+        ] {
+            w.block_changed(0, p, 0, id);
+        }
+        w.settle_belts(0);
+        w.tick(0, &mut events);
+        w.set_motor(0, [-1, 8, 0], 32.0);
+        for _ in 0..40 {
+            w.tick(0, &mut events);
+        }
+        w.switching_block_state(0, middle, 14);
+        w.block_changed(0, middle, 12, 14);
+        for _ in 0..100 {
+            w.tick(0, &mut events);
+            assert_eq!(w.speed(0, middle), Some(32.0));
+            assert_eq!(w.dims[0].kinetics.network(middle, 0).unwrap().2, 524288.0);
+        }
+        states::clear_range();
     }
 
     #[test]

@@ -1328,7 +1328,12 @@ fn tick_boards(lv: &mut ServerLevel<'_>, checks: Vec<[i32; 3]>) {
         });
         for (key, now, want) in [("down", s.down, down), ("up", s.up, up)] {
             if now != want {
-                lv.set_property(p, key, if want { "true" } else { "false" }, update_all());
+                crate::glue::items::wrench::switch_property(
+                    lv,
+                    p,
+                    key,
+                    if want { "true" } else { "false" },
+                );
             }
         }
     }

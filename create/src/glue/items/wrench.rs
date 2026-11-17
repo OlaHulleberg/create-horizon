@@ -105,12 +105,24 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
     Some(InteractionResult::Success)
 }
 
-/// `KineticBlockEntity.switchToBlockState`, shared by wrench block overrides.
+/// `KineticBlockEntity.switchToBlockState`, shared by block interactions and wrench overrides.
 pub(crate) fn switch_state(lv: &mut ServerLevel<'_>, pos: [i32; 3], next: mod_api::BlockState) {
+    if lv.block_state(pos) == Some(next) {
+        return;
+    }
     if let Some(id) = states::id(next) {
         with_world(|w| w.switching_block_state(lv.dim, pos, id));
     }
     lv.set_state(pos, next, update_all());
+}
+
+/// Switch one property through `KineticBlockEntity.switchToBlockState`.
+pub(crate) fn switch_property(lv: &mut ServerLevel<'_>, pos: [i32; 3], key: &str, value: &str) {
+    if let Some(state) = lv.block_state(pos)
+        && let Ok(next) = state.with(&lv.host.block_states(), key, value)
+    {
+        switch_state(lv, pos, next);
+    }
 }
 
 /// `IWrenchable.playRotateSound`: `WRENCH_ROTATE` (the wooden trapdoor's close at .25 and 1.25

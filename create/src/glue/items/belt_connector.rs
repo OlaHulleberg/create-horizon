@@ -4,7 +4,7 @@
 //! particles of `BeltConnectorHandler`). Remembering a shaft, or laying a belt with connectors
 //! left, starts the item's 5-tick cooldown; a belt laid gives the `belt` advancement.
 
-use super::super::server::{ServerLevel, update_all};
+use super::super::server::ServerLevel;
 use super::super::states;
 use super::super::world::with_world;
 use super::{creative, custom, held, set_custom, set_held, sneaking};
@@ -202,7 +202,7 @@ pub(crate) fn create_belts(lv: &mut ServerLevel<'_>, start: [i32; 3], end: [i32;
             s = s.with(&facts, k, v).unwrap_or(s);
         }
         if lv.block_state(pos) != Some(s) {
-            lv.set_state(pos, s, update_all());
+            super::wrench::switch_state(lv, pos, s);
         }
     }
     if !failed {

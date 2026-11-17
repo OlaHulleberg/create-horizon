@@ -221,7 +221,7 @@ pub(super) fn encase(lv: &mut ServerLevel<'_>, pos: [i32; 3], state: BlockState,
     ) else {
         return;
     };
-    lv.put(pos, next);
+    crate::glue::items::wrench::switch_state(lv, pos, next);
     lv.block_sound("minecraft:block.netherite_block.hit", pos, 0.5, 1.25);
 }
 

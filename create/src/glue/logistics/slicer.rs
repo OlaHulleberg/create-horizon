@@ -29,7 +29,12 @@ fn flag(lv: &ServerLevel<'_>, pos: [i32; 3], key: &str) -> bool {
 }
 
 /// Sets the belt segment at `pos` to `seg`, cased or not, keeping its water.
-fn set_segment(lv: &mut ServerLevel<'_>, pos: [i32; 3], seg: Segment, casing: bool) {
+fn segment_state(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+    seg: Segment,
+    casing: bool,
+) -> Option<mod_api::BlockState> {
     let b = |v: bool| if v { "true" } else { "false" };
     let water = flag(lv, pos, "waterlogged");
     let facing = super::super::kinetics::dir_name(seg.facing);
@@ -48,8 +53,13 @@ fn set_segment(lv: &mut ServerLevel<'_>, pos: [i32; 3], seg: Segment, casing: bo
         let facts = lv.host.block_states();
         mod_api::BlockState::of(&facts, states::key(Block::Belt), &constraints)
     };
-    if let Ok(state) = state {
-        lv.set_state(pos, state, update_all());
+    state.ok()
+}
+
+/// `BeltSlicer` changes existing segments through `switchToBlockState`.
+fn set_segment(lv: &mut ServerLevel<'_>, pos: [i32; 3], seg: Segment, casing: bool) {
+    if let Some(state) = segment_state(lv, pos, seg, casing) {
+        crate::glue::items::wrench::switch_state(lv, pos, state);
     }
 }
 
@@ -360,7 +370,7 @@ pub fn use_connector(
         for p in &theirs.chain {
             if flip && let Some(s) = segment_at(lv, *p) {
                 let cased = flag(lv, *p, "casing");
-                set_segment(lv, *p, s.flipped(), cased);
+                set_segment_direct(lv, *p, s.flipped(), cased);
             }
         }
         if flip {
@@ -462,7 +472,14 @@ pub fn use_connector(
 
 /// A new segment `seg` at `pos`, uncased (`state.setValue(CASING, false)` placed there).
 fn set_segment_new(lv: &mut ServerLevel<'_>, pos: [i32; 3], seg: Segment) {
-    set_segment(lv, pos, seg, false);
+    set_segment_direct(lv, pos, seg, false);
+}
+
+/// `BeltSlicer` uses ordinary `setBlock` for flipped or newly placed segments.
+fn set_segment_direct(lv: &mut ServerLevel<'_>, pos: [i32; 3], seg: Segment, casing: bool) {
+    if let Some(state) = segment_state(lv, pos, seg, casing) {
+        lv.set_state(pos, state, update_all());
+    }
 }
 
 /// The segment at `pos` takes dye `color`.

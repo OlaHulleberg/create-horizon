@@ -285,7 +285,7 @@ impl Subsystem for Processing {
                         Some("down") => "right",
                         _ => "up",
                     };
-                    lv.set_property(pos, "pointing", next, crate::glue::server::update_all());
+                    crate::glue::items::wrench::switch_property(lv, pos, "pointing", next);
                 }
             }
             _ => return false,

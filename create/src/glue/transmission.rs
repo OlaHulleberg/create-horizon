@@ -187,7 +187,7 @@ impl mod_api::BlockPart for Clicked {
                         Block::MetalGirderEncasedShaft,
                         &[("axis", axis_name(axis)), ("waterlogged", water)],
                     )?;
-                    lv.set_state(pos, next, update_all());
+                    super::items::wrench::switch_state(&mut lv, pos, next);
                     use_one(&mut *lv.host, player, click.hand, stack);
                     return Some(InteractionResult::Success);
                 }
@@ -392,7 +392,7 @@ fn encase(
         }
     }
     let next = state_of(&*lv.host, encased, &props)?;
-    lv.set_state(pos, next, update_all());
+    super::items::wrench::switch_state(lv, pos, next);
     lv.place_sound(pos);
     Some(InteractionResult::Success)
 }

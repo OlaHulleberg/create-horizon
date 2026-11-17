@@ -81,7 +81,7 @@ pub fn use_belt_with(
             if !crate::glue::items::creative(&*lv.host, p) {
                 crate::glue::items::shrink_held(&mut *lv.host, p, hand, 1);
             }
-            lv.set_property(pos, "part", "pulley", update_all());
+            crate::glue::items::wrench::switch_property(lv, pos, "part", "pulley");
             true
         }
         Some(c @ ("create:andesite_casing" | "create:brass_casing")) => {
@@ -180,7 +180,7 @@ pub fn set_casing(lv: &mut ServerLevel<'_>, pos: [i32; 3], kind: Option<&str>) {
             mod_api::Compound::from([(super::BELT_CASING.into(), tag)]),
         );
     }
-    lv.set_property(pos, "casing", flag, update_all());
+    crate::glue::items::wrench::switch_property(lv, pos, "casing", flag);
     update_cover(lv, pos);
 }
 
@@ -267,7 +267,7 @@ pub fn wrench_belt(
         return true;
     }
     if seg.part == belt::Part::Pulley && clicked.axis() != Axis::Y {
-        lv.set_property(pos, "part", "middle", update_all());
+        crate::glue::items::wrench::switch_property(lv, pos, "part", "middle");
         if !crate::glue::items::creative(&*lv.host, player)
             && let Some(shaft) = items::stack_of(&*lv.host, "create:shaft", 1)
         {
