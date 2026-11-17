@@ -121,6 +121,7 @@ const PARTS: [Block; 12] = [
 impl Subsystem for Logistics {
     fn write_entities(&self, lv: &mut ServerLevel<'_>) {
         depot::save_depots(lv);
+        belt::save_belts(lv);
     }
 
     fn draw_carried(

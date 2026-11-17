@@ -178,6 +178,8 @@ pub struct Dimension {
     belt_dirty: Vec<[i32; 3]>,
     /// Belts whose items or shape clients must see again.
     pub belt_changes: Vec<[i32; 3]>,
+    /// Controllers whose persisted inventory changed since publication.
+    belt_saved_changes: std::collections::HashSet<[i32; 3]>,
     /// Segments to replace because their neighbour broke, and items a broken belt drops (with
     /// the controller and segment they were on).
     pub belt_breaks: Vec<BeltBreak>,
@@ -751,6 +753,7 @@ impl BeltTicks {
             let speed = crate::belt::direction_aware_speed(rpm, b.segment.facing);
             if b.items.update_direction(speed) {
                 world.dims[self.dim].belt_changes.push(c);
+                world.belt_inventory_changed(self.dim, c);
             }
         }
         None
@@ -3052,6 +3055,7 @@ impl CreateWorld {
                 d.belt_of.remove(p);
             }
             d.belt_changes.push(c);
+            d.belt_saved_changes.insert(c);
         }
         for forward in [true, false] {
             let Some(next) = seg.next(pos, forward) else {
@@ -3121,6 +3125,7 @@ impl CreateWorld {
                 },
             );
             d.belt_changes.push(controller);
+            d.belt_saved_changes.insert(controller);
             for p in chain {
                 let Some(&state) = self.dims[dim].states.get(&p) else {
                     continue;
@@ -3150,6 +3155,7 @@ impl CreateWorld {
             d.belt_dirty.push(*p);
         }
         d.belt_changes.push(c);
+        d.belt_saved_changes.insert(c);
         Some((c, b))
     }
 
@@ -3241,6 +3247,17 @@ impl CreateWorld {
         saved: impl Iterator<Item = ([i32; 3], crate::belt::Inventory)>,
     ) {
         self.dims[dim].belt_saved.extend(saved);
+    }
+
+    /// Journal a mutation of `BeltInventory.write`'s items or PositiveOrder.
+    /// Unlike client notifications, this includes ordinary transport each tick.
+    pub fn belt_inventory_changed(&mut self, dim: usize, controller: [i32; 3]) {
+        self.dims[dim].belt_saved_changes.insert(controller);
+    }
+
+    /// Consume inventory publications at the completed-tick boundary, before flushing columns.
+    pub fn take_belt_saved_changes(&mut self, dim: usize) -> std::collections::HashSet<[i32; 3]> {
+        std::mem::take(&mut self.dims[dim].belt_saved_changes)
     }
 
     /// The belts whose controller is in a column, with their items, to save.
@@ -4784,6 +4801,53 @@ mod tests {
         assert_eq!(saved.len(), 1);
         assert!(saved[0].1.positive);
         assert!(saved[0].1.items.is_empty());
+    }
+
+    #[test]
+    fn empty_belt_direction_is_journaled_once() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = item_belt_world(32.0);
+        w.take_belt_saved_changes(0);
+        assert_eq!(w.belt_ticks(0).next(&mut w), None);
+        assert_eq!(w.take_belt_saved_changes(0), [[0, 8, 0], [0, 8, -4]].into());
+        assert_eq!(w.belt_ticks(0).next(&mut w), None);
+        assert!(w.take_belt_saved_changes(0).is_empty());
+    }
+
+    #[test]
+    fn moving_belt_journals_current_saved_positions() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = item_belt_world(-32.0);
+        let c = [0, 8, 0];
+        w.take_belt_saved_changes(0);
+        let mut item = crate::belt::Item::new("minecraft:iron_ingot", 16, 180, false);
+        item.position = 1.4958333;
+        w.dims[0].belts.get_mut(&c).unwrap().items =
+            crate::belt::Inventory::from_saved(vec![item], false);
+        // Java c36 ticks 42-44. No insertion or client notification is needed.
+        for expected in [1.4291666, 1.3624998, 1.2958331] {
+            let out = w.dims[0].belts.get_mut(&c).unwrap().items.tick(
+                5,
+                -32.0 / 480.0,
+                true,
+                &mut ItemBeltSide,
+            );
+            assert!(!out.changed);
+            if out.saved_changed {
+                w.belt_inventory_changed(0, c);
+            }
+            assert_eq!(w.take_belt_saved_changes(0), [c].into());
+            assert!(w.take_belt_saved_changes(0).is_empty());
+            let saved = w.column_belts(0, 0, 0);
+            assert!((saved[0].1.items[0].position - expected).abs() < 0.000001);
+        }
+        let out = w.dims[0]
+            .belts
+            .get_mut(&c)
+            .unwrap()
+            .items
+            .tick(5, 0.0, true, &mut ItemBeltSide);
+        assert!(!out.saved_changed);
     }
 
     #[test]

@@ -290,6 +290,7 @@ pub fn use_belt(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: u128) -> bool {
         let taken = b.items.take_within(index as f32 + 0.5, 0.55);
         if !taken.is_empty() {
             w.dims[dim].belt_changes.push(c);
+            w.belt_inventory_changed(dim, c);
         }
         Some(taken)
     })
@@ -370,6 +371,7 @@ pub fn put_on_from_above(
         i.position = index as f32 + 0.5 + if b.items.positive { -1.0 } else { 1.0 } / 16.0;
         b.items.add(i);
         d.belt_changes.push(c);
+        w.belt_inventory_changed(dim, c);
         Some(())
     })
     .flatten();
@@ -528,6 +530,7 @@ pub fn handle_insertion(
         moved.inserted_from = Some(side);
         b.items.add(moved);
         w.dims[dim].belt_changes.push(c2);
+        w.belt_inventory_changed(dim, c2);
         Some(0)
     })
     .flatten()
@@ -705,6 +708,15 @@ impl belt::BreakWorld for BeltBreakWorld<'_, '_> {
     }
 }
 
+/// Publish only changed inventories after every subsystem has finished mutating them.
+/// The column codec writes the current `BeltInventory.write` snapshot.
+pub fn save_belts(lv: &mut ServerLevel<'_>) {
+    let changed = with_world(|w| w.take_belt_saved_changes(lv.dim)).unwrap_or_default();
+    for c in changed {
+        crate::glue::persist::mark_pos_unsaved(lv.dim, c);
+    }
+}
+
 /// Belts: segments broken next to a broken one become shafts or air, a broken belt's items
 /// drop, then the engine visits controllers (`BeltBlockEntity.tick`), moving items
 /// received before their turn and updating empty inventories' direction bits.
@@ -750,6 +762,9 @@ pub fn tick_belts(lv: &mut ServerLevel<'_>) {
                     b.items.add(i);
                 }
             }
+            if ticked.saved_changed {
+                w.belt_inventory_changed(dim, c);
+            }
             if ticked.changed {
                 w.dims[dim].belt_changes.push(c);
             }
@@ -767,9 +782,6 @@ pub fn tick_belts(lv: &mut ServerLevel<'_>) {
         let mut v = std::mem::take(&mut w.dims[dim].belt_changes);
         v.sort();
         v.dedup();
-        for c in &v {
-            w.mark_unsaved(dim, *c);
-        }
         v
     })
     .unwrap_or_default();

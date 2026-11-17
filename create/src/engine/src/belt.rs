@@ -898,6 +898,8 @@ pub trait Surroundings {
 pub struct Ticked {
     /// The items changed in a way clients must see (`notifyUpdate`).
     pub changed: bool,
+    /// Persisted inventory changed, including transport without a client notification.
+    pub saved_changed: bool,
     /// Items thrown off the end (`eject`).
     pub ejected: Vec<Item>,
 }
@@ -927,6 +929,28 @@ impl Inventory {
             copy.insert(i);
         }
         copy
+    }
+
+    /// Equality of the fields persisted by the belt inventory codec. Queued insertions
+    /// participate as in Java's `BeltInventory.write`; client and fan tick caches do not.
+    pub fn saved_eq(&self, other: &Self) -> bool {
+        if !self.to_insert.is_empty() || !other.to_insert.is_empty() {
+            return self.to_save().saved_eq(&other.to_save());
+        }
+        let (a, b) = (self, other);
+        a.positive == b.positive
+            && a.items.len() == b.items.len()
+            && a.items.iter().zip(&b.items).all(|(a, b)| {
+                a.position == b.position
+                    && a.side_offset == b.side_offset
+                    && a.angle == b.angle
+                    && a.item == b.item
+                    && a.count == b.count
+                    && a.locked == b.locked
+                    && a.inserted_at == b.inserted_at
+                    && a.inserted_from == b.inserted_from
+                    && a.progress == b.progress
+            })
     }
 
     /// Whether it has anything to move or insert.
@@ -1034,6 +1058,21 @@ impl Inventory {
     /// `BeltInventory.tick` on the server for a belt of `length` turning at `speed` (direction
     /// aware, blocks a tick); `horizontal` whether machines over it may process.
     pub fn tick(
+        &mut self,
+        length: i32,
+        speed: f32,
+        horizontal: bool,
+        world: &mut impl Surroundings,
+    ) -> Ticked {
+        // BeltBlockEntity.write -> BeltInventory.write saves current items even
+        // when movement needs no notifyUpdate for clients.
+        let before = self.clone();
+        let mut out = self.tick_items(length, speed, horizontal, world);
+        out.saved_changed = !self.saved_eq(&before);
+        out
+    }
+
+    fn tick_items(
         &mut self,
         length: i32,
         speed: f32,

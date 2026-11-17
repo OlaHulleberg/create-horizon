@@ -1055,6 +1055,7 @@ fn fan_on_belt(lv: &mut ServerLevel<'_>, at: [i32; 3], kind: Kind) -> bool {
     let lvr = &*lv;
     let host = &*lvr.host;
     let max = |i: &str| stacks::limit(host, i);
+    let before = inv.clone();
     let dirty = recipes::with(|r| {
         inv.apply_within(index + 0.5, 0.51, |it| {
             // A stack with components (named by them) is processed as its item.
@@ -1092,13 +1093,16 @@ fn fan_on_belt(lv: &mut ServerLevel<'_>, at: [i32; 3], kind: Kind) -> bool {
         })
     })
     .unwrap_or(false);
+    let saved_changed = !inv.saved_eq(&before);
     with_world(|w| {
         if let Some(b) = w.dims[dim].belts.get_mut(&c) {
             b.items = inv;
         }
+        if saved_changed {
+            w.belt_inventory_changed(dim, c);
+        }
         if dirty {
             w.dims[dim].belt_changes.push(c);
-            w.mark_unsaved(dim, c);
         }
     });
     dirty
