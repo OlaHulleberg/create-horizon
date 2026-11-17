@@ -1171,7 +1171,11 @@ impl CreateWorld {
         let settings = d.settings.get(&pos).copied().unwrap_or_default();
         let [a, b] = parts(block, info, &settings);
         let previous = d.states.get(&pos).and_then(|s| self.table.get(*s));
-        let same = previous.is_some_and(|(b, _)| b == block);
+        // ValveHandleBlock.onRemove skips removal for another valve handle, including
+        // another colour. KineticBlock.onPlace still treats those states as non-equivalent.
+        let same = previous.is_some_and(|(b, _)| {
+            b == block || (crate::dye::is_valve_handle(b) && crate::dye::is_valve_handle(block))
+        });
         let equivalent =
             previous.is_some_and(|(b, old)| kinetically_equivalent(b, old, block, info));
         if !same {
@@ -5075,6 +5079,56 @@ mod tests {
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [1, 0, 0]), Some(0.0), "stopped after 10 ticks");
         assert!(!w.turn_crank(0, [1, 0, 0], false), "a shaft is no crank");
+        states::clear_range();
+    }
+
+    #[test]
+    fn recoloured_valve_retains_entity_and_driven_shaft() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names = [
+            "create:copper_valve_handle",
+            "create:red_valve_handle",
+            "create:white_valve_handle",
+        ];
+        states::set_range(10, 4);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names
+                .iter()
+                .map(|n| (*n, [("facing", "up")].into_iter()))
+                .chain(std::iter::once((
+                    "create:shaft",
+                    [("axis", "y")].into_iter(),
+                ))),
+        ));
+        let (handle, shaft) = ([0, 8, 0], [0, 7, 0]);
+        w.block_changed(0, shaft, 0, 13);
+        w.tick(0, &mut Vec::new());
+        w.block_changed(0, handle, 0, 10);
+        w.tick(0, &mut Vec::new());
+        // Issue #21 Java trace: sneaking use of 41 degrees generates -32 RPM.
+        assert!(w.use_valve(0, handle, true, 41));
+        w.tick_cranks(0);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, shaft), Some(-32.0));
+        w.block_changed(0, handle, 10, 11);
+        for _ in 0..38 {
+            w.tick_cranks(0);
+            w.tick(0, &mut Vec::new());
+        }
+        w.block_changed(0, handle, 11, 12);
+        for _ in 0..70 {
+            w.tick_cranks(0);
+            w.tick(0, &mut Vec::new());
+        }
+        // HandCrankBlockEntity.tick expires, but clearKineticInformation did not
+        // detach the old shaft. Java retains its speed, source and sequence.
+        assert!(!w.dims[0].cranks.contains_key(&handle));
+        assert_eq!(w.speed(0, shaft), Some(-32.0));
+        assert_eq!(
+            w.dims[0].kinetics.sequence_limit(shaft, 0, false),
+            Some(41.0)
+        );
         states::clear_range();
     }
 
