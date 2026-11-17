@@ -160,8 +160,9 @@ pub struct Dimension {
     sequencer_steps: Vec<([i32; 3], crate::sequencer::Step)>,
     /// Depots and their held stack's motion; the stacks are in their block entities' slots.
     pub depots: HashMap<[i32; 3], Option<crate::depot::Held>>,
-    /// Depots whose held stack still slides: the only ones that tick.
+    /// Depots whose held stack still slides.
     pub sliding: Vec<[i32; 3]>,
+    transport_entities: TransportOrder,
     /// Depots whose contents clients must see again (put down, taken, filled by a hopper).
     pub depot_changes: Vec<[i32; 3]>,
     /// Mechanical presses and their cycle.
@@ -743,17 +744,71 @@ impl BeltTicks {
     /// and applying transfers; never collect this into a snapshot of busy belts.
     pub fn next(&mut self, world: &mut CreateWorld) -> Option<[i32; 3]> {
         for c in self.controllers.by_ref() {
-            let rpm = world.speed(self.dim, c).unwrap_or(0.0);
-            let Some(b) = world.dims[self.dim].belts.get_mut(&c) else {
-                continue;
-            };
-            if !b.items.is_empty() {
+            if Self::controller_turn(world, self.dim, c) {
                 return Some(c);
             }
-            let speed = crate::belt::direction_aware_speed(rpm, b.segment.facing);
-            if b.items.update_direction(speed) {
-                world.dims[self.dim].belt_changes.push(c);
-                world.belt_inventory_changed(self.dim, c);
+        }
+        None
+    }
+
+    fn controller_turn(world: &mut CreateWorld, dim: usize, c: [i32; 3]) -> bool {
+        let rpm = world.speed(dim, c).unwrap_or(0.0);
+        let Some(b) = world.dims[dim].belts.get_mut(&c) else {
+            return false;
+        };
+        if !b.items.is_empty() {
+            return true;
+        }
+        let speed = crate::belt::direction_aware_speed(rpm, b.segment.facing);
+        if b.items.update_direction(speed) {
+            world.dims[dim].belt_changes.push(c);
+            world.belt_inventory_changed(dim, c);
+        }
+        false
+    }
+}
+
+/// Level registration order for transport block entities. State changes retain a
+/// registration; replacement and unload remove it, and load registers anew.
+#[derive(Default)]
+struct TransportOrder(Vec<[i32; 3]>);
+impl TransportOrder {
+    fn register(&mut self, pos: [i32; 3]) {
+        if !self.0.contains(&pos) {
+            self.0.push(pos);
+        }
+    }
+    fn remove(&mut self, pos: [i32; 3]) {
+        self.0.retain(|p| *p != pos);
+    }
+    fn unload(&mut self, cx: i32, cz: i32) {
+        self.0.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+    }
+}
+
+/// Work at a level block entity's turn, rather than a subsystem phase.
+#[derive(Debug, PartialEq)]
+pub enum TransportTick {
+    Depot([i32; 3]),
+    Belt([i32; 3]),
+}
+
+/// Resumable level transport walk; inventories are inspected at their turn.
+pub struct TransportTicks {
+    dim: usize,
+    entities: std::vec::IntoIter<[i32; 3]>,
+}
+impl TransportTicks {
+    pub fn next(&mut self, world: &mut CreateWorld) -> Option<TransportTick> {
+        for p in self.entities.by_ref() {
+            if world.block_at(self.dim, p) == Some(Block::Depot) {
+                return Some(TransportTick::Depot(p));
+            }
+            if world.block_at(self.dim, p) == Some(Block::Belt) {
+                world.initialize_belt(self.dim, p);
+                if BeltTicks::controller_turn(world, self.dim, p) {
+                    return Some(TransportTick::Belt(p));
+                }
             }
         }
         None
@@ -837,6 +892,16 @@ impl CreateWorld {
         };
         let info = &info;
         let d = &mut self.dims[dim];
+        if d.states
+            .get(&pos)
+            .and_then(|s| self.table.get(*s))
+            .is_some_and(|(old, _)| old != block)
+        {
+            d.transport_entities.remove(pos);
+        }
+        if matches!(block, Block::Depot | Block::Belt) {
+            d.transport_entities.register(pos);
+        }
         d.lifts.placed(pos, block, info);
         d.displays.placed(pos, block);
         match block {
@@ -1752,6 +1817,7 @@ impl CreateWorld {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
             let d = &mut self.dims[dim];
+            d.transport_entities.remove(pos);
             if d.depots.remove(&pos).is_some() {
                 d.sliding.retain(|p| *p != pos);
                 d.depot_changes.push(pos);
@@ -2072,6 +2138,7 @@ impl CreateWorld {
             d.depot_work.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.sliding.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
         }
+        d.transport_entities.unload(cx, cz);
         d.settings.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
     }
 
@@ -3153,61 +3220,68 @@ impl CreateWorld {
         }
         let dirty = std::mem::take(&mut self.dims[dim].belt_dirty);
         for pos in dirty {
-            if self.dims[dim].belt_of.contains_key(&pos) {
+            self.initialize_belt(dim, pos);
+        }
+    }
+
+    /// BeltBlockEntity.tick initializes its own chain before the base kinetic tick.
+    fn initialize_belt(&mut self, dim: usize, pos: [i32; 3]) {
+        if self.dims[dim].belt_of.contains_key(&pos) {
+            return;
+        }
+        let table = &self.table;
+        let states = &self.dims[dim].states;
+        let segment_at = |p: [i32; 3]| {
+            states
+                .get(&p)
+                .and_then(|s| table.get(*s))
+                .and_then(|(b, i)| (b == Block::Belt).then_some(i.belt).flatten())
+        };
+        let Some(controller) = crate::belt::controller_of(pos, segment_at) else {
+            return;
+        };
+        let chain = crate::belt::chain(controller, segment_at);
+        let whole = chain.len() >= 2
+            && chain
+                .last()
+                .and_then(|p| segment_at(*p))
+                .is_some_and(|s| s.part == crate::belt::Part::End);
+        if !whole {
+            return;
+        }
+        let Some(segment) = segment_at(controller) else {
+            return;
+        };
+        let d = &mut self.dims[dim];
+        for p in &chain {
+            d.belt_of.insert(*p, controller);
+        }
+        let items = d.belt_saved.remove(&controller).unwrap_or_default();
+        d.belts.insert(
+            controller,
+            Belt {
+                chain: chain.clone(),
+                segment,
+                items,
+            },
+        );
+        d.belt_changes.push(controller);
+        d.belt_saved_changes.insert(controller);
+        for p in chain {
+            let Some(&state) = self.dims[dim].states.get(&p) else {
                 continue;
-            }
-            let table = &self.table;
-            let states = &self.dims[dim].states;
-            let segment_at = |p: [i32; 3]| {
-                states
-                    .get(&p)
-                    .and_then(|s| table.get(*s))
-                    .and_then(|(b, i)| (b == Block::Belt).then_some(i.belt).flatten())
             };
-            let Some(controller) = crate::belt::controller_of(pos, segment_at) else {
-                continue;
-            };
-            let chain = crate::belt::chain(controller, segment_at);
-            let whole = chain.len() >= 2
-                && chain
-                    .last()
-                    .and_then(|p| segment_at(*p))
-                    .is_some_and(|s| s.part == crate::belt::Part::End);
-            if !whole {
-                continue;
-            }
-            let Some(segment) = segment_at(controller) else {
-                continue;
-            };
-            let d = &mut self.dims[dim];
-            for p in &chain {
-                d.belt_of.insert(*p, controller);
-            }
-            let items = d.belt_saved.remove(&controller).unwrap_or_default();
-            d.belts.insert(
-                controller,
-                Belt {
-                    chain: chain.clone(),
-                    segment,
-                    items,
+            let old = self.dims[dim].settings.get(&p).copied().unwrap_or_default();
+            self.dims[dim].settings.insert(
+                p,
+                Settings {
+                    belt: Some(controller),
+                    ..old
                 },
             );
-            d.belt_changes.push(controller);
-            d.belt_saved_changes.insert(controller);
-            for p in chain {
-                let Some(&state) = self.dims[dim].states.get(&p) else {
-                    continue;
-                };
-                let old = self.dims[dim].settings.get(&p).copied().unwrap_or_default();
-                self.dims[dim].settings.insert(
-                    p,
-                    Settings {
-                        belt: Some(controller),
-                        ..old
-                    },
-                );
-                self.place(dim, p, state);
-            }
+            self.place(dim, p, state);
+            // BeltBlock.initBelt attaches each member before inventory.tick.
+            self.dims[dim].kinetics.attach_belt(p);
         }
     }
 
@@ -4458,6 +4532,32 @@ impl CreateWorld {
         }
     }
 
+    /// Level block-entity registration order shared by DepotBehaviour.tick and
+    /// BeltBlockEntity.tick. Call next only after applying the previous entity's transfers.
+    pub fn transport_ticks(&mut self, dim: usize) -> TransportTicks {
+        TransportTicks {
+            dim,
+            entities: self.dims[dim].transport_entities.0.clone().into_iter(),
+        }
+    }
+
+    /// One DepotBehaviour.tick, including a stack inserted by an earlier belt this tick.
+    pub fn tick_depot(&mut self, dim: usize, pos: [i32; 3], upright: bool) {
+        let d = &mut self.dims[dim];
+        if !d.sliding.contains(&pos) {
+            return;
+        }
+        let Some(Some(h)) = d.depots.get_mut(&pos) else {
+            return;
+        };
+        if h.slide(upright) && !d.depot_work.contains(&pos) {
+            d.depot_work.push(pos);
+        }
+        if !h.sliding() {
+            d.sliding.retain(|p| *p != pos);
+        }
+    }
+
     /// Belts currently holding items, for observation only. Use `belt_ticks` to tick.
     pub fn busy_belts(&self, dim: usize) -> Vec<[i32; 3]> {
         self.dims[dim]
@@ -4840,6 +4940,91 @@ mod tests {
         w.settle_belts(0);
         w.tick(0, &mut Vec::new());
         w
+    }
+
+    #[test]
+    fn first_empty_direction_follows_init_attachment() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = item_belt_world(32.0);
+        let c = [0, 8, 0];
+        // Remove only the belt nodes; the already ticking motor remains available.
+        for i in 0..5 {
+            w.dims[0].kinetics.remove([0, 8, i]);
+        }
+        w.take_belt(0, c);
+        w.settle_belts(0);
+        assert_eq!(w.belt_ticks(0).next(&mut w), None);
+        assert!(
+            w.column_belts(0, 0, 0)
+                .iter()
+                .find(|(p, _)| *p == c)
+                .unwrap()
+                .1
+                .positive
+        );
+    }
+
+    #[test]
+    fn depot_slides_at_its_registration_turn() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for depot_first in [false, true] {
+            let names = [
+                (
+                    "create:belt",
+                    vec![
+                        ("facing", "south"),
+                        ("slope", "horizontal"),
+                        ("part", "start"),
+                    ],
+                ),
+                (
+                    "create:belt",
+                    vec![
+                        ("facing", "south"),
+                        ("slope", "horizontal"),
+                        ("part", "end"),
+                    ],
+                ),
+                ("create:depot", vec![]),
+            ];
+            states::set_range(10, 3);
+            let mut w = CreateWorld::new(StateTable::new(
+                10,
+                names.iter().map(|(n, p)| (*n, p.iter().copied())),
+            ));
+            let p = [0, 8, 2];
+            if depot_first {
+                w.block_loaded(0, p, 12);
+            }
+            w.block_loaded(0, [0, 8, 0], 10);
+            w.block_loaded(0, [0, 8, 1], 11);
+            if !depot_first {
+                w.block_loaded(0, p, 12);
+            }
+            w.settle_belts(0);
+            // A queued belt item makes the controller require a full tick.
+            w.dims[0]
+                .belts
+                .get_mut(&[0, 8, 0])
+                .unwrap()
+                .items
+                .add(crate::belt::Item::new("minecraft:iron_ingot", 16, 0, false));
+            let mut turns = w.transport_ticks(0);
+            while let Some(turn) = turns.next(&mut w) {
+                match turn {
+                    TransportTick::Belt(_) => {
+                        let mut h = crate::depot::Held::new(0, false);
+                        h.position = 0.0;
+                        w.depot_put(0, p, Some(h));
+                    }
+                    TransportTick::Depot(p) => w.tick_depot(0, p, false),
+                }
+            }
+            assert_eq!(
+                w.saved_depot(0, p).unwrap().held.unwrap().position,
+                if depot_first { 0.0 } else { 0.125 }
+            );
+        }
     }
 
     struct ItemBeltSide;

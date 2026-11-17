@@ -1329,6 +1329,18 @@ impl Kinetics {
         self.nodes[id as usize].state.new_part = false;
     }
 
+    /// BeltBlock.initBelt invokes attachKinetics immediately for each chain member.
+    pub(crate) fn attach_belt(&mut self, pos: [i32; 3]) {
+        if let Some(id) = self.at.get(&pos).map(|ids| ids[0])
+            && id != NONE
+        {
+            let mut events = Vec::new();
+            self.nodes[id as usize].state.update_speed = false;
+            self.propagate_new_source(id, &mut events);
+            self.pending_events.extend(events);
+        }
+    }
+
     /// Runs queued block entity attachments and generator updates, then syncs network stress.
     pub fn solve(&mut self, events: &mut Vec<Event>) -> SolveStats {
         if !self.has_dirty() {

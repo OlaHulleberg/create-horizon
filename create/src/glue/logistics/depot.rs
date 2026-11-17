@@ -147,23 +147,20 @@ pub fn player_yaw(lv: &ServerLevel<'_>, p: PlayerRef) -> Option<f32> {
     p.entity().rotation(&*lv.host).map(|r| r[0])
 }
 
-/// `DepotBehaviour.tick` for depots whose stack slides, then the depots whose contents changed
-/// go to the players of the level.
-pub fn tick_depots(lv: &mut ServerLevel<'_>) {
-    let dim = lv.dim;
-    let sliding = with_world(|w| w.dims[dim].sliding.clone()).unwrap_or_default();
-    if !sliding.is_empty() {
-        let standing: Vec<[i32; 3]> = sliding
-            .iter()
-            .copied()
-            .filter(|p| {
-                depot_items(lv, *p)
-                    .first()
-                    .is_some_and(|(slot, item, _)| *slot == 0 && upright(&*lv.host, item))
-            })
-            .collect();
-        with_world(|w| w.tick_depots(dim, |p| standing.contains(&p)));
+/// One depot's block-entity turn in the shared transport walk.
+pub(super) fn tick_depot(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    if with_world(|w| w.dims[lv.dim].sliding.contains(&pos)) != Some(true) {
+        return;
     }
+    let standing = depot_items(lv, pos)
+        .first()
+        .is_some_and(|(slot, item, _)| *slot == 0 && upright(&*lv.host, item));
+    with_world(|w| w.tick_depot(lv.dim, pos, standing));
+}
+
+/// Publish client notifications after the shared block-entity walk.
+pub fn send_changed_depots(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
     let changed = with_world(|w| w.take_depot_changes(dim)).unwrap_or_default();
     if changed.is_empty() {
         return;

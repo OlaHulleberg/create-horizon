@@ -718,19 +718,27 @@ pub fn save_belts(lv: &mut ServerLevel<'_>) {
 }
 
 /// Belts: segments broken next to a broken one become shafts or air, a broken belt's items
-/// drop, then the engine visits controllers (`BeltBlockEntity.tick`), moving items
-/// received before their turn and updating empty inventories' direction bits.
-pub fn tick_belts(lv: &mut ServerLevel<'_>) {
+/// drop, then the engine visits depots and belts in level registration order,
+/// applying each transfer before the next entity's turn (`BeltBlockEntity.tick`,
+/// `DepotBehaviour.tick`), including empty inventories' direction updates.
+pub fn tick_transport(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     belt::break_cascade(&mut BeltBreakWorld(lv));
     let drops = with_world(|w| std::mem::take(&mut w.dims[dim].belt_drops)).unwrap_or_default();
     for (c, seg, length, item) in drops {
         eject_item(lv, c, &seg, length, 0.0, &item);
     }
-    let Some(mut phase) = with_world(|w| w.belt_ticks(dim)) else {
+    let Some(mut phase) = with_world(|w| w.transport_ticks(dim)) else {
         return;
     };
-    while let Some(c) = with_world(|w| phase.next(w)).flatten() {
+    while let Some(turn) = with_world(|w| phase.next(w)).flatten() {
+        let c = match turn {
+            create_engine::world::TransportTick::Depot(p) => {
+                super::depot::tick_depot(lv, p);
+                continue;
+            }
+            create_engine::world::TransportTick::Belt(c) => c,
+        };
         let Some((seg, length, mut belt_items)) = with_world(|w| {
             let b = w.dims[dim].belts.get_mut(&c)?;
             Some((
