@@ -428,13 +428,21 @@ pub struct BlockShape {
     pub shape: Shape,
 }
 
+/// Per-block entity state retained while another block controls it. `setWindows` changes
+/// only the controller's flag; `removeController` restores this block's own flag.
+#[derive(Clone, Copy, Debug)]
+pub struct Part {
+    pub controller: [i32; 3],
+    window: bool,
+}
+
 /// Every tank of a dimension (`ConnectivityHandler` over `FluidTankBlockEntity`s): each loaded
 /// tank block and its controller, each controller's tank. Tanks form and split only when a tank
 /// block is placed or removed.
 #[derive(Default)]
 pub struct Tanks {
     /// Each loaded tank block and its controller (itself for a controller).
-    pub parts: HashMap<[i32; 3], [i32; 3]>,
+    pub parts: HashMap<[i32; 3], Part>,
     /// Controllers and their tank.
     pub multis: HashMap<[i32; 3], Multi>,
     /// Blocks whose part of a tank changed: their block state, drawing and boiler follow.
@@ -464,21 +472,35 @@ pub fn blocks(origin: [i32; 3], width: u8, height: u8) -> impl Iterator<Item = [
 }
 
 impl Tanks {
+    fn insert_part(&mut self, p: [i32; 3], controller: [i32; 3]) {
+        if let Some(part) = self.parts.get_mut(&p) {
+            part.controller = controller;
+        } else {
+            self.parts.insert(
+                p,
+                Part {
+                    controller,
+                    window: true,
+                },
+            );
+        }
+    }
+
     /// The controller of the tank block at `p`, when both are loaded.
     #[inline]
     pub fn controller(&self, p: [i32; 3]) -> Option<[i32; 3]> {
-        let c = *self.parts.get(&p)?;
+        let c = self.parts.get(&p)?.controller;
         self.multis.contains_key(&c).then_some(c)
     }
 
     /// The tank the block at `p` is part of, and its controller.
     pub fn get(&self, p: [i32; 3]) -> Option<([i32; 3], &Multi)> {
-        let c = *self.parts.get(&p)?;
+        let c = self.parts.get(&p)?.controller;
         Some((c, self.multis.get(&c)?))
     }
 
     pub fn get_mut(&mut self, p: [i32; 3]) -> Option<([i32; 3], &mut Multi)> {
-        let c = *self.parts.get(&p)?;
+        let c = self.parts.get(&p)?.controller;
         Some((c, self.multis.get_mut(&c)?))
     }
 
@@ -500,12 +522,12 @@ impl Tanks {
             return;
         }
         if let Some(m) = saved {
-            self.parts.insert(p, p);
+            self.insert_part(p, p);
             self.multis.insert(p, m);
             for q in blocks(p, m.width, m.height) {
                 if q != p && self.parts.contains_key(&q) {
                     self.multis.remove(&q);
-                    self.parts.insert(q, p);
+                    self.insert_part(q, p);
                 }
                 self.touched.push(q);
             }
@@ -521,15 +543,15 @@ impl Tanks {
                         && dx < i32::from(m.width)
                         && dz < i32::from(m.width)
                         && dy < i32::from(m.height)
-                        && self.parts.get(&c) == Some(&c)
+                        && self.parts.get(&c).map(|p| p.controller) == Some(c)
                     {
-                        self.parts.insert(p, c);
+                        self.insert_part(p, c);
                         return;
                     }
                 }
             }
         }
-        self.parts.insert(p, p);
+        self.insert_part(p, p);
         self.multis.insert(p, Multi::default());
     }
 
@@ -544,7 +566,7 @@ impl Tanks {
             self.touched.push(p);
             return;
         }
-        self.parts.insert(p, p);
+        self.insert_part(p, p);
         self.multis.insert(p, Multi::default());
         self.touched.push(p);
         self.form(p);
@@ -554,9 +576,10 @@ impl Tanks {
     /// `FluidTankBlock.onRemove`: the tank it was part of splits (`splitMulti`), the fluid shared
     /// among the blocks left, and those blocks form tanks again.
     pub fn remove(&mut self, p: [i32; 3]) {
-        let Some(c) = self.parts.remove(&p) else {
+        let Some(part) = self.parts.remove(&p) else {
             return;
         };
+        let c = part.controller;
         self.touched.push(p);
         if c == p {
             if let Some(m) = self.multis.remove(&p) {
@@ -573,7 +596,7 @@ impl Tanks {
     /// its block entity's data): it leaves its tank without splitting it. A controller's tank
     /// goes with it; None for another block.
     pub fn take(&mut self, p: [i32; 3]) -> Option<Multi> {
-        let c = self.parts.remove(&p)?;
+        let c = self.parts.remove(&p)?.controller;
         if c != p {
             return None;
         }
@@ -591,11 +614,9 @@ impl Tanks {
     /// Tanks whose blocks were split form again (`updateConnectivity` on their next tick, here
     /// at once, in the order they were split).
     fn settle(&mut self) {
-        let mut i = 0;
-        while i < self.pending.len() {
-            let p = self.pending[i];
-            i += 1;
-            if self.parts.get(&p) == Some(&p) && self.multis.contains_key(&p) {
+        while !self.pending.is_empty() {
+            let p = self.pending.remove(0);
+            if self.parts.get(&p).map(|p| p.controller) == Some(p) && self.multis.contains_key(&p) {
                 self.form(p);
             }
         }
@@ -614,12 +635,13 @@ impl Tanks {
         let (min_x, min_z) = (start[0] - MAX_WIDTH, start[2] - MAX_WIDTH);
         let mut frontier = std::collections::VecDeque::from([start]);
         let mut visited = HashSet::new();
+        let mut cache = HashMap::new();
         let mut queue: Vec<(i32, [i32; 3])> = Vec::new();
         while let Some(part) = frontier.pop_front() {
             if !visited.insert(part) {
                 continue;
             }
-            let amount = self.try_form(part, true);
+            let amount = self.try_form(part, true, &mut cache);
             if amount > 1 {
                 queue.push((amount, part));
             }
@@ -637,27 +659,58 @@ impl Tanks {
             }
         }
         visited.clear();
-        // `makeCreationQueue`: the biggest first (ties in the order found).
-        queue.sort_by_key(|(amount, _)| std::cmp::Reverse(*amount));
-        for (_, p) in queue {
+        // Java PriorityQueue compares amounts only: equal entries do not sift upward;
+        // polling prefers the left child and stops on equality.
+        let mut heap: Vec<(i32, [i32; 3])> = Vec::new();
+        for entry in queue {
+            heap.push(entry);
+            let mut i = heap.len() - 1;
+            while i > 0 {
+                let parent = (i - 1) / 2;
+                if heap[i].0 <= heap[parent].0 {
+                    break;
+                }
+                heap.swap(i, parent);
+                i = parent;
+            }
+        }
+        while !heap.is_empty() {
+            let (_, p) = heap.swap_remove(0);
+            let mut i = 0;
+            while 2 * i + 1 < heap.len() {
+                let mut child = 2 * i + 1;
+                if child + 1 < heap.len() && heap[child + 1].0 > heap[child].0 {
+                    child += 1;
+                }
+                if heap[i].0 >= heap[child].0 {
+                    break;
+                }
+                heap.swap(i, child);
+                i = child;
+            }
             if visited.insert(p) {
-                self.try_form(p, false);
+                self.try_form(p, false, &mut cache);
             }
         }
     }
 
     /// `tryToFormNewMulti`: the width (1 to 3) that makes the biggest tank from the controller
     /// `be`, the wider on a tie; formed unless `simulate`. Its size in blocks.
-    fn try_form(&mut self, be: [i32; 3], simulate: bool) -> i32 {
+    fn try_form(
+        &mut self,
+        be: [i32; 3],
+        simulate: bool,
+        cache: &mut HashMap<[i32; 3], Option<[i32; 3]>>,
+    ) -> i32 {
         let Some(m) = self.multis.get(&be).copied() else {
             return 0;
         };
-        if self.parts.get(&be) != Some(&be) {
+        if self.parts.get(&be).map(|p| p.controller) != Some(be) {
             return 0;
         }
         let (mut best_width, mut best_amount) = (1u8, -1);
         for w in 1..=MAX_WIDTH as u8 {
-            let amount = self.of_width(be, w, None);
+            let amount = self.of_width(be, w, None, cache);
             if amount < best_amount {
                 continue;
             }
@@ -670,16 +723,12 @@ impl Tanks {
         if m.width == best_width && m.blocks() == best_amount {
             return best_amount;
         }
-        // Create would make a tank of no height here (a full-height tank that can't grow).
-        if best_amount < 1 {
-            return best_amount;
-        }
-        self.split(be);
+        self.split(be, cache);
         let capacity = best_amount as u32 * CAPACITY;
         if let Some(m) = self.multis.get_mut(&be) {
             m.tank.truncate(capacity);
         }
-        self.of_width(be, best_width, Some(capacity));
+        self.of_width(be, best_width, Some(capacity), cache);
         self.prevent(be);
         if let Some(m) = self.multis.get_mut(&be) {
             m.width = best_width;
@@ -694,7 +743,13 @@ impl Tanks {
     /// `tryToFormNewMultiOfWidth`: how many blocks a tank `width` wide from `origin` would hold,
     /// layer by layer while every block is a tank inside it whose fluid matches; with
     /// `capacity` (not simulating) the blocks join it, their fluid poured into it.
-    fn of_width(&mut self, origin: [i32; 3], width: u8, capacity: Option<u32>) -> i32 {
+    fn of_width(
+        &mut self,
+        origin: [i32; 3],
+        width: u8,
+        capacity: Option<u32>,
+        cache: &mut HashMap<[i32; 3], Option<[i32; 3]>>,
+    ) -> i32 {
         let Some(own) = self.multis.get(&origin).copied() else {
             return 0;
         };
@@ -705,7 +760,11 @@ impl Tanks {
             for x in 0..w {
                 for z in 0..w {
                     let pos = add(origin, x, y, z);
-                    let Some((c, other)) = self.get(pos) else {
+                    // ConnectivityHandler.SearchCache retains controller identities through
+                    // simulation and creation; splits explicitly invalidate their members.
+                    let c = *cache.entry(pos).or_insert_with(|| self.controller(pos));
+                    let Some((c, other)) = c.and_then(|c| self.multis.get(&c).map(|m| (c, m)))
+                    else {
                         break 'search;
                     };
                     if other.width > width
@@ -735,6 +794,8 @@ impl Tanks {
         let Some(capacity) = capacity else {
             return amount;
         };
+        // Java calls be.modifyExtraData(extraData), rather than part.modifyExtraData:
+        // the controller ORs its window flag with itself, leaving it unchanged.
         for pos in blocks(origin, width, height) {
             if pos == origin || !self.parts.contains_key(&pos) {
                 continue;
@@ -742,14 +803,14 @@ impl Tanks {
             // A controller's fluid is poured into the new tank (what doesn't fit is lost); a
             // creative tank without fluid takes it (`setContainedFluid`).
             if self.creative {
-                if self.parts.get(&pos) == Some(&pos)
+                if self.parts.get(&pos).map(|p| p.controller) == Some(pos)
                     && let Some(f) = self.multis.get_mut(&pos).and_then(|m| m.tank.fluid.take())
                     && let Some(m) = self.multis.get_mut(&origin)
                     && m.tank.fluid.is_none()
                 {
                     m.tank.fluid = Some(f);
                 }
-            } else if self.parts.get(&pos) == Some(&pos)
+            } else if self.parts.get(&pos).map(|p| p.controller) == Some(pos)
                 && let Some(t) = self
                     .multis
                     .get_mut(&pos)
@@ -759,10 +820,13 @@ impl Tanks {
             {
                 m.tank.fill_amount(f, t.amount, capacity);
             }
-            self.split(pos);
+            self.split(pos, cache);
             // `setController`: it is part of the new tank.
-            self.multis.remove(&pos);
-            self.parts.insert(pos, origin);
+            if let Some(old) = self.multis.remove(&pos) {
+                self.parts.get_mut(&pos).unwrap().window = old.window;
+            }
+            self.insert_part(pos, origin);
+            cache.insert(pos, Some(origin));
             self.prevent(pos);
             self.touched.push(pos);
         }
@@ -770,17 +834,25 @@ impl Tanks {
     }
 
     /// `splitMultiAndInvalidate` for the tank the block at `part` is in.
-    fn split(&mut self, part: [i32; 3]) {
+    fn split(&mut self, part: [i32; 3], cache: &mut HashMap<[i32; 3], Option<[i32; 3]>>) {
         let Some((c, m)) = self.get(part).map(|(c, m)| (c, *m)) else {
             return;
         };
         self.split_at(c, m, false);
+        if m.width != 1 || m.height != 1 {
+            for p in blocks(c, m.width, m.height) {
+                if self.parts.get(&p).is_some_and(|part| part.controller == p) {
+                    cache.insert(p, Some(p));
+                }
+            }
+        }
     }
 
     /// `splitMultiAndInvalidate` for the controller `c` (gone when `removed`), unless it is one
-    /// block: each of its blocks becomes a tank of its own (`removeController`) with the tank's
-    /// windows; the controller keeps a block's worth of fluid, the rest is shared out a block's
-    /// worth each in order (a removed controller's share is lost); the blocks form again later.
+    /// block: each surviving block becomes a controller (`removeController`). A live
+    /// controller supplies its window flag through extra data; otherwise each member keeps
+    /// its own. Fluid is distributed a block's worth at a time in y/x/z order, retaining a
+    /// live controller's share there. The blocks form again later.
     fn split_at(&mut self, c: [i32; 3], m: Multi, removed: bool) {
         if m.width == 1 && m.height == 1 {
             return;
@@ -797,7 +869,7 @@ impl Tanks {
             }
         }
         for pos in blocks(c, m.width, m.height) {
-            if self.parts.get(&pos) != Some(&c) {
+            if self.parts.get(&pos).map(|p| p.controller) != Some(c) {
                 continue;
             }
             let mut tank = if pos == c {
@@ -814,15 +886,22 @@ impl Tanks {
                 tank.fill_amount(f, split, CAPACITY);
                 share.drain_amount(split);
             }
-            self.parts.insert(pos, pos);
+            self.insert_part(pos, pos);
+            // setExtraData(null) is a no-op when the controller was removed.
+            // Otherwise the live controller supplies its Boolean before removeController.
             self.multis.insert(
                 pos,
                 Multi {
                     tank,
-                    window: m.window,
+                    window: if removed {
+                        self.parts[&pos].window
+                    } else {
+                        m.window
+                    },
                     ..Multi::default()
                 },
             );
+            self.parts.get_mut(&pos).unwrap().window = self.multis[&pos].window;
             self.cleared.push(pos);
             self.touched.push(pos);
             self.pending.push(pos);
@@ -882,6 +961,36 @@ pub fn tooltip(tank: Tank, capacity: u32) -> Vec<crate::gauge::Line> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removed_controller_restores_member_windows() {
+        let mut t = placed(&[[0, 4, 0], [0, 4, 1], [1, 4, 0], [1, 4, 1]]);
+        t.get_mut([0, 4, 0]).unwrap().1.window = false;
+        t.remove([0, 4, 0]);
+        for p in [[0, 4, 1], [1, 4, 0], [1, 4, 1]] {
+            assert_eq!(t.block_shape(p).unwrap().shape, Shape::Window);
+        }
+    }
+
+    #[test]
+    fn removed_lower_corner_reforms_upper_square_before_columns() {
+        let mut t = Tanks::default();
+        for y in 4..7 {
+            for x in 0..2 {
+                for z in 0..2 {
+                    t.place([x, y, z]);
+                }
+            }
+        }
+        t.get_mut([0, 4, 0]).unwrap().1.window = false;
+        t.remove([0, 4, 0]);
+        assert_eq!(size(&t, [0, 5, 0]), ([0, 5, 0], 2, 2));
+        assert_eq!(t.get([0, 5, 0]).unwrap().1.capacity(), 64000);
+        for p in [[0, 4, 1], [1, 4, 0], [1, 4, 1]] {
+            assert_eq!(size(&t, p), (p, 1, 1));
+            assert_eq!(t.block_shape(p).unwrap().shape, Shape::Window);
+        }
+    }
 
     #[test]
     fn a_carried_tank_comes_back_whole_with_its_fluid() {

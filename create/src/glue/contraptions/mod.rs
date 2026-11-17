@@ -830,7 +830,7 @@ fn joined_sides(dim: usize, p: [i32; 3], name: &str) -> u8 {
         let d = &w.dims[dim];
         let of = |q: [i32; 3]| {
             if tank {
-                d.tanks.parts.get(&q).copied()
+                d.tanks.parts.get(&q).map(|part| part.controller)
             } else {
                 d.vaults.controller_of(q)
             }
