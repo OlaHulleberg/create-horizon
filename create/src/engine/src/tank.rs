@@ -430,12 +430,32 @@ pub struct BlockShape {
 
 /// Per-block entity state retained while another block controls it. `setWindows` changes
 /// only the controller's flag; `removeController` restores this block's own flag.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Part {
     pub controller: [i32; 3],
-    window: bool,
-    /// FluidTankBlockEntity.updateConnectivity.
-    update_connectivity: bool,
+    pub window: bool,
+    /// FluidTankBlockEntity.updateConnectivity, saved as Uninitialized.
+    pub update_connectivity: bool,
+}
+
+/// FluidTankBlockEntity.write/read: per-member state and controller contents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SavedTank {
+    pub part: Part,
+    pub multi: Option<Multi>,
+}
+impl SavedTank {
+    /// Compatibility with the old controller-only column format.
+    pub fn controller(pos: [i32; 3], multi: Multi) -> Self {
+        Self {
+            part: Part {
+                controller: pos,
+                window: multi.window,
+                update_connectivity: false,
+            },
+            multi: Some(multi),
+        }
+    }
 }
 
 /// Every tank of a dimension (`ConnectivityHandler` over `FluidTankBlockEntity`s): each loaded
@@ -472,6 +492,19 @@ pub fn blocks(origin: [i32; 3], width: u8, height: u8) -> impl Iterator<Item = [
 }
 
 impl Tanks {
+    /// Restore read's per-member fields after the column's blocks are registered.
+    pub fn restore(&mut self, p: [i32; 3], saved: SavedTank) {
+        self.load(p, saved.multi);
+        self.parts.insert(p, saved.part);
+    }
+
+    pub fn saved(&self, p: [i32; 3]) -> Option<SavedTank> {
+        Some(SavedTank {
+            part: *self.parts.get(&p)?,
+            multi: self.multis.get(&p).copied(),
+        })
+    }
+
     fn insert_part(&mut self, p: [i32; 3], controller: [i32; 3]) {
         if let Some(part) = self.parts.get_mut(&p) {
             part.controller = controller;
@@ -970,6 +1003,31 @@ mod tests {
         for p in positions {
             t.tick(p);
         }
+    }
+
+    #[test]
+    fn uninitialized_tank_reconnects_after_save_and_load() {
+        // FluidTankBlockEntity.write/read: Java's upper tank at (0,5,0)
+        // saves Uninitialized and forms a 16000 mB, two-high tank next tick.
+        let lower = [0, 4, 0];
+        let upper = [0, 5, 0];
+        let mut original = Tanks::default();
+        original.load(lower, None);
+        original.load(upper, None);
+        original.parts.get_mut(&upper).unwrap().update_connectivity = true;
+        let saved = [
+            original.saved(lower).unwrap(),
+            original.saved(upper).unwrap(),
+        ];
+        let mut loaded = Tanks::default();
+        loaded.restore(lower, saved[0]);
+        loaded.restore(upper, saved[1]);
+        loaded.tick(lower);
+        loaded.tick(upper);
+        let (controller, tank) = loaded.get(upper).unwrap();
+        assert_eq!(controller, lower);
+        assert_eq!(tank.height, 2);
+        assert_eq!(tank.capacity(), 16000);
     }
 
     #[test]

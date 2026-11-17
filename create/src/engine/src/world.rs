@@ -244,7 +244,7 @@ pub struct Dimension {
     /// Fluid tanks: each tank block's controller and each controller's tank; tanks saved with
     /// a column wait here for their controller.
     pub tanks: crate::tank::Tanks,
-    tank_saved: HashMap<[i32; 3], crate::tank::Multi>,
+    tank_saved: HashMap<[i32; 3], crate::tank::SavedTank>,
     /// Creative fluid tanks joined as tanks are (`CreativeFluidTankBlockEntity` is a
     /// `FluidTankBlockEntity` of its own type): each controller's size and fluid; the fluid of
     /// each block is also `plumbing.creative`'s. Saved sizes wait here for their controller.
@@ -1244,10 +1244,14 @@ impl CreateWorld {
         if block == Block::FluidTank {
             d.boiler_checks.push(pos);
         }
-        if block == Block::FluidTank && !d.tanks.parts.contains_key(&pos) {
+        if block == Block::FluidTank {
             // Loaded: a saved tank's controller takes its blocks back (`read`).
             let saved = d.tank_saved.remove(&pos);
-            d.tanks.load(pos, saved);
+            if let Some(saved) = saved {
+                d.tanks.restore(pos, saved);
+            } else if !d.tanks.parts.contains_key(&pos) {
+                d.tanks.load(pos, None);
+            }
             d.tank_changes.push(pos);
             self.tanks_touched(dim, false);
         }
@@ -3936,31 +3940,28 @@ impl CreateWorld {
         self.dims[dim].railway.load_trains(saved)
     }
 
-    /// Tanks saved with a column (by controller), for when their controllers are found.
+    /// FluidTankBlockEntity.read state staged until each column member is found.
     pub fn load_tanks(
         &mut self,
         dim: usize,
-        saved: impl Iterator<Item = ([i32; 3], crate::tank::Multi)>,
+        saved: impl Iterator<Item = ([i32; 3], crate::tank::SavedTank)>,
     ) {
         self.dims[dim].tank_saved.extend(saved);
     }
 
-    /// The controllers of a column whose tank is more than a placed tank (bigger, filled or
-    /// without windows), to save.
+    /// FluidTankBlockEntity.write for every column member, including pending connectivity.
     pub fn column_tanks(
         &self,
         dim: usize,
         cx: i32,
         cz: i32,
-    ) -> Vec<([i32; 3], crate::tank::Multi)> {
+    ) -> Vec<([i32; 3], crate::tank::SavedTank)> {
         let mut out: Vec<_> = self.dims[dim]
             .tanks
-            .multis
-            .iter()
-            .filter(|(p, m)| {
-                (p[0] >> 4, p[2] >> 4) == (cx, cz) && **m != crate::tank::Multi::default()
-            })
-            .map(|(p, m)| (*p, *m))
+            .parts
+            .keys()
+            .filter(|p| (p[0] >> 4, p[2] >> 4) == (cx, cz))
+            .filter_map(|p| self.dims[dim].tanks.saved(*p).map(|saved| (*p, saved)))
             .collect();
         out.sort_by_key(|(p, _)| *p);
         out
@@ -6999,7 +7000,11 @@ mod tests {
         // Saved by controller: the three tanks left are plain one-block tanks without windows.
         let saved = w.column_tanks(0, 0, 0);
         assert_eq!(saved.len(), 3);
-        assert!(saved.iter().all(|(_, m)| m.blocks() == 1 && !m.window));
+        assert!(
+            saved
+                .iter()
+                .all(|(_, m)| m.multi.is_some_and(|m| m.blocks() == 1 && !m.window))
+        );
         states::clear_range();
     }
 

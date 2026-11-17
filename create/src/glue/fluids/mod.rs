@@ -278,12 +278,13 @@ impl Subsystem for Fluids {
         let dim = lv.dim;
         let tanks = with_world(|w| w.column_tanks(dim, chunk[0], chunk[1])).unwrap_or_default();
         if !tanks.is_empty() {
-            // x, y, z, fluid, amount, width, height, windows for each controller
-            // (`FluidTankBlockEntity`'s `TankContent`, `Size`, `Height`, `Window`).
+            // Per-member FluidTankBlockEntity.write state, including Uninitialized;
+            // controller contents occupy the first eight fields.
             let mut codes = Codes::default();
             let v = tanks
                 .iter()
-                .flat_map(|(p, m)| {
+                .flat_map(|(p, saved)| {
+                    let m = saved.multi.unwrap_or_default();
                     [
                         p[0],
                         p[1],
@@ -293,11 +294,17 @@ impl Subsystem for Fluids {
                         i32::from(m.width),
                         i32::from(m.height),
                         i32::from(m.window),
+                        saved.part.controller[0],
+                        saved.part.controller[1],
+                        saved.part.controller[2],
+                        i32::from(saved.part.window),
+                        i32::from(saved.part.update_connectivity),
+                        i32::from(saved.multi.is_some()),
                     ]
                 })
                 .collect();
-            data.insert("tank_multis".into(), Tag::IntArray(v));
-            put_fluid_keys(data, "tank_multis", codes);
+            data.insert("tank_entities".into(), Tag::IntArray(v));
+            put_fluid_keys(data, "tank_entities", codes);
         }
         plumbing::chunk_data_save(dim, chunk, data);
         machines::chunk_data_save(dim, chunk, data);
@@ -605,10 +612,38 @@ fn boiler_occlusion(lv: &ServerLevel<'_>, c: [i32; 3], width: i32) -> i32 {
     bits
 }
 
-/// Tanks saved with a column: `tank_multis` holds x, y, z, fluid, amount, width, height,
-/// windows for each controller; `tanks` (before multiblock tanks) x, y, z, fluid, amount for
-/// one-block tanks.
-fn tanks_from_nbt(data: &Compound) -> Vec<([i32; 3], Multi)> {
+/// FluidTankBlockEntity.read for column members; accept both older controller-only formats.
+fn tanks_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::tank::SavedTank)> {
+    if let Some(Tag::IntArray(v)) = data.get(&"tank_entities".into()) {
+        let keys = fluid_keys(data, "tank_entities");
+        return v
+            .as_chunks::<14>()
+            .0
+            .iter()
+            .map(|c| {
+                let p = [c[0], c[1], c[2]];
+                (
+                    p,
+                    create_engine::tank::SavedTank {
+                        part: create_engine::tank::Part {
+                            controller: [c[8], c[9], c[10]],
+                            window: c[11] != 0,
+                            update_connectivity: c[12] != 0,
+                        },
+                        multi: (c[13] != 0).then_some(Multi {
+                            tank: Tank {
+                                fluid: Codes::fluid(&keys, c[3]),
+                                amount: c[4].max(0) as u32,
+                            },
+                            width: c[5] as u8,
+                            height: c[6] as u8,
+                            window: c[7] != 0,
+                        }),
+                    },
+                )
+            })
+            .collect();
+    }
     let keys = fluid_keys(data, "tank_multis");
     let tank = |c: &[i32]| Tank {
         fluid: Codes::fluid(&keys, c[3]),
@@ -639,7 +674,9 @@ fn tanks_from_nbt(data: &Compound) -> Vec<([i32; 3], Multi)> {
             )
         }));
     }
-    out
+    out.into_iter()
+        .map(|(p, m)| (p, create_engine::tank::SavedTank::controller(p, m)))
+        .collect()
 }
 
 /// Tanks whose contents changed: their comparators read them again (`onFluidStackChanged`:
