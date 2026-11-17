@@ -478,8 +478,6 @@ struct Node {
     entity: u64,
     sub: u8,
     part: Part,
-    /// Registration order of this block entity, unchanged by kinetic reconfiguration.
-    registered_at: u64,
     /// Incarnation for queued block entity work.
     stamp: u64,
     state: KineticState,
@@ -758,7 +756,6 @@ impl Kinetics {
             entity,
             sub,
             part,
-            registered_at: self.stamp,
             stamp: self.stamp,
             state: KineticState::default(),
             live: true,
@@ -1017,12 +1014,6 @@ impl Kinetics {
     pub fn generated(&self, pos: [i32; 3], sub: u8) -> Option<f32> {
         let id = *self.at.get(&pos)?.get(sub as usize)?;
         (id != NONE).then(|| self.nodes[id as usize].part.generated)
-    }
-
-    /// Block entity registration order, shared by controller tick phases.
-    pub(crate) fn placement_order(&self, pos: [i32; 3]) -> Option<u64> {
-        let id = *self.at.get(&pos)?.first()?;
-        (id != NONE).then(|| self.nodes[id as usize].registered_at)
     }
 
     pub fn speed(&self, pos: [i32; 3], sub: u8) -> Option<f32> {
@@ -1542,22 +1533,6 @@ mod tests {
         assert_eq!(k.nodes[end as usize].state.source, None);
         assert_eq!(k.speed([2, 0, 0], 0), Some(0.0));
         assert_eq!(k.networks.figures(Some(network_id([0, 0, 0]))).2, 1);
-    }
-
-    #[test]
-    fn block_entity_registration_order_survives_reconfiguration() {
-        let mut k = Kinetics::new();
-        let a = [0, 0, 0];
-        let b = [1, 0, 0];
-        k.set(a, 0, Part::shaft(Axis::X));
-        k.set(b, 0, Part::shaft(Axis::X));
-        let order = k.placement_order(a).unwrap();
-        k.set(a, 0, Part::shaft(Axis::Z));
-        assert_eq!(k.placement_order(a), Some(order));
-        assert!(k.placement_order(a) < k.placement_order(b));
-        k.remove(a);
-        k.set(a, 0, Part::shaft(Axis::X));
-        assert!(k.placement_order(a) > k.placement_order(b));
     }
 
     #[test]
