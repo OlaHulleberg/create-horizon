@@ -2,8 +2,7 @@
 //! click on the block (`SequencedGearshiftBlock.useItemOn`), and what it sends back
 //! (`ConfigureSequencedGearshiftPacket`), kept in the block entity's data as Create keeps them
 //! (`Instructions`, read again when the block entity loads), with where its sequence is
-//! (`InstructionIndex` and the rest, saved at each step and every 10 ticks inside a turn or
-//! delay, as the API has no moment before a chunk is saved).
+//! (`InstructionIndex` and the rest, published after all level subsystems finish).
 //!
 //! The screen draws Create's `sequencer` texture, a row per instruction with its three inputs
 //! (kind, value, speed and direction) that the mouse wheel changes (`ScrollInput`), their
@@ -141,10 +140,8 @@ fn run_of_tag(data: &Compound) -> Option<seq::Run> {
     })
 }
 
-/// The sequence of the gearshift at `pos` saved with its block entity where it changed (each
-/// step, each power change, and every 10 ticks inside a turn or delay, as the game has no moment
-/// before a chunk is saved to write it then): a gearshift loads where it was, waiting at an
-/// await too.
+/// Publish `SequencedGearshiftBlockEntity.write`'s current run, including progress and timer.
+/// Called after all level mutations, as well as immediate instruction transitions.
 pub fn save_run(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let dim = lv.dim;
     let Some(run) = with_world(|w| w.sequencer_run(dim, pos)).flatten() else {

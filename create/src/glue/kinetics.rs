@@ -224,6 +224,20 @@ impl Subsystem for Kinetics {
 pub struct Solve;
 
 impl Subsystem for Solve {
+    fn write_entities(&self, lv: &mut ServerLevel<'_>) {
+        let positions = with_world(|w| {
+            w.dims[lv.dim]
+                .sequencers
+                .keys()
+                .copied()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+        for pos in positions {
+            super::sequencer::save_run(lv, pos);
+        }
+    }
+
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         tick_solve(lv);
     }
@@ -572,7 +586,6 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
 fn tick_sequencers(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let mut steps = Vec::new();
-    let mut checked = Vec::new();
     for (pos, running) in with_world(|w| w.take_sequencer_checks(dim)).unwrap_or_default() {
         let powered = lv.has_neighbor_signal(pos);
         if let Some(step) =
@@ -580,24 +593,6 @@ fn tick_sequencers(lv: &mut ServerLevel<'_>) {
         {
             steps.push((pos, step));
         }
-        checked.push(pos);
-    }
-    // Those inside a turn or delay are saved now and then too, as the structures they move
-    // save their offsets and limits (`SequencedGearshiftBlockEntity.write`'s progress).
-    if lv.game_time() % 10 == 0 {
-        let running: Vec<[i32; 3]> = with_world(|w| {
-            let d = &w.dims[dim];
-            d.sequencers
-                .iter()
-                .filter(|(_, s)| s.ticks())
-                .map(|(p, _)| *p)
-                .collect()
-        })
-        .unwrap_or_default();
-        checked.extend(running);
-    }
-    for pos in checked {
-        super::sequencer::save_run(lv, pos);
     }
     apply_sequencer_steps(lv, steps);
 }

@@ -50,7 +50,9 @@ ambience), packages, stock, schematics, decor, copycats, items and equipment, ad
    the kinetic solve, then what reads its result (gauges, comparators).
 4. **Clients.** The server writes what clients draw into block entity data (synced keys) or sends it on
    `create:net`; client hooks and block entity parts draw it.
-5. **Saving.** Each subsystem writes its column state in `chunk_data_save` and reads it back in `chunk_load`;
+5. **Saving.** After all subsystem ticks, `write_entities` publishes live entity state (including
+   mutations made by later subsystems). This is a completed-tick boundary, not a host save hook;
+   see the live entity serialization limitation in `API_GAPS.md`. Each subsystem writes its column state in `chunk_data_save` and reads it back in `chunk_load`;
    block entity data saves with the block entity.
 
 ## Adding a block

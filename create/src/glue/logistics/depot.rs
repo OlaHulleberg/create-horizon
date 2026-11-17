@@ -166,7 +166,6 @@ pub fn tick_depots(lv: &mut ServerLevel<'_>) {
     }
     let changed = with_world(|w| w.take_depot_changes(dim)).unwrap_or_default();
     if changed.is_empty() {
-        save_depots(lv);
         return;
     }
     // Arms using these depots and ejectors holding a new stack look again.
@@ -189,7 +188,6 @@ pub fn tick_depots(lv: &mut ServerLevel<'_>) {
             });
         }
     }
-    save_depots(lv);
     let players = lv.players();
     send_depots(lv, &players, &changed);
     // Ejectors are drawn every frame; a depot's kept drawing is redrawn.
@@ -200,7 +198,7 @@ pub fn tick_depots(lv: &mut ServerLevel<'_>) {
     }
 }
 
-fn save_depots(lv: &mut ServerLevel<'_>) {
+pub(super) fn save_depots(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     // Persist motion even on ticks that need no client notification. Empty records clear
     // the old HeldItem when the host inventory has been emptied.

@@ -9,6 +9,15 @@ Each entry: what Create does → what's missing → the API that would close it.
 
 ## World and blocks
 
+- **Live block entity serialization.** The SDK has no block entity save callback. The shared
+  `Subsystem::write_entities` phase publishes sequencer and depot state after all level subsystems
+  finish, before column attachments flush. This fixes completed-tick records, including belt/arm
+  handoffs after depot ticks. `level_tick_post` only promises to run after a successful level tick;
+  it does not promise that saves/unloads cannot occur earlier or that other mods cannot mutate
+  state afterwards. Exact Create `BlockEntity.write` semantics therefore still require a host
+  callback immediately before serializing an entity (including chunk saves and unloads), or an
+  API guarantee that every save sees a completed publication phase. No unload-time refresh can
+  repair a chunk already saved. Do not treat this phase as that missing guarantee.
 - **Chunk save moment.** Column data is written into its chunk attachment at the end of the tick that changed it
   (`glue/persist.rs`) → no hook before a chunk saves → a hook at the moment before a chunk is saved.
 - **Shape from a block entity.** A factory gauge's outline follows its panels (`FactoryPanelBlock.getShape`); here it

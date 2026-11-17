@@ -135,6 +135,11 @@ pub trait Subsystem: Sync {
     /// After a server level's tick.
     fn level_tick(&self, _lv: &mut ServerLevel<'_>) {}
 
+    /// Publish live entity state after every subsystem has finished mutating the level.
+    /// Like Create's BlockEntity.write, this must observe the final state, including
+    /// transfers from subsystems that run later than the entity's own tick.
+    fn write_entities(&self, _lv: &mut ServerLevel<'_>) {}
+
     /// Whether `level_tick` runs while the server is frozen (`/tick freeze`): only for what
     /// Create ticks from `LevelTickEvent` rather than from block entities.
     fn runs_frozen(&self) -> bool {
