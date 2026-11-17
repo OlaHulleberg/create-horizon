@@ -33,8 +33,11 @@ Each entry: what Create does → what's missing → the API that would close it.
   game gives scaffolding's context shape only to `minecraft:scaffolding` → a declaration field for it.
 - **Fluid interactions in declarations.** Honey or chocolate meeting lava turns it a tick later, from `fluid_tick` →
   no declaration for `registerFluidInteractions` → a content-declaration entry.
-- **Redstone in `state_for_placement`.** A clutch or gearshift placed beside power takes `powered` a tick later →
-  `LevelHost` has no `has_neighbor_signal`.
+- **Redstone in `state_for_placement`.** A clutch or gearshift placed beside power takes `powered` a tick later, and
+  one set with a `powered` value its neighbours disagree with (`/setblock`, structures) is corrected on placement, where
+  Create keeps it until a neighbour changes (#7) → `state_for_placement` gets a `&dyn LevelHost`, which has no
+  `has_neighbor_signal`; `LevelTicksHost` has it (`best_neighbor_signal`, `signal` too). Still so at Sunrise `bd21c4d`
+  and head (2026-11-17). Fix: pass a level with signal reads (`&dyn LevelTicksHost`) to `state_for_placement`.
 - **A placement answering another block.** A shaft placed in front of a steam engine becomes a powered shaft a tick
   later (`pickCorrectShaftType`) → `state_for_placement` can't read another block's state.
 - **Collision shapes in `can_survive`.** Hand cranks and valve handles are refused only against air or fluid →
