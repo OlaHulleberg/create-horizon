@@ -1,6 +1,23 @@
 //! Create's base/KineticBlockEntity and GeneratingKineticBlockEntity state.
 use super::Context;
 
+/// SmartBlockEntity's initialization and the last engine base-tick pass.
+/// Source and fluid subclasses may run this base phase before the final solve.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) enum Lifecycle {
+    #[default]
+    New,
+    Ticked(u64),
+}
+impl Lifecycle {
+    pub(super) fn is_new(self) -> bool {
+        matches!(self, Self::New)
+    }
+    pub(super) fn ran(self, pass: u64) -> bool {
+        matches!(self, Self::Ticked(last) if last == pass)
+    }
+}
+
 /// Runtime information belonging to one kinetic block entity, independent of its block part.
 #[derive(Clone, Debug)]
 pub(super) struct KineticState {
@@ -27,7 +44,9 @@ pub(super) struct KineticState {
     /// KineticBlockEntity.network: identity inherited from the immediate source.
     pub(super) net: Option<i64>,
     /// Added since the last solve (not a replaced part): a block entity that has not ticked yet.
-    pub(super) new_part: bool,
+    pub(super) lifecycle: Lifecycle,
+    /// KineticBlockEntity.networkDirty, consumed by this entity's base tick.
+    pub(super) network_dirty: bool,
     /// KineticBlockEntity.updateSpeed: attach on the next server tick.
     pub(super) update_speed: bool,
     pub(super) source: Option<PartLocation>,
@@ -50,7 +69,8 @@ impl Default for KineticState {
             flicker: 0,
             flicker_at: 0,
             net: None,
-            new_part: true,
+            lifecycle: Lifecycle::New,
+            network_dirty: false,
             update_speed: true,
             source: None,
             reactivate_source: false,

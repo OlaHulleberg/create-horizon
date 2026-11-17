@@ -160,15 +160,21 @@ impl Kinetics {
             let Some(inferred) = inferred else {
                 continue;
             }; // Defer missing source columns or inconsistent topology without destructive guesses.
+            // Migration reconstructs one complete component. Admit its authoritative
+            // saved anchors before enrolling the inferred legacy members, so the
+            // first member tick calculates the complete migrated source set.
+            for &anchor in &anchors {
+                self.initialize_network(anchor);
+            }
             for ((&id, old), mut state) in group.iter().zip(&original).zip(inferred) {
                 if !self.nodes[id as usize].load_origin.is_legacy() {
                     continue;
                 }
                 if old.net != state.net {
-                    self.networks.remove(old.net, id, &self.nodes);
+                    self.networks.remove(old.net, id, &mut self.nodes);
                 }
-                let first = old.new_part;
-                state.new_part = false;
+                let first = old.lifecycle.is_new();
+                state.lifecycle = state::Lifecycle::Ticked(self.base_pass);
                 state.update_speed = false;
                 state.overstressed = old.overstressed;
                 state.stress = old.stress;
@@ -190,10 +196,12 @@ impl Kinetics {
                     } else {
                         network.add(id, &mut self.nodes);
                     }
-                    self.networks.mark_entity_dirty(id, &self.nodes);
                 }
                 let (stress, capacity, size) = self.networks.figures(net);
                 self.update_from_network(id, capacity, stress, size);
+                if net.is_some() {
+                    self.nodes[id as usize].state.network_dirty = true;
+                }
                 if first {
                     self.scheduler
                         .validate_later(self.now, id, self.nodes[id as usize].stamp);

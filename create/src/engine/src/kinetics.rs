@@ -163,6 +163,8 @@ impl ShaftRotation {
 pub struct Part {
     /// Generator initialization entry point used when a saved entity returns.
     pub initialization: GeneratorInitialization,
+    /// KineticBlockEntity subclass notification after setSpeed.
+    pub speed_changed: SpeedChanged,
     /// The rotation axis.
     pub axis: Axis,
     /// Faces with a shaft end (`Dir::bit`), Create's `hasShaftTowards`.
@@ -193,6 +195,14 @@ pub struct Part {
     /// A gantry shaft or carriage, which a powered shaft and the carriage on it join across
     /// (`GantryShaftBlockEntity.isCustomConnection`, `propagateRotationTo`).
     pub gantry: Option<Gantry>,
+}
+
+/// Server-side onSpeedChanged callback owned by the kinetic entity subclass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpeedChanged {
+    Base,
+    /// StressGaugeBlockEntity refreshes its cached network size and clears networkDirty.
+    StressGauge,
 }
 
 /// CreativeMotorBlockEntity.initialize updates generation on every load; hand cranks
@@ -271,6 +281,7 @@ impl Part {
     pub fn shaft(axis: Axis) -> Part {
         Part {
             initialization: GeneratorInitialization::Placement,
+            speed_changed: SpeedChanged::Base,
             axis,
             shafts: Dir::from_axis(axis, true).bit() | Dir::from_axis(axis, false).bit(),
             rotation: ShaftRotation::Straight,
@@ -521,6 +532,8 @@ pub struct Kinetics {
     touched: Vec<[i32; 3]>,
     /// The ticks counted (`advance`), for the parts' flicker scores.
     now: u64,
+    /// Monotonic base-tick pass, including phases run before solve.
+    base_pass: u64,
 }
 
 /// Create's BlockPos.asLong, used by GeneratingKineticBlockEntity.createNetworkId.
@@ -598,7 +611,7 @@ impl Kinetics {
         else {
             return false;
         };
-        if !self.nodes[id as usize].state.new_part {
+        if !self.nodes[id as usize].state.lifecycle.is_new() {
             return false;
         }
         let n = &mut self.nodes[id as usize];
@@ -690,7 +703,7 @@ impl Kinetics {
             || !self.reactivation_due.is_empty()
             || !self.pending_events.is_empty()
             || !self.changed.is_empty()
-            || self.networks.has_dirty()
+            || self.nodes.iter().any(|n| n.live && n.state.network_dirty)
     }
 
     /// One tick went by: every part's flicker score falls by one (`KineticBlockEntity.tick`).
@@ -765,6 +778,17 @@ impl Kinetics {
             if old.generated != part.generated {
                 self.nodes[existing as usize].part = part;
                 self.update_generated_rotation(existing, &mut events);
+            } else if matches!(part.couple, Some(Couple::Controller(_)))
+                && old.couple != part.couple
+            {
+                // SpeedControllerBlockEntity.updateTargetRotation is the value callback,
+                // not a deferred block-state connection change.
+                self.nodes[existing as usize].part = part;
+                self.leave_network(existing);
+                self.handle_removed(existing, &mut events);
+                self.remove_source(existing);
+                self.nodes[existing as usize].state.update_speed = false;
+                self.propagate_new_source(existing, &mut events);
             } else {
                 self.handle_removed(existing, &mut events);
                 self.remove_source(existing);
@@ -934,7 +958,7 @@ impl Kinetics {
         // Existing propagation frames retain their old entity's speed, as Java references do.
         for id in ids.into_iter().filter(|&i| i != NONE) {
             let net = self.nodes[id as usize].state.net;
-            self.networks.remove(net, id, &self.nodes);
+            self.networks.remove(net, id, &mut self.nodes);
             self.nodes[id as usize].live = false;
         }
         let mut breaks = Vec::new();
@@ -1227,6 +1251,7 @@ impl Kinetics {
     fn update_from_network(&mut self, id: u32, capacity: f32, stress: f32, size: u32) {
         let n = &mut self.nodes[id as usize];
         self.saved_dirty.insert(n.pos);
+        n.state.network_dirty = false;
         n.state.network_size = size;
         n.state.capacity = capacity;
         n.state.stress = stress;
@@ -1241,6 +1266,7 @@ impl Kinetics {
                 self.speed_notifications.push((n.pos, shown));
             }
             self.mark_changed(id);
+            self.on_speed_changed(id);
         }
     }
 
@@ -1261,7 +1287,7 @@ impl Kinetics {
             .networks
             .members(old, &self.nodes)
             .any(|member| member == id);
-        self.networks.remove(old, id, &self.nodes);
+        self.networks.remove(old, id, &mut self.nodes);
         if enrolled {
             self.update_from_network(id, 0.0, 0.0, 0);
         }
@@ -1283,9 +1309,9 @@ impl Kinetics {
                 .get_or_create_network_for(net)
                 .add(id, &mut self.nodes)
             {
-                self.networks.mark_entity_dirty(id, &self.nodes);
                 let (stress, capacity, size) = self.networks.figures(net);
                 self.update_from_network(id, capacity, stress, size);
+                self.nodes[id as usize].state.network_dirty = true;
             }
         }
     }
@@ -1327,14 +1353,14 @@ impl Kinetics {
         std::mem::take(&mut self.speed_notifications)
     }
 
-    /// SmartBlockEntity initializes registered entities before a subclass ticks.
-    pub fn initialize_through(&mut self, pos: [i32; 3]) {
+    /// SmartBlockEntity initializes new entities before the first subclass tick.
+    pub fn tick_base_through(&mut self, pos: [i32; 3]) {
         let Some(ids) = self.at.get(&pos).copied() else {
             return;
         };
         if !ids
             .into_iter()
-            .any(|id| id != NONE && self.nodes[id as usize].state.new_part)
+            .any(|id| id != NONE && self.nodes[id as usize].state.lifecycle.is_new())
         {
             return;
         }
@@ -1345,7 +1371,7 @@ impl Kinetics {
             .nodes
             .iter()
             .enumerate()
-            .filter(|(_, n)| n.live && n.state.new_part && n.entity <= order)
+            .filter(|(_, n)| n.live && n.state.lifecycle.is_new() && n.entity <= order)
             .map(|(id, n)| (n.entity, id as u32))
             .collect();
         pending.sort_unstable();
@@ -1357,7 +1383,12 @@ impl Kinetics {
     }
 
     fn tick_base(&mut self, id: u32, tick: u64, events: &mut Vec<Event>) {
-        if !self.nodes[id as usize].live {
+        if !self.nodes[id as usize].live
+            || self.nodes[id as usize]
+                .state
+                .lifecycle
+                .ran(self.base_pass + 1)
+        {
             return;
         }
         if self.nodes[id as usize].load_origin == LoadOrigin::Legacy {
@@ -1374,8 +1405,34 @@ impl Kinetics {
         }
         // SmartBlockEntity.tick invokes KineticBlockEntity.initialize after
         // attachKinetics, before the generator's own initialize callback.
-        if self.nodes[id as usize].state.new_part {
+        if self.nodes[id as usize].state.lifecycle.is_new() {
             self.initialize_network(id);
+        }
+        let n = &self.nodes[id as usize];
+        if n.state.lifecycle.is_new()
+            && (n.load_origin == LoadOrigin::Placement
+                || n.part.initialization == GeneratorInitialization::EveryLoad)
+            && (n.state.source.is_none() || n.part.generated > n.state.theoretical)
+        {
+            self.update_generated_rotation(id, events);
+        }
+        if self.nodes[id as usize].state.lifecycle.is_new() {
+            self.scheduler
+                .validate_later(tick, id, self.nodes[id as usize].stamp);
+        }
+        self.nodes[id as usize].state.lifecycle = state::Lifecycle::Ticked(self.base_pass + 1);
+        if std::mem::take(&mut self.nodes[id as usize].state.network_dirty) {
+            let net = self.nodes[id as usize].state.net;
+            let sync = self.networks.update_network(net, &self.nodes);
+            if let Some(ref sync) = sync {
+                for &member in &sync.members {
+                    let n = &self.nodes[member as usize];
+                    if n.sub == 0 && self.watched.contains(&n.pos) {
+                        self.touched.push(n.pos);
+                    }
+                }
+            }
+            self.sync_network(sync);
         }
         // ChainGearshiftBlockEntity.tick runs the base tick before analogSignalChanged.
         if let Some(modifier) = self.nodes[id as usize].state.chain_signal.take() {
@@ -1387,19 +1444,6 @@ impl Kinetics {
             }
             self.propagate_new_source(id, events);
         }
-        let n = &self.nodes[id as usize];
-        if n.state.new_part
-            && (n.load_origin == LoadOrigin::Placement
-                || n.part.initialization == GeneratorInitialization::EveryLoad)
-            && (n.state.source.is_none() || n.part.generated > n.state.theoretical)
-        {
-            self.update_generated_rotation(id, events);
-        }
-        if self.nodes[id as usize].state.new_part {
-            self.scheduler
-                .validate_later(tick, id, self.nodes[id as usize].stamp);
-        }
-        self.nodes[id as usize].state.new_part = false;
     }
 
     /// BeltBlock.initBelt invokes attachKinetics immediately for each chain member.
@@ -1419,13 +1463,23 @@ impl Kinetics {
     /// Runs queued block entity attachments and generator updates, then syncs network stress.
     pub fn solve(&mut self, events: &mut Vec<Event>) -> SolveStats {
         if !self.has_dirty() {
+            self.base_pass += 1;
             return SolveStats::default();
         }
         self.migrate_saves_without_kinetic_state();
         events.append(&mut self.pending_events);
-        let mut pending = std::mem::take(&mut self.dirty);
-        pending.sort_by_key(|&id| self.nodes[id as usize].stamp);
-        pending.dedup();
+        self.dirty.clear();
+        // KineticBlockEntity.tick visits each live entity in level registration order;
+        // dirtied members earlier in the order wait until the next pass.
+        let mut pending: Vec<_> = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.live)
+            .map(|(id, n)| (n.entity, id as u32))
+            .collect();
+        pending.sort_unstable();
+        let pending = pending.into_iter().map(|(_, id)| id);
         for id in pending {
             self.tick_base(id, self.now, events);
         }
@@ -1439,14 +1493,8 @@ impl Kinetics {
         }
         self.dirty.clear();
         let mut stats = SolveStats::default();
-        let mut touched_nets = self.networks.take_dirty(&self.nodes);
-        for &net in &touched_nets {
-            if let Some(sync) = self.networks.update_network(net, &self.nodes) {
-                for id in sync.members {
-                    self.update_from_network(id, sync.capacity, sync.stress, sync.size);
-                }
-            }
-        }
+        self.base_pass += 1;
+        let mut touched_nets = HashSet::new();
         let mut changed = std::mem::take(&mut self.changed);
         for &id in &changed {
             let n = &mut self.nodes[id as usize];
@@ -1542,6 +1590,64 @@ fn controls(controller: &Part, cog: &Part) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn early_reload_keeps_caches_until_a_member_syncs_changed_totals() {
+        // Create Java issue #59: motor/press reloaded at tick 1, then gauge
+        // and valve admitted. At tick 3 the motor still caches stress 0, size 1;
+        // the gauge caches 0, size 3. Tick 4 synchronizes stress 256 and size 4.
+        let mut k = Kinetics::new();
+        let motor = Part {
+            initialization: GeneratorInitialization::EveryLoad,
+            generated: 16.0,
+            capacity: 16384.0,
+            ..Part::half(Dir::East)
+        };
+        let press = Part {
+            impact: 8.0,
+            ..Part::shaft(Axis::X)
+        };
+        k.set([0, 8, 0], 0, motor);
+        solve(&mut k);
+        k.set([1, 8, 0], 0, press);
+        let motor = Part {
+            generated: 32.0,
+            ..motor
+        };
+        k.set([0, 8, 0], 0, motor);
+        let saved = [
+            k.saved_state([0, 8, 0], 0).unwrap(),
+            k.saved_state([1, 8, 0], 0).unwrap(),
+        ];
+        for x in 0..2 {
+            k.unload([x, 8, 0]);
+        }
+        for (x, part) in [motor, press].into_iter().enumerate() {
+            k.set([x as i32, 8, 0], 0, part);
+            k.restore_state([x as i32, 8, 0], 0, saved[x]);
+        }
+        solve(&mut k);
+        k.set(
+            [2, 8, 0],
+            0,
+            Part {
+                speed_changed: SpeedChanged::StressGauge,
+                ..Part::shaft(Axis::X)
+            },
+        );
+        solve(&mut k);
+        let cached = |k: &Kinetics, x| k.saved_state([x, 8, 0], 0).unwrap().network.unwrap();
+        let m = cached(&k, 0);
+        assert_eq!((m.stress, m.capacity, m.size), (0.0, 524288.0, 1));
+        let g = cached(&k, 2);
+        assert_eq!((g.stress, g.size), (0.0, 3));
+        k.set([3, 8, 0], 0, Part::half(Dir::West));
+        solve(&mut k);
+        for x in 0..4 {
+            let m = cached(&k, x);
+            assert_eq!((m.stress, m.capacity, m.size), (256.0, 524288.0, 4));
+        }
+    }
 
     #[test]
     fn gearbox_keeps_incoming_speed_in_each_source_face_frame() {
@@ -2047,7 +2153,7 @@ mod tests {
             k.set(p, 0, part);
             assert!(k.restore_state(p, 0, saved));
         }
-        k.initialize_through(handle);
+        k.tick_base_through(handle);
         k.set(
             handle,
             0,
@@ -2289,7 +2395,7 @@ mod tests {
         k.change_block_state(pos, 0, motor(Dir::West, -32.0), false);
         solve(&mut k);
         // KineticNetwork.calculateStress checks entity identity, not network id.
-        k.networks.mark_dirty(net, &k.nodes);
+        k.networks.mark_dirty(net, &mut k.nodes);
         solve(&mut k);
         assert_eq!(k.networks.figures(net).2, 1);
         k.set(pos, 0, motor(Dir::West, 32.0));
@@ -2314,7 +2420,7 @@ mod tests {
         solve(&mut k);
         let id = k.at[&[2, 8, 0]][0];
         let net = k.nodes[id as usize].state.net;
-        k.networks.remove(net, id, &k.nodes);
+        k.networks.remove(net, id, &mut k.nodes);
         k.change_speed(id, 0.0);
         assert_eq!(k.networks.figures(net).2, 2);
     }

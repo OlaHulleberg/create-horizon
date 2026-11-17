@@ -141,6 +141,20 @@ impl Kinetics {
         if changed {
             self.mark_changed(id);
         }
+        self.on_speed_changed(id);
+    }
+
+    /// StressGaugeBlockEntity.onSpeedChanged calls updateFromNetwork with its cached
+    /// totals and the live network size. This also clears KineticBlockEntity.networkDirty.
+    pub(super) fn on_speed_changed(&mut self, id: u32) {
+        let n = &self.nodes[id as usize];
+        if n.part.speed_changed == SpeedChanged::StressGauge
+            && n.state.speed != 0.0
+            && n.state.net.is_some()
+        {
+            let (_, _, size) = self.networks.figures(n.state.net);
+            self.update_from_network(id, n.state.capacity, n.state.stress, size);
+        }
     }
 
     /// KineticBlockEntity.removeSource; GeneratingKineticBlockEntity.removeSource.

@@ -2198,9 +2198,6 @@ impl CreateWorld {
     fn solve(&mut self, dim: usize, events: &mut Vec<Event>) -> SolveStats {
         let d = &mut self.dims[dim];
         d.kinetics.advance();
-        if !d.kinetics.has_dirty() {
-            return SolveStats::default();
-        }
         let from = events.len();
         let stats = d.kinetics.solve(events);
         for (pos, speed) in d.kinetics.take_speed_notifications() {
@@ -2566,7 +2563,7 @@ impl CreateWorld {
         positions.sort_by_key(|&pos| d.block_entities.registration_order(pos).unwrap_or(u64::MAX));
         for pos in &positions {
             let handle = d.handles.get_mut(pos).unwrap();
-            d.kinetics.initialize_through(*pos);
+            d.kinetics.tick_base_through(*pos);
             if handle.saved.in_use > 0 {
                 handle.saved.in_use -= 1;
                 d.handle_changes.insert(*pos);
@@ -4756,7 +4753,7 @@ impl CreateWorld {
         while let Some(pos) = positions.next(&self.dims[dim].block_entities) {
             let d = &mut self.dims[dim];
             if d.plumbing.valves.contains_key(&pos) {
-                d.kinetics.initialize_through(pos);
+                d.kinetics.tick_base_through(pos);
             }
             for (p, speed) in d.kinetics.take_speed_notifications() {
                 if let Some(pointer) = d.plumbing.valves.get_mut(&p) {

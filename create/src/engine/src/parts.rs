@@ -437,7 +437,14 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         | Block::Deployer
         | Block::Speedometer
         | Block::Stressometer => s.facing.map_or([None, None], |f| {
-            one(Part::shaft(directional_axis(f, s.along_first)))
+            one(Part {
+                speed_changed: if block == Block::Stressometer {
+                    crate::kinetics::SpeedChanged::StressGauge
+                } else {
+                    crate::kinetics::SpeedChanged::Base
+                },
+                ..Part::shaft(directional_axis(f, s.along_first))
+            })
         }),
         // CuckooClockBlock (HorizontalKineticBlock): a shaft out of its back
         // (`hasShaftTowards`), on its facing's axis.

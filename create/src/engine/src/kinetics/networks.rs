@@ -112,12 +112,13 @@ impl KineticNetwork {
         true
     }
     /// Detach a port; the entity leaves only when its last enrolled port leaves.
-    pub(super) fn remove(&mut self, id: u32, nodes: &[Node]) {
+    pub(super) fn remove(&mut self, id: u32, nodes: &[Node]) -> bool {
+        let mut removed = false;
         self.members.retain(|entity, member| {
             if entity.0 != nodes[id as usize].entity {
                 return true;
             }
-            member.ports.remove(&id);
+            removed |= member.ports.remove(&id);
             if member.ports.is_empty() {
                 self.sources.remove(entity);
                 false
@@ -125,6 +126,7 @@ impl KineticNetwork {
                 true
             }
         });
+        removed
     }
     pub(super) fn update_capacity_for(&mut self, id: u32, capacity: f32, nodes: &[Node]) {
         self.sources.insert(
@@ -252,54 +254,39 @@ pub(super) struct NetworkSync {
     pub capacity: f32,
     pub size: u32,
 }
-/// TorquePropagator's registry and deduplicated networkDirty work queue.
+/// TorquePropagator's dimension registry; networkDirty belongs to each entity.
 #[derive(Default)]
 pub(super) struct TorquePropagator {
     networks: HashMap<i64, KineticNetwork>,
-    dirty: HashSet<(u32, Entity)>,
 }
 impl TorquePropagator {
     pub(super) fn get_or_create_network_for(&mut self, id: Option<i64>) -> &mut KineticNetwork {
         let id = id.expect("network identity");
         self.networks.entry(id).or_default()
     }
-    /// KineticBlockEntity.networkDirty belongs to the retained entity, including ghosts.
-    pub(super) fn mark_entity_dirty(&mut self, id: u32, nodes: &[Node]) {
-        self.dirty.insert((id, Entity(nodes[id as usize].entity)));
-    }
-    pub(super) fn mark_dirty(&mut self, net: Option<i64>, _nodes: &[Node]) {
+    pub(super) fn mark_dirty(&mut self, net: Option<i64>, nodes: &mut [Node]) {
         if let Some((&entity, member)) = net
             .and_then(|n| self.networks.get(&n))
             .and_then(|n| n.members.iter().next())
         {
             for &id in &member.ports {
-                self.dirty.insert((id, entity));
+                let n = &mut nodes[id as usize];
+                if n.entity == entity.0 {
+                    n.state.network_dirty = true;
+                }
             }
         }
     }
-    pub(super) fn has_dirty(&self) -> bool {
-        !self.dirty.is_empty()
-    }
-    /// Only a live entity tick consumes networkDirty and updates its current network.
-    pub(super) fn take_dirty(&mut self, nodes: &[Node]) -> HashSet<Option<i64>> {
-        std::mem::take(&mut self.dirty)
-            .into_iter()
-            .filter_map(|(id, entity)| {
-                let n = &nodes[id as usize];
-                (n.live && n.entity == entity.0)
-                    .then_some(n.state.net)
-                    .flatten()
-                    .map(Some)
-            })
-            .collect()
-    }
 
-    pub(super) fn remove(&mut self, net: Option<i64>, id: u32, nodes: &[Node]) {
+    pub(super) fn remove(&mut self, net: Option<i64>, id: u32, nodes: &mut [Node]) {
         let Some(key) = net else {
             return;
         };
         if let Some(n) = self.networks.get_mut(&key) {
-            n.remove(id, nodes);
+            // KineticNetwork.remove is a no-op for a detached retained entity.
+            if !n.remove(id, nodes) {
+                return;
+            }
             if n.members.is_empty() {
                 self.networks.remove(&key);
             } else {
