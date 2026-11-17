@@ -91,24 +91,21 @@ impl Kinetics {
                 a.state.theoretical * m
             };
         }
-        // SplitShaftBlockEntity: a disconnected output has axis modifier zero in
-        // both directions, even when a generator touches that output face.
-        if a.pos != b.pos {
-            for node in [a, b] {
-                if let Some(pair) = self.at.get(&node.pos) {
-                    let other = pair[1 - node.sub as usize];
-                    if other != NONE {
-                        let opposite = &self.nodes[other as usize];
-                        let link = node.part.link.or(opposite.part.link);
-                        if link == Some(0.0)
-                            && opposite.state.source.is_some()
-                            && opposite.state.source.is_some_and(|s| s.pos != node.pos)
-                        {
-                            return 0.0;
-                        }
-                    }
-                }
-            }
+        // RotationPropagator.getRotationSpeedModifier's axis connection.
+        if let Some(d) = Dir::from_offset(sub(b.pos, a.pos))
+            && a.part.shafts & d.bit() != 0
+            && b.part.shafts & d.opposite().bit() != 0
+        {
+            let output = a.part.rotation.modifier(self.source_facing(a.pos), d);
+            let input = b
+                .part
+                .rotation
+                .modifier(self.source_facing(b.pos), d.opposite());
+            return if input == 0.0 {
+                0.0
+            } else {
+                a.state.theoretical * output / input
+            };
         }
         a.state.theoretical * ratio
     }
@@ -180,6 +177,7 @@ impl Kinetics {
         let n = &mut self.nodes[id as usize];
         if n.state.source != Some(location) {
             self.saved_dirty.insert(n.pos);
+            n.fresh = true;
         }
         n.state.source = Some(location);
         let old_seq = n.state.seq;
@@ -294,7 +292,9 @@ impl Kinetics {
             }
             if opposite.abs() > current.abs() {
                 self.set_source(cur, m);
-                self.change_speed(cur, opposite);
+                let conveyed =
+                    self.get_conveyed_speed(m, cur, if r == 0.0 { 0.0 } else { 1.0 / r });
+                self.change_speed(cur, conveyed);
                 *stack.last_mut().unwrap() = (cur, self.get_connected_neighbours(cur), 0);
                 continue;
             }
@@ -321,7 +321,8 @@ impl Kinetics {
             }
             if new.abs() >= other.abs() {
                 self.set_source(m, cur);
-                self.change_speed(m, new);
+                let conveyed = self.get_conveyed_speed(cur, m, r);
+                self.change_speed(m, conveyed);
             } else {
                 self.change_speed(m, new);
                 self.set_source(m, cur);

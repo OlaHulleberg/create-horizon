@@ -149,6 +149,17 @@ pub fn rotation_offset(block: Block, axis: Axis, pos: [i32; 3]) -> f32 {
 
 /// The parts block `block` draws at `pos`, turning at `speeds` (its first and second half).
 pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Vec<Draw> {
+    draws_from_source(block, s, pos, speeds, None)
+}
+
+/// Draw shaft halves in DirectionalShaftHalvesBlockEntity.getSourceFacing frame.
+pub fn draws_from_source(
+    block: Block,
+    s: &StateInfo,
+    pos: [i32; 3],
+    speeds: [f32; 2],
+    source: Option<Dir>,
+) -> Vec<Draw> {
     let own = |axis: Axis, model: Model| Draw {
         slot: 0,
         model,
@@ -251,14 +262,14 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
         Block::Gearbox => s
             .axis
             .map(|a| {
-                // Each face's half turns as the gearbox's shaft on that face (its face sign).
+                // GearboxVisual: each half turns relative to the source face.
                 let gearbox = Part::gearbox(a);
                 Dir::ALL
                     .into_iter()
                     .filter(|d| d.axis() != a)
                     .enumerate()
                     .map(|(i, d)| {
-                        half(i as u8, d, speeds[0] * gearbox.face_sign[d as usize] as f32)
+                        half(i as u8, d, speeds[0] * gearbox.rotation.modifier(source, d))
                     })
                     .collect()
             })
@@ -266,10 +277,25 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
         Block::Clutch | Block::Gearshift => s
             .axis
             .map(|a| {
-                vec![
-                    half(0, Dir::from_axis(a, false), speeds[0]),
-                    half(1, Dir::from_axis(a, true), speeds[1]),
-                ]
+                let modifier = if !s.powered {
+                    1.0
+                } else if block == Block::Clutch {
+                    0.0
+                } else {
+                    -1.0
+                };
+                let rotation = Part::split_shaft(a, modifier).rotation;
+                [false, true]
+                    .into_iter()
+                    .map(|positive| {
+                        let face = Dir::from_axis(a, positive);
+                        half(
+                            u8::from(positive),
+                            face,
+                            speeds[0] * rotation.modifier(source, face),
+                        )
+                    })
+                    .collect()
             })
             .unwrap_or_default(),
         // BacktankRenderer: its shaft input out of the top, turning about up.
@@ -785,7 +811,7 @@ mod tests {
             axis: Some(Axis::Y),
             ..StateInfo::default()
         };
-        let d = draws(Block::Gearbox, &s, [0, 0, 0], [8.0, 0.0]);
+        let d = draws_from_source(Block::Gearbox, &s, [0, 0, 0], [8.0, 0.0], Some(Dir::East));
         assert_eq!(d.len(), 4);
         let east = d
             .iter()

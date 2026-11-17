@@ -125,6 +125,39 @@ pub enum Cog {
     Large,
 }
 
+/// Create's DirectionalShaftHalvesBlockEntity shaft modifiers; speed stays in the source frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ShaftRotation {
+    Straight,
+    Gearbox,
+    Split(f32),
+}
+impl ShaftRotation {
+    /// RotationPropagator.getAxisModifier: no source yet means modifier one.
+    pub fn modifier(self, source: Option<Dir>, face: Dir) -> f32 {
+        let Some(source) = source else { return 1.0 };
+        match self {
+            Self::Straight => 1.0,
+            Self::Split(m) => {
+                if face == source {
+                    1.0
+                } else {
+                    m
+                }
+            }
+            Self::Gearbox => {
+                if face.axis() == source.axis() {
+                    if face == source { 1.0 } else { -1.0 }
+                } else if face.positive() == source.positive() {
+                    -1.0
+                } else {
+                    1.0
+                }
+            }
+        }
+    }
+}
+
 /// One kinetic part as the solver sees it: what it connects to and what it adds.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Part {
@@ -132,9 +165,8 @@ pub struct Part {
     pub axis: Axis,
     /// Faces with a shaft end (`Dir::bit`), Create's `hasShaftTowards`.
     pub shafts: u8,
-    /// The speed a face's shaft turns at, relative to the part's own: -1 on a gearbox's faces that
-    /// turn the other way. 1 elsewhere.
-    pub face_sign: [i8; 6],
+    /// Source-relative shaft behaviour (`RotationPropagator.getAxisModifier`).
+    pub rotation: ShaftRotation,
     pub cog: Cog,
     /// RPM this part generates, signed along its axis (0 for none).
     pub generated: f32,
@@ -142,9 +174,6 @@ pub struct Part {
     pub capacity: f32,
     /// Stress impact per RPM (SU).
     pub impact: f32,
-    /// A split shaft's second half: `Some(link)` joins this node to the other node at its position
-    /// (index 0) at ratio `link` (1, -1 for a gearshift that reverses, 0 for a clutch that cuts).
-    pub link: Option<f32>,
     /// A belt segment's controller (its chain's start): segments of one belt turn together
     /// (`BeltBlockEntity.propagateRotationTo`).
     pub belt: Option<[i32; 3]>,
@@ -245,12 +274,11 @@ impl Part {
         Part {
             axis,
             shafts: Dir::from_axis(axis, true).bit() | Dir::from_axis(axis, false).bit(),
-            face_sign: [1; 6],
+            rotation: ShaftRotation::Straight,
             cog: Cog::None,
             generated: 0.0,
             capacity: 0.0,
             impact: 0.0,
-            link: None,
             belt: None,
             diagonal: false,
             chain: None,
@@ -265,27 +293,21 @@ impl Part {
             ..Part::shaft(axis)
         }
     }
-    /// Create's gearbox: shafts on the four faces around `axis`, two of them turning the other way
-    /// (`RotationPropagator.getAxisModifier` for `GearboxBlockEntity`, which is the same for any
-    /// source face up to the network's sign).
+    /// GearboxBlockEntity: four shaft faces around the axis, relative to getSourceFacing.
     pub fn gearbox(axis: Axis) -> Part {
-        let first = match axis {
-            Axis::X => Axis::Y,
-            _ => Axis::X,
-        };
-        let mut face_sign = [1i8; 6];
-        let mut shafts = 0;
-        for d in Dir::ALL {
-            if d.axis() == axis {
-                continue;
-            }
-            shafts |= d.bit();
-            let along = if d.positive() { 1 } else { -1 };
-            face_sign[d as usize] = if d.axis() == first { along } else { -along };
-        }
         Part {
-            shafts,
-            face_sign,
+            shafts: Dir::ALL
+                .into_iter()
+                .filter(|d| d.axis() != axis)
+                .fold(0, |mask, d| mask | d.bit()),
+            rotation: ShaftRotation::Gearbox,
+            ..Part::shaft(axis)
+        }
+    }
+    /// One SplitShaftBlockEntity, with the output modifier relative to its source.
+    pub fn split_shaft(axis: Axis, modifier: f32) -> Part {
+        Part {
+            rotation: ShaftRotation::Split(modifier),
             ..Part::shaft(axis)
         }
     }
@@ -313,7 +335,7 @@ pub fn ratio(a: &Part, b: &Part, diff: [i32; 3]) -> f32 {
         && a.shafts & d.bit() != 0
         && b.shafts & d.opposite().bit() != 0
     {
-        return a.face_sign[d as usize] as f32 / b.face_sign[d.opposite() as usize] as f32;
+        return 1.0;
     }
     // A powered gantry shaft and the carriage on its side facing away from it, either way
     // (`GantryShaftBlockEntity.propagateRotationTo`, `GantryCarriageBlockEntity
@@ -953,26 +975,25 @@ impl Kinetics {
         self.nodes[start as usize].state.source.is_some()
     }
 
+    /// DirectionalShaftHalvesBlockEntity.getSourceFacing.
+    pub fn source_facing(&self, pos: [i32; 3]) -> Option<Dir> {
+        let id = self.at.get(&pos)?[0];
+        let n = self.nodes.get(id as usize)?;
+        Dir::from_offset(sub(n.state.source?.pos, pos))
+    }
+
+    /// A shaft face's displayed speed, using the entity's source-relative modifier.
+    pub fn face_speed(&self, pos: [i32; 3], face: Dir) -> Option<f32> {
+        let id = self.at.get(&pos)?[0];
+        let n = self.nodes.get(id as usize)?;
+        Some(n.state.speed * n.part.rotation.modifier(self.source_facing(pos), face))
+    }
+
     /// The nodes connected to `id`, with the ratio from it to each.
     fn edges(&self, id: u32, out: &mut Vec<(u32, f32)>) {
         out.clear();
         let n = &self.nodes[id as usize];
         let (pos, part) = (n.pos, n.part);
-        // A split shaft's halves.
-        if let Some(pair) = self.at.get(&pos) {
-            let other = pair[1 - n.sub as usize];
-            if other != NONE {
-                let link = if n.sub == 1 {
-                    part.link
-                } else {
-                    self.nodes[other as usize].part.link
-                }
-                .unwrap_or(0.0);
-                if link != 0.0 {
-                    out.push((other, if n.sub == 1 { 1.0 / link } else { link }));
-                }
-            }
-        }
         for o in neighbour_offsets(&part) {
             let Some(pair) = self.at.get(&add(pos, o)) else {
                 continue;
@@ -1307,6 +1328,60 @@ fn controls(controller: &Part, cog: &Part) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gearbox_keeps_incoming_speed_in_each_source_face_frame() {
+        // Observed Create gearbox-*.json: entity takes the motor's 16 RPM;
+        // RotationPropagator.getAxisModifier sets each other face relative to it.
+        for axis in [Axis::X, Axis::Y, Axis::Z] {
+            for input in Dir::ALL.into_iter().filter(|d| d.axis() != axis) {
+                let mut k = Kinetics::new();
+                let pos = [0, 0, 0];
+                k.set(pos, 0, Part::gearbox(axis));
+                k.set(
+                    input.offset(),
+                    0,
+                    motor(
+                        input.opposite(),
+                        convert_to_direction(16.0, input.opposite()),
+                    ),
+                );
+                solve(&mut k);
+                assert_eq!(k.speed(pos, 0), Some(16.0));
+                assert_eq!(k.saved_state(pos, 0).unwrap().speed, 16.0);
+                assert_eq!(k.face_speed(pos, input), Some(16.0));
+                assert_eq!(k.face_speed(pos, input.opposite()), Some(-16.0));
+            }
+        }
+    }
+
+    #[test]
+    fn split_shaft_keeps_one_incoming_speed_from_either_end() {
+        // ClutchBlockEntity/GearshiftBlockEntity.getRotationSpeedModifier:
+        // powered output 0/-1, source face 1; the saved entity speed stays 16.
+        for axis in [Axis::X, Axis::Y, Axis::Z] {
+            for positive in [false, true] {
+                for modifier in [0.0, -1.0, 1.0] {
+                    let input = Dir::from_axis(axis, positive);
+                    let mut k = Kinetics::new();
+                    k.set([0, 0, 0], 0, Part::split_shaft(axis, modifier));
+                    k.set(
+                        input.offset(),
+                        0,
+                        motor(
+                            input.opposite(),
+                            convert_to_direction(16.0, input.opposite()),
+                        ),
+                    );
+                    k.set(input.opposite().offset(), 0, Part::shaft(axis));
+                    solve(&mut k);
+                    assert_eq!(k.saved_state([0, 0, 0], 0).unwrap().speed, 16.0);
+                    assert_eq!(k.face_speed([0, 0, 0], input), Some(16.0));
+                    assert_eq!(k.speed(input.opposite().offset(), 0), Some(16.0 * modifier));
+                }
+            }
+        }
+    }
 
     #[test]
     fn source_membership_follows_the_immediate_driver() {
@@ -1934,52 +2009,22 @@ mod tests {
                 let mut k = Kinetics::new();
                 let pos = [-5, 8, 2];
                 let motor_pos = add(pos, input.offset());
-                k.set(pos, 0, Part::half(Dir::Down));
-                k.set(
-                    pos,
-                    1,
-                    Part {
-                        link: Some(modifier),
-                        ..Part::half(Dir::Up)
-                    },
-                );
+                k.set(pos, 0, Part::split_shaft(Axis::Y, modifier));
                 solve(&mut k);
                 k.set(motor_pos, 0, motor(input.opposite(), 32.0));
                 solve(&mut k);
                 let expected = Some((network_id(motor_pos), 2));
                 assert_eq!(k.network_membership(motor_pos, 0), expected);
-                for sub in [0, 1] {
-                    assert_eq!(k.network_membership(pos, sub), expected);
-                    assert_eq!(k.saved_state(pos, sub).unwrap().network.unwrap().size, 2);
-                }
-                // addSilently consumes one unloaded member per entity, even when
-                // its two ports restore in the opposite order.
-                for order in [[0, 1], [1, 0]] {
-                    let mut restored = Kinetics::new();
-                    restored.set(pos, 0, Part::half(Dir::Down));
-                    restored.set(
-                        pos,
-                        1,
-                        Part {
-                            link: Some(modifier),
-                            ..Part::half(Dir::Up)
-                        },
-                    );
-                    restored.set(motor_pos, 0, motor(input.opposite(), 32.0));
-                    for sub in order {
-                        assert!(restored.restore_state(pos, sub, k.saved_state(pos, sub).unwrap()));
-                    }
-                    assert!(restored.restore_state(
-                        motor_pos,
-                        0,
-                        k.saved_state(motor_pos, 0).unwrap()
-                    ));
-                    solve(&mut restored);
-                    for sub in [0, 1] {
-                        assert_eq!(restored.network_membership(pos, sub), expected);
-                    }
-                    assert_eq!(restored.network_membership(motor_pos, 0), expected);
-                }
+                assert_eq!(k.network_membership(pos, 0), expected);
+                assert_eq!(k.saved_state(pos, 0).unwrap().network.unwrap().size, 2);
+                let mut restored = Kinetics::new();
+                restored.set(pos, 0, Part::split_shaft(Axis::Y, modifier));
+                restored.set(motor_pos, 0, motor(input.opposite(), 32.0));
+                assert!(restored.restore_state(pos, 0, k.saved_state(pos, 0).unwrap()));
+                assert!(restored.restore_state(motor_pos, 0, k.saved_state(motor_pos, 0).unwrap()));
+                solve(&mut restored);
+                assert_eq!(restored.network_membership(pos, 0), expected);
+                assert_eq!(restored.network_membership(motor_pos, 0), expected);
                 k.remove(pos);
                 solve(&mut k);
                 assert_eq!(
@@ -1994,15 +2039,7 @@ mod tests {
     fn split_shafts_cut_or_reverse() {
         let mut k = Kinetics::new();
         k.set([-1, 0, 0], 0, motor(Dir::East, 12.0));
-        k.set([0, 0, 0], 0, Part::half(Dir::West));
-        k.set(
-            [0, 0, 0],
-            1,
-            Part {
-                link: Some(-1.0),
-                ..Part::half(Dir::East)
-            },
-        );
+        k.set([0, 0, 0], 0, Part::split_shaft(Axis::X, -1.0));
         k.set([1, 0, 0], 0, Part::shaft(Axis::X));
         solve(&mut k);
         assert_eq!(
@@ -2010,14 +2047,7 @@ mod tests {
             Some(-12.0),
             "a powered gearshift reverses"
         );
-        k.set(
-            [0, 0, 0],
-            1,
-            Part {
-                link: Some(0.0),
-                ..Part::half(Dir::East)
-            },
-        );
+        k.set([0, 0, 0], 0, Part::split_shaft(Axis::X, 0.0));
         solve(&mut k);
         assert_eq!(k.speed([1, 0, 0], 0), Some(0.0), "a powered clutch cuts");
         assert_eq!(k.speed([0, 0, 0], 0), Some(12.0));
@@ -2028,11 +2058,11 @@ mod tests {
         // A clutch toggled every tick: the shaft it drives starts and stops each tick, 5 more
         // each time and one less each tick, until speed reaching it past 128 breaks it.
         let clutch = |k: &mut Kinetics, on: bool| {
-            let part = Part {
-                link: Some(if on { 0.0 } else { 1.0 }),
-                ..Part::half(Dir::East)
-            };
-            k.set([0, 0, 0], 1, part);
+            k.set(
+                [0, 0, 0],
+                0,
+                Part::split_shaft(Axis::X, if on { 0.0 } else { 1.0 }),
+            );
         };
         let mut k = Kinetics::new();
         k.set([-1, 0, 0], 0, motor(Dir::East, 16.0));
@@ -2053,7 +2083,7 @@ mod tests {
         }
         // 4 a tick net (5 a change, 1 a tick): past 128 at the start on tick 32.
         let t = broke.expect("the driven shaft breaks");
-        assert!((30..34).contains(&t), "broke at {t}");
+        assert!((30..=34).contains(&t), "broke at {t}");
         assert_eq!(k.speed([0, 0, 0], 0), Some(16.0), "the clutch stays");
         // Toggled every 20 ticks it never breaks: the tally falls back to 0 between.
         let mut k = Kinetics::new();

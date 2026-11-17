@@ -37,6 +37,7 @@ pub(crate) const BRACKET: &str = "Bracket";
 const CARRIED_SPEED: &str = "Speed";
 /// Server-only KineticBlockEntity.write data, one compound per engine port.
 const SAVED_KINETICS: &str = "KineticState";
+const SOURCE_FACE: &str = "create:source_face";
 /// In an update tag: the server is frozen (`/tick freeze`), so the block's parts are drawn at
 /// rest (`KineticBlockEntity.getSpeed` is 0 while `tickRateManager().isFrozen()`). Sent from the
 /// server's state as each tag is made, never saved.
@@ -637,6 +638,11 @@ fn set_speeds(
         data.insert(THEORY.into(), Tag::Float(theory.to_bits()));
         data.insert(OVER.into(), Tag::Byte(i8::from(over)));
     }
+    let source = with_world(|w| w.dims[lv.dim].kinetics.source_facing(pos)).flatten();
+    data.insert(
+        SOURCE_FACE.into(),
+        Tag::Int(source.map_or(-1, |d| d as i32)),
+    );
     let _ = entity.merge_data(&mut *lv.host, data);
 }
 
@@ -770,7 +776,7 @@ impl BlockEntityPart for KineticEntity {
     ) -> Option<Compound> {
         // The speeds, and what other subsystems keep in the same block entity for its clients:
         // every synced key, `absent()` for one the block entity doesn't hold (`synced`).
-        let mut shown: Compound = [SPEEDS, THEORY, OVER, BRACKET, SAVED_KINETICS]
+        let mut shown: Compound = [SPEEDS, THEORY, OVER, BRACKET, SAVED_KINETICS, SOURCE_FACE]
             .into_iter()
             .chain(
                 super::SUBSYSTEMS
@@ -813,7 +819,11 @@ impl BlockEntityPart for KineticEntity {
         // to it; a block another subsystem animates this frame is drawn again next frame, the
         // rest kept turning on the animation clock until the block entity changes.
         let systems = super::SUBSYSTEMS;
-        for d in client::draws(block, &info, event.pos, speeds) {
+        let source = match event.entity.nbt.get(&SOURCE_FACE.into()) {
+            Some(Tag::Int(n)) => create_engine::kinetics::Dir::ALL.get(*n as usize).copied(),
+            _ => None,
+        };
+        for d in client::draws_from_source(block, &info, event.pos, speeds, source) {
             if !systems.iter().any(|s| s.draws_itself(block, &d)) {
                 draw_turning(event.draw, block, &own, &d);
             }

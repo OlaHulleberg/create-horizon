@@ -204,8 +204,7 @@ impl Default for Settings {
 /// `HandCrankBlock.getRotationSpeed`.
 pub const CRANK_RPM: f32 = 32.0;
 
-/// The kinetic parts of a block state: none for a block that is not kinetic, two for a split shaft
-/// (its halves, the second linked to the first).
+/// The kinetic entities of a block state; sequenced gearshifts retain two coupled ports.
 pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>; 2] {
     let with_stress = |p: Part| Part {
         impact: block.impact(),
@@ -260,12 +259,7 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
                 (Block::Clutch, true) => 0.0,
                 _ => -1.0,
             };
-            let first = Part::half(Dir::from_axis(a, false));
-            let second = Part {
-                link: Some(link),
-                ..Part::half(Dir::from_axis(a, true))
-            };
-            [Some(with_stress(first)), Some(with_stress(second))]
+            one(Part::split_shaft(a, link))
         }),
         // ChainDriveBlock: shafts at both ends of its axis, and its chain to the drives beside it
         // (`areBlocksConnected`), turning it at the adjustable gearshift's modifier for its
@@ -814,7 +808,7 @@ mod tests {
             let split = info(&[("axis", "x"), ("powered", "true")]);
             let [a, b] = parts(block, &split, &Settings::default());
             k.set([0, 0, 0], 0, a.unwrap());
-            k.set([0, 0, 0], 1, b.unwrap());
+            assert!(b.is_none());
             let shaft = info(&[("axis", "x")]);
             k.set(
                 [1, 0, 0],
