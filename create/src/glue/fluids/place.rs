@@ -263,6 +263,15 @@ impl mod_api::ItemPart for TankItem {
         let Some(player) = event.placer else {
             return;
         };
+        // The accepted placement can be followed immediately by a save. Publish
+        // FluidTankBlockEntity.write state, including pending updateConnectivity,
+        // before any optional layer placement is queued.
+        if let Some(dimension) = player.dimension(&*host) {
+            let dimension = dimension.to_string();
+            if let Some(mut lv) = super::super::server::ServerLevel::new(host, &dimension) {
+                super::super::persist::publish(&mut lv);
+            }
+        }
         if items::sneaking(&*host, player) {
             return;
         }
