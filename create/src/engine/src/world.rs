@@ -1722,9 +1722,6 @@ impl CreateWorld {
                 d.windmill_changes.push(pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
-            if let Some(seg) = self.table.get(old).and_then(|(_, i)| i.belt) {
-                self.belt_removed(dim, pos, seg);
-            }
             let d = &mut self.dims[dim];
             if d.depots.remove(&pos).is_some() {
                 d.sliding.retain(|p| *p != pos);
@@ -1736,6 +1733,13 @@ impl CreateWorld {
             if let Some(list) = d.columns.get_mut(&(pos[0] >> 4, pos[2] >> 4)) {
                 list.retain(|p| *p != pos);
             }
+        }
+        // `BeltBlock.onRemove` tests block identity, not whether the replacement is
+        // kinetic. A pulley becomes a shaft and still removes its next belt segments.
+        if let Some(seg) = self.table.get(old).and_then(|(_, i)| i.belt)
+            && self.table.get(new).map(|(b, _)| b) != Some(Block::Belt)
+        {
+            self.belt_removed(dim, pos, seg);
         }
     }
 
@@ -5142,6 +5146,72 @@ mod tests {
         // Java cascade.min.json: tick 101 has air at z=1, shaft(axis=x) at z=2.
         assert!(!w.dims[0].states.contains_key(&[0, 8, 1]));
         assert_eq!(w.dims[0].states.get(&[0, 8, 2]), Some(&13));
+        assert!(w.dims[0].belt_breaks.is_empty());
+        states::clear_range();
+    }
+
+    #[test]
+    fn belt_break_cascade_continues_through_an_intermediate_pulley() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names = ["start", "pulley", "middle", "end"].map(|part| {
+            (
+                "create:belt",
+                vec![
+                    ("facing", "south"),
+                    ("slope", "horizontal"),
+                    ("part", part),
+                    ("casing", "false"),
+                    ("waterlogged", "false"),
+                ],
+            )
+        });
+        states::set_range(10, 6);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names
+                .iter()
+                .map(|(n, p)| (*n, p.iter().copied()))
+                .chain(std::iter::once((
+                    "create:shaft",
+                    [("axis", "x")].iter().copied(),
+                )))
+                .chain(std::iter::once((
+                    "create:creative_motor",
+                    [("facing", "east")].iter().copied(),
+                ))),
+        ));
+        for z in 0..4 {
+            w.block_changed(0, [0, 8, z], 0, if z == 1 { 12 } else { 10 + z as u32 });
+        }
+        w.block_changed(0, [-1, 8, 0], 0, 15);
+        w.settle_belts(0);
+        w.tick(0, &mut Vec::new());
+        // Putting a shaft into the middle changes its part, without removing the belt.
+        w.switching_block_state(0, [0, 8, 1], 11);
+        w.block_changed(0, [0, 8, 1], 12, 11);
+        assert!(w.dims[0].belt_breaks.is_empty());
+        w.block_changed(0, [0, 8, 0], 10, 0);
+        struct Ground<'a>(&'a mut CreateWorld);
+        impl crate::belt::BreakWorld for Ground<'_> {
+            fn take_breaks(&mut self) -> Vec<BeltBreak> {
+                std::mem::take(&mut self.0.dims[0].belt_breaks)
+            }
+            fn replace(&mut self, b: BeltBreak) {
+                let old = self.0.dims[0].states[&b.pos];
+                assert_eq!(
+                    b.shaft,
+                    matches!(b.pos[2], 1 | 3).then_some(crate::kinetics::Axis::X)
+                );
+                self.0
+                    .block_changed(0, b.pos, old, if b.shaft.is_some() { 14 } else { 0 });
+            }
+        }
+        crate::belt::break_cascade(&mut Ground(&mut w));
+        // Java c23pulley.json, tick 101: air, shaft(axis=x), air, shaft(axis=x).
+        assert!(!w.dims[0].states.contains_key(&[0, 8, 0]));
+        assert_eq!(w.dims[0].states.get(&[0, 8, 1]), Some(&14));
+        assert!(!w.dims[0].states.contains_key(&[0, 8, 2]));
+        assert_eq!(w.dims[0].states.get(&[0, 8, 3]), Some(&14));
         assert!(w.dims[0].belt_breaks.is_empty());
         states::clear_range();
     }
