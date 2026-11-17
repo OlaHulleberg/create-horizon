@@ -12,7 +12,7 @@ Sunrise at the pin with an SDK built from the same checkout, signed with a throw
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `create/` | `cargo +1.99.1 test` | Pass (83 glue tests) |
-| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (682 engine tests) |
+| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (684 engine tests) |
 | `create/` | `cargo horizon-mod check` | Pass ("Create uses 3574 items of the API … Made for b77574e.") |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/src/engine/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
@@ -114,6 +114,7 @@ above:
 | A gauge's comparator after its network stops (#11) | Pass | Hand crank on a speedometer read by a comparator: 7 while turning at 32, 0 once the crank stops |
 | A split shaft is one network member (#12) | Not gameplay-visible | Network size has no in-game readout and clutches and gearshifts add no stress; checked by the fuzzer (5299 of 5300, the other #7) and `split_shaft_is_one_network_entity` |
 | A kinetic block's state changed in place (#13) | Pass | Motor at 16 facing north, `/setblock` to facing south beside a shaft: it keeps -16 and the shaft stays still, as in Create; after reload it turns at 16 and drives the shaft (`CreativeMotorBlockEntity.initialize`). A player's wrench, clicked outside the value box, turns a motor from east to down: 16 becomes -16 on the next tick (`switchToBlockState`'s `reActivateSource`) and stays -16 after reload |
+| A speed change never re-enrols a detached member (247556e) | No gameplay path known | `KineticBlockEntity.setSpeed`/`onSpeedChanged` leave the network alone; `detached_member_speed_change_does_not_enroll_it_again` fails without it; fuzzer seeds 0-10299 unchanged |
 | Kinetic state saved and loaded (#10) | Pass | Two member-motor pairs keep their roles over two save/reload cycles; a world saved before #10 loads with both pairs intact and keeps them after saving again |
 
 Known differences left: the category editor's inventory shows the inventory as it was at the last change made in
