@@ -784,6 +784,9 @@ impl BlockEntityPart for KineticEntity {
         let legacy = loading_legacy_save(&data);
         with_world(|w| {
             w.block_loaded(dim, pos, state);
+            if let Some(Tag::Compound(depot)) = data.get(&"DepotState".into()) {
+                w.restore_depot(dim, pos, super::logistics::depot::saved_from_nbt(depot));
+            }
             if let Some(Tag::Compound(handle)) = data.get(&"HandleState".into()) {
                 w.restore_handle(dim, pos, handle_from_nbt(handle));
             }

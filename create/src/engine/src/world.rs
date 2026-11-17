@@ -2994,7 +2994,18 @@ impl CreateWorld {
         }
     }
 
-    /// Columns whose saved data changed since the last call.
+    /// `DepotBehaviour.write`: slots retain item identity; this saves its transport state.
+    pub fn saved_depot(&self, dim: usize, pos: [i32; 3]) -> Option<crate::depot::SavedDepot> {
+        Some(crate::depot::SavedDepot {
+            held: *self.dims.get(dim)?.depots.get(&pos)?,
+        })
+    }
+
+    /// `DepotBehaviour.read`, after block_loaded and before the first depot tick.
+    pub fn restore_depot(&mut self, dim: usize, pos: [i32; 3], saved: crate::depot::SavedDepot) {
+        self.depot_put(dim, pos, saved.held);
+    }
+
     /// A stack was put on the depot at `pos` with this motion (it slides from now on), or its
     /// held stack left (None).
     pub fn depot_put(&mut self, dim: usize, pos: [i32; 3], held: Option<crate::depot::Held>) {
@@ -5243,6 +5254,45 @@ mod tests {
         );
         w.block_changed(0, [0, 0, 0], 12, 0);
         assert!(w.dims[0].railway.signals.is_empty());
+        states::clear_range();
+    }
+
+    #[test]
+    fn depot_motion_survives_cold_load() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        states::set_range(10, 1);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            [("create:depot", std::iter::empty())].into_iter(),
+        ));
+        let pos = [0, 8, 5];
+        w.block_changed(0, pos, 0, 10);
+        w.depot_put(
+            0,
+            pos,
+            Some(crate::depot::Held::put_by_player(
+                90,
+                false,
+                crate::depot::Side::West,
+            )),
+        );
+        for _ in 0..9 {
+            w.tick_depots(0, |_| false);
+        }
+        let saved = w.saved_depot(0, pos).unwrap();
+        w.column_unloaded(0, 0, 0);
+        w.block_loaded(0, pos, 10);
+        w.restore_depot(0, pos, saved);
+        assert_eq!(w.saved_depot(0, pos), Some(saved));
+        for expected in [0.48592162, 0.48944122, 0.49208093] {
+            w.tick_depots(0, |_| false);
+            assert!(
+                (w.saved_depot(0, pos).unwrap().held.unwrap().position - expected).abs()
+                    < 0.0000001
+            );
+        }
+        w.restore_depot(0, pos, crate::depot::SavedDepot { held: None });
+        assert_eq!(w.saved_depot(0, pos).unwrap().held, None);
         states::clear_range();
     }
 

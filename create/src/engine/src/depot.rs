@@ -93,6 +93,12 @@ pub struct Held {
     pub fan: crate::fan::Progress,
 }
 
+/// `DepotBehaviour.write/read`'s held transport state, independent of host inventory slots.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SavedDepot {
+    pub held: Option<Held>,
+}
+
 impl Held {
     /// `new TransportedItemStack(stack)`: a random angle (180 for upright items), the side
     /// offset that follows from it.

@@ -54,7 +54,7 @@ mod belt;
 pub(crate) mod carried;
 pub(crate) mod chute;
 pub(crate) mod client;
-mod depot;
+pub(crate) mod depot;
 mod flaps;
 pub(crate) mod funnel;
 mod handlers;

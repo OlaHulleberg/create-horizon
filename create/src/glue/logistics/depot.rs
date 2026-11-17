@@ -166,13 +166,14 @@ pub fn tick_depots(lv: &mut ServerLevel<'_>) {
     }
     let changed = with_world(|w| w.take_depot_changes(dim)).unwrap_or_default();
     if changed.is_empty() {
+        save_depots(lv);
         return;
     }
     // Arms using these depots and ejectors holding a new stack look again.
     arms_touched(dim, &changed, &[]);
     wake_ejectors(dim, &changed);
     // A depot that joined holding a stack (a saved world, a block placed with its items) has
-    // it at rest in the centre, as Create reads `HeldItem` back.
+    // it at rest only for legacy saves without transport state.
     for &pos in &changed {
         let unknown = with_world(|w| matches!(w.dims[dim].depots.get(&pos), Some(None)));
         if unknown != Some(true) {
@@ -188,6 +189,7 @@ pub fn tick_depots(lv: &mut ServerLevel<'_>) {
             });
         }
     }
+    save_depots(lv);
     let players = lv.players();
     send_depots(lv, &players, &changed);
     // Ejectors are drawn every frame; a depot's kept drawing is redrawn.
@@ -195,6 +197,23 @@ pub fn tick_depots(lv: &mut ServerLevel<'_>) {
         if super::info_at(lv, pos).is_some_and(|(b, _)| b == create_engine::Block::Depot) {
             super::touch_shown(lv, pos);
         }
+    }
+}
+
+fn save_depots(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    // Persist motion even on ticks that need no client notification. Empty records clear
+    // the old HeldItem when the host inventory has been emptied.
+    let records = with_world(|w| {
+        w.dims[dim]
+            .depots
+            .keys()
+            .filter_map(|&p| w.saved_depot(dim, p).map(|s| (p, s)))
+            .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
+    for (pos, saved) in records {
+        lv.write_entity_field(pos, "DepotState", saved_to_nbt(saved));
     }
 }
 
@@ -243,4 +262,102 @@ pub fn depot_contents_changed(lv: &ServerLevel<'_>, pos: [i32; 3]) {
         }
     };
     with_world(|w| w.depot_put(dim, pos, now));
+}
+
+/// `TransportedItemStack.serializeNBT/read` for the engine's depot fields. The host
+/// container separately persists Item and OutputBuffer, including item components.
+pub(crate) fn saved_to_nbt(saved: depot::SavedDepot) -> mod_api::Compound {
+    use mod_api::{Compound, Tag};
+    let Some(h) = saved.held else {
+        return Compound::new();
+    };
+    let mut held = Compound::from([
+        ("Pos".into(), Tag::Float(h.position.to_bits())),
+        ("Offset".into(), Tag::Float(h.side_offset.to_bits())),
+        ("Angle".into(), Tag::Int(h.angle)),
+        (
+            "InDirection".into(),
+            Tag::Int(h.from.map_or(-1, |s| i32::from(s.index()))),
+        ),
+        ("Locked".into(), Tag::Byte(i8::from(h.locked))),
+    ]);
+    if let Some(by) = h.fan.by {
+        use create_engine::fan::Kind;
+        let id = match by {
+            Kind::Splashing => "create:splashing",
+            Kind::Haunting => "create:haunting",
+            Kind::Smoking => "create:smoking",
+            Kind::Blasting => "create:blasting",
+        };
+        held.insert("FanProcessingType".into(), Tag::String(id.into()));
+        held.insert("FanProcessingTime".into(), Tag::Int(h.fan.time));
+    }
+    Compound::from([("HeldItem".into(), Tag::Compound(held))])
+}
+
+pub(crate) fn saved_from_nbt(data: &mod_api::Compound) -> depot::SavedDepot {
+    use mod_api::Tag;
+    let Some(Tag::Compound(h)) = data.get(&"HeldItem".into()) else {
+        return depot::SavedDepot { held: None };
+    };
+    let int = |k: &str| match h.get(&k.into()) {
+        Some(Tag::Int(v)) => *v,
+        _ => 0,
+    };
+    let float = |k: &str| match h.get(&k.into()) {
+        Some(Tag::Float(v)) => f32::from_bits(*v),
+        _ => 0.0,
+    };
+    depot::SavedDepot {
+        held: Some(depot::Held {
+            position: float("Pos"),
+            side_offset: float("Offset"),
+            angle: int("Angle"),
+            from: u8::try_from(int("InDirection"))
+                .ok()
+                .and_then(depot::Side::from_index),
+            locked: matches!(h.get(&"Locked".into()), Some(Tag::Byte(v)) if *v != 0),
+            fan: create_engine::fan::Progress {
+                by: match h.get(&"FanProcessingType".into()) {
+                    Some(Tag::String(id)) => {
+                        use create_engine::fan::Kind;
+                        match id.to_string_lossy().as_str() {
+                            "create:splashing" => Some(Kind::Splashing),
+                            "create:haunting" => Some(Kind::Haunting),
+                            "create:smoking" => Some(Kind::Smoking),
+                            "create:blasting" => Some(Kind::Blasting),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                },
+                time: int("FanProcessingTime"),
+            },
+        }),
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+
+    #[test]
+    fn depot_saved_transport_round_trips() {
+        let mut held = depot::Held::put_by_player(73, false, depot::Side::West);
+        held.position = 0.48592162;
+        held.locked = true;
+        held.fan = create_engine::fan::Progress {
+            by: Some(create_engine::fan::Kind::Haunting),
+            time: 37,
+        };
+        for held in [Some(held), None] {
+            let saved = depot::SavedDepot { held };
+            assert_eq!(saved_from_nbt(&saved_to_nbt(saved)), saved);
+        }
+        let mut above = held;
+        above.from = None;
+        above.fan = Default::default();
+        let saved = depot::SavedDepot { held: Some(above) };
+        assert_eq!(saved_from_nbt(&saved_to_nbt(saved)), saved);
+    }
 }
