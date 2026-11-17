@@ -1094,12 +1094,16 @@ impl Kinetics {
         self.nodes[id as usize].state.net = net;
         self.saved_dirty.insert(self.nodes[id as usize].pos);
         if net.is_some() {
-            self.networks
+            // KineticNetwork.add owns the initial sync and networkDirty transition.
+            if self
+                .networks
                 .get_or_create_network_for(net)
-                .add(id, &self.nodes);
-            self.networks.mark_dirty(net);
-            let (stress, capacity, _) = self.networks.figures(net);
-            self.update_from_network(id, capacity, stress);
+                .add(id, &self.nodes)
+            {
+                self.networks.mark_dirty(net);
+                let (stress, capacity, _) = self.networks.figures(net);
+                self.update_from_network(id, capacity, stress);
+            }
         }
     }
 
@@ -1643,6 +1647,38 @@ mod tests {
         // The conveying large cog is currentTE, even though the small cog was placed later.
         assert!(e.contains(&Event::Break { pos: [1, 1, 1] }), "{e:?}");
         assert_eq!(k.speed([2, 2, 1], 0), Some(0.0));
+    }
+
+    #[test]
+    fn changed_motor_reuses_membership_without_syncing_unchanged_capacity() {
+        // Java issue #15: up/-32 -> west, then scroll to 32. The retained
+        // entity's network still contains it after clearKineticInformation.
+        let mut k = Kinetics::new();
+        let pos = [1, 8, -3];
+        let motor = |face, rpm| Part {
+            capacity: 16384.0,
+            ..motor(face, rpm)
+        };
+        k.set(pos, 0, motor(Dir::Up, -32.0));
+        solve(&mut k);
+        let id = k.at[&pos][0];
+        let net = k.nodes[id as usize].state.net;
+        assert_eq!(k.nodes[id as usize].state.capacity, 524288.0);
+        k.change_block_state(pos, 0, motor(Dir::West, -32.0), false);
+        solve(&mut k);
+        // KineticNetwork.calculateStress checks entity identity, not network id.
+        k.networks.mark_dirty(net);
+        solve(&mut k);
+        assert_eq!(k.networks.figures(net).2, 1);
+        k.set(pos, 0, motor(Dir::West, 32.0));
+        solve(&mut k);
+        assert_eq!(k.speed(pos, 0), Some(-32.0));
+        assert_eq!(k.nodes[id as usize].state.capacity, 0.0);
+        assert_eq!(k.networks.figures(net), (0.0, 524288.0, 1));
+        // A real total change subsequently syncs the retained member.
+        k.set(pos, 0, motor(Dir::West, 64.0));
+        solve(&mut k);
+        assert_eq!(k.nodes[id as usize].state.capacity, 1048576.0);
     }
 
     #[test]

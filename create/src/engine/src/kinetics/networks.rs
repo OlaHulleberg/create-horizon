@@ -16,7 +16,6 @@ struct Member {
 /// KineticNetwork stores base stress/capacity; actual contributions use current entity speeds.
 #[derive(Default)]
 pub(super) struct KineticNetwork {
-    id: i64,
     members: HashMap<Entity, Member>,
     sources: HashMap<Entity, f32>,
     stress: f32,
@@ -61,10 +60,12 @@ impl KineticNetwork {
         self.unloaded_members = self.unloaded_members.saturating_sub(1);
         self.add(id, nodes);
     }
-    /// KineticNetwork.add enrolls a fresh live member.
-    pub(super) fn add(&mut self, id: u32, nodes: &[Node]) {
+    /// KineticNetwork.add enrolls an entity; only a new member receives the initial
+    /// updateFromNetwork and networkDirty transition (returned to the caller).
+    pub(super) fn add(&mut self, id: u32, nodes: &[Node]) -> bool {
         self.initialized = true;
         let n = &nodes[id as usize];
+        let enrolled = self.members.contains_key(&Entity(n.pos));
         self.members
             .entry(Entity(n.pos))
             .or_insert_with(|| Member {
@@ -73,9 +74,14 @@ impl KineticNetwork {
             })
             .ports
             .insert(id);
+        // KineticNetwork.add returns before updating sources or syncing an existing entity.
+        if enrolled {
+            return false;
+        }
         if n.part.generated != 0.0 {
             self.sources.insert(Entity(n.pos), n.part.capacity);
         }
+        true
     }
     /// Detach a port; the entity leaves only when its last enrolled port leaves.
     pub(super) fn remove(&mut self, id: u32) {
@@ -124,7 +130,8 @@ impl KineticNetwork {
     fn calculate_stress(&mut self, nodes: &[Node]) -> f32 {
         self.members.retain(|entity, member| {
             member.ports.retain(|&id| {
-                nodes[id as usize].live && nodes[id as usize].state.net == Some(self.id)
+                // Java checks world block-entity identity, not its network field.
+                nodes[id as usize].live
             });
             if member.ports.is_empty() {
                 self.sources.remove(entity);
@@ -212,10 +219,7 @@ pub(super) struct TorquePropagator {
 impl TorquePropagator {
     pub(super) fn get_or_create_network_for(&mut self, id: Option<i64>) -> &mut KineticNetwork {
         let id = id.expect("network identity");
-        self.networks.entry(id).or_insert_with(|| KineticNetwork {
-            id,
-            ..Default::default()
-        })
+        self.networks.entry(id).or_default()
     }
     pub(super) fn mark_dirty(&mut self, id: Option<i64>) {
         if id.is_some() {
