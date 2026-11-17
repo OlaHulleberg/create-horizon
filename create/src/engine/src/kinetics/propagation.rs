@@ -128,14 +128,24 @@ impl Kinetics {
         n.fresh |= changed;
         n.state.theoretical = speed;
         n.state.speed = shown;
-        if let Some(c) = n.part.context {
-            n.state.seq = Some((c, if speed == 0.0 { 0.0 } else { c.value / speed }));
-        }
         // KineticBlockEntity.setSpeed/onSpeedChanged do not enroll members.
         // switchToBlockState detaches while the old network id is still present.
         // Membership belongs to setNetwork/add and generator stress updates.
+        self.sync_owned_context(id);
         if changed {
             self.mark_changed(id);
+        }
+    }
+
+    /// Apply the context owned by run/use, including explicit clearing.
+    pub(super) fn sync_owned_context(&mut self, id: u32) {
+        let n = &mut self.nodes[id as usize];
+        if matches!(n.part.context, super::SequenceContextSource::Owned(_)) {
+            let seq = n.part.context.at_speed(n.state.theoretical);
+            if n.state.seq != seq {
+                n.state.seq = seq;
+                self.mark_changed(id);
+            }
         }
     }
 
@@ -148,9 +158,9 @@ impl Kinetics {
         }
         let changed = n.state.seq.is_some() || n.state.overstressed;
         n.state.source = None;
-        n.state.seq = None;
         n.state.overstressed = false;
         self.change_speed(id, 0.0);
+        self.nodes[id as usize].state.seq = None;
         self.set_network(id, None);
         if changed {
             self.mark_changed(id);
@@ -173,20 +183,9 @@ impl Kinetics {
         }
         n.state.source = Some(location);
         let old_seq = n.state.seq;
-        n.state.seq = n
-            .part
-            .context
-            .map(|c| {
-                (
-                    c,
-                    if n.state.theoretical == 0.0 {
-                        0.0
-                    } else {
-                        c.value / n.state.theoretical
-                    },
-                )
-            })
-            .or(seq);
+        if matches!(n.part.context, super::SequenceContextSource::Inherited) {
+            n.state.seq = seq;
+        }
         if speed.abs() >= n.part.generated.abs() {
             n.state.reactivate_source = false;
         }
@@ -377,10 +376,6 @@ impl Kinetics {
             self.set_network(id, None);
         } else if prev == 0.0 {
             self.change_speed(id, generated);
-            self.nodes[id as usize].state.seq = self.nodes[id as usize]
-                .part
-                .context
-                .map(|c| (c, c.value / generated));
             self.set_network(id, Some(network_id(self.nodes[id as usize].pos)));
             self.propagate_new_source(id, events);
         } else if source.is_some() && prev.abs() >= generated.abs() {
@@ -392,10 +387,6 @@ impl Kinetics {
         } else {
             self.handle_removed(id, events);
             self.change_speed(id, generated);
-            self.nodes[id as usize].state.seq = self.nodes[id as usize]
-                .part
-                .context
-                .map(|c| (c, c.value / generated));
             self.nodes[id as usize].state.source = None;
             self.set_network(id, Some(network_id(self.nodes[id as usize].pos)));
             self.propagate_new_source(id, events);

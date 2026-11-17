@@ -307,10 +307,13 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         // (`SequencedGearshiftBlockEntity.getRotationSpeedModifier`), still while idle.
         Block::SequencedGearshift => s.axis.map_or([None, None], |a| {
             let a = if s.vertical { Axis::Y } else { a };
-            let first = Part::half(Dir::from_axis(a, false));
+            let first = Part {
+                context: crate::kinetics::SequenceContextSource::Owned(None),
+                ..Part::half(Dir::from_axis(a, false))
+            };
             let second = Part {
                 couple: Some(Couple::Relay(f32::from(settings.sequence))),
-                context: settings.context,
+                context: crate::kinetics::SequenceContextSource::Owned(settings.context),
                 ..Part::half(Dir::from_axis(a, true))
             };
             [Some(with_stress(first)), Some(with_stress(second))]
@@ -339,7 +342,7 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
                     generated: convert_to_direction(f32::from(settings.crank) * CRANK_RPM, f),
                     impact: Block::CopperValveHandle.impact(),
                     capacity: Block::CopperValveHandle.capacity(),
-                    context: settings.context,
+                    context: crate::kinetics::SequenceContextSource::Owned(settings.context),
                     ..Part::half(f.opposite())
                 }),
                 None,

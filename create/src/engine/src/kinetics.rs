@@ -159,7 +159,7 @@ pub struct Part {
     /// The sequence context it hands the parts it turns (`KineticBlockEntity.sequenceContext`):
     /// a valve handle's use, on its part; a sequenced gearshift's running instruction, on its
     /// second half (for whichever half it turns).
-    pub context: Option<Context>,
+    pub context: SequenceContextSource,
     /// A gantry shaft or carriage, which a powered shaft and the carriage on it join across
     /// (`GantryShaftBlockEntity.isCustomConnection`, `propagateRotationTo`).
     pub gantry: Option<Gantry>,
@@ -192,6 +192,26 @@ pub struct Context {
     pub distance: bool,
     pub value: f32,
     pub run: u32,
+}
+
+/// `KineticBlockEntity.copySequenceContextFrom` normally inherits the source's context.
+/// Valve handles and sequenced gearshifts override it with a no-op and own even an absent
+/// context (`HandCrankBlockEntity.tick`, `SequencedGearshiftBlockEntity.run`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SequenceContextSource {
+    Inherited,
+    Owned(Option<Context>),
+}
+
+impl SequenceContextSource {
+    fn at_speed(self, speed: f32) -> Option<(Context, f32)> {
+        match self {
+            Self::Owned(context) => {
+                context.map(|c| (c, if speed == 0.0 { 0.0 } else { c.value / speed }))
+            }
+            Self::Inherited => None,
+        }
+    }
 }
 
 /// The chain of an encased chain drive or adjustable chain gearshift: the axis it runs along
@@ -235,7 +255,7 @@ impl Part {
             diagonal: false,
             chain: None,
             couple: None,
-            context: None,
+            context: SequenceContextSource::Inherited,
             gantry: None,
         }
     }
@@ -659,11 +679,13 @@ impl Kinetics {
             // detach the old state before installing the new state (GearshiftBlock).
             if old.generated != part.generated {
                 self.nodes[existing as usize].part = part;
+                self.sync_owned_context(existing);
                 self.update_generated_rotation(existing, &mut events);
             } else {
                 self.handle_removed(existing, &mut events);
                 self.remove_source(existing);
                 self.nodes[existing as usize].part = part;
+                self.sync_owned_context(existing);
                 self.nodes[existing as usize].state.update_speed = true;
             }
             self.pending_events.extend(events);
@@ -2211,7 +2233,7 @@ mod tests {
             1,
             Part {
                 couple: Some(Couple::Relay(2.0)),
-                context: Some(ctx(false, 90.0)),
+                context: SequenceContextSource::Owned(Some(ctx(false, 90.0))),
                 ..Part::half(Dir::East)
             },
         );
@@ -2233,10 +2255,10 @@ mod tests {
             1,
             Part {
                 couple: Some(Couple::Relay(2.0)),
-                context: Some(Context {
+                context: SequenceContextSource::Owned(Some(Context {
                     run: 2,
                     ..ctx(false, 90.0)
-                }),
+                })),
                 ..Part::half(Dir::East)
             },
         );
@@ -2252,13 +2274,44 @@ mod tests {
             [0, 0, 0],
             0,
             Part {
-                context: Some(ctx(false, 45.0)),
+                context: SequenceContextSource::Owned(Some(ctx(false, 45.0))),
                 ..motor(Dir::East, 32.0)
             },
         );
         k.set([1, 0, 0], 0, Part::shaft(Axis::X));
         solve(&mut k);
         assert_eq!(k.sequence_limit([1, 0, 0], 0, false), Some(45.0));
+    }
+
+    #[test]
+    fn an_idle_context_owner_does_not_copy_its_sources_sequence() {
+        // ValveHandleBlockEntity and SequencedGearshiftBlockEntity override
+        // copySequenceContextFrom with an empty method, even when their own context is null.
+        let mut k = Kinetics::new();
+        k.set(
+            [-1, 0, 0],
+            0,
+            Part {
+                context: SequenceContextSource::Owned(Some(Context {
+                    distance: false,
+                    value: 90.0,
+                    run: 1,
+                })),
+                ..motor(Dir::East, 32.0)
+            },
+        );
+        k.set(
+            [0, 0, 0],
+            0,
+            Part {
+                context: SequenceContextSource::Owned(None),
+                ..Part::shaft(Axis::X)
+            },
+        );
+        solve(&mut k);
+        assert_eq!(k.speed([0, 0, 0], 0), Some(32.0));
+        assert_eq!(k.sequence_limit([0, 0, 0], 0, false), None);
+        assert_eq!(k.saved_state([0, 0, 0], 0).unwrap().sequence, None);
     }
 
     #[test]

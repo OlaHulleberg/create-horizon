@@ -5121,6 +5121,16 @@ mod tests {
             w.value_box_active(0, [0, 0, 0]),
             "cooldown does not hide the box"
         );
+        // HandCrankBlockEntity.tick clears the valve's Sequence at expiry (issue #19).
+        assert_eq!(w.dims[0].kinetics.sequence_limit([0, 0, 0], 0, false), None);
+        assert_eq!(
+            w.dims[0]
+                .kinetics
+                .saved_state([0, 0, 0], 0)
+                .unwrap()
+                .sequence,
+            None
+        );
         // The cooldown: 4, counted from the tick it stopped.
         for _ in 0..3 {
             assert!(!w.use_valve(0, [0, 0, 0], true, 45), "cooling down");
@@ -5635,6 +5645,16 @@ mod tests {
         assert_eq!(w.tick_sequencers(0), [([0, 0, 0], Step::Ended)]);
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [1, 0, 0]), Some(0.0));
+        // SequencedGearshiftBlockEntity.run(-1): Sequence is absent, including on disk.
+        assert_eq!(w.dims[0].kinetics.sequence_limit([0, 0, 0], 1, false), None);
+        assert_eq!(
+            w.dims[0]
+                .kinetics
+                .saved_state([0, 0, 0], 1)
+                .unwrap()
+                .sequence,
+            None
+        );
         assert!(w.tick_sequencers(0).is_empty(), "idle: nothing ticks");
         states::clear_range();
     }
