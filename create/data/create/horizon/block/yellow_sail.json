@@ -86,7 +86,7 @@
     }
   },
   "default_state": {
-    "facing": "up"
+    "facing": "north"
   },
   "components": {
     "!minecraft:cooking_fuel": {}

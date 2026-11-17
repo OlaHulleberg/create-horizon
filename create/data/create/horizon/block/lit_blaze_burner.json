@@ -38,15 +38,6 @@
     }
   },
   "state_properties": {
-    "facing": {
-      "type": "enum",
-      "values": [
-        "north",
-        "south",
-        "west",
-        "east"
-      ]
-    },
     "flame_type": {
       "type": "enum",
       "values": [
@@ -56,7 +47,6 @@
     }
   },
   "default_state": {
-    "facing": "north",
     "flame_type": "regular"
   }
 }

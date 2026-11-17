@@ -102,7 +102,7 @@
     }
   },
   "default_state": {
-    "facing": "up",
-    "valid": "false"
+    "facing": "north",
+    "valid": "true"
   }
 }

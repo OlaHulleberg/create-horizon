@@ -92,15 +92,11 @@
     },
     "flipped": {
       "type": "boolean"
-    },
-    "waterlogged": {
-      "type": "boolean"
     }
   },
   "default_state": {
-    "axis_along_first": "false",
-    "facing": "up",
-    "flipped": "false",
-    "waterlogged": "false"
+    "axis_along_first": "true",
+    "facing": "north",
+    "flipped": "true"
   }
 }

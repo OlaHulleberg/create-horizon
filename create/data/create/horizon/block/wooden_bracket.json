@@ -35,8 +35,8 @@
     }
   },
   "default_state": {
-    "axis_along_first": "false",
-    "facing": "down",
+    "axis_along_first": "true",
+    "facing": "north",
     "type": "pipe"
   }
 }

@@ -91,6 +91,6 @@
     }
   },
   "default_state": {
-    "facing": "up"
+    "facing": "north"
   }
 }

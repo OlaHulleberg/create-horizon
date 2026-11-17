@@ -173,6 +173,20 @@ mod tests {
     }
 
     #[test]
+    fn isolated_chain_placement_keeps_java_default_coordinate() {
+        // ChainDriveBlock registers only PART; the running Java 6.0.11 binary
+        // reports axis=y, axis_along_first=true, part=none for both drives.
+        for declaration in [
+            include_str!("../../../data/create/horizon/block/encased_chain_drive.json"),
+            include_str!("../../../data/create/horizon/block/adjustable_chain_gearshift.json"),
+        ] {
+            assert!(declaration.contains("\"axis_along_first\": \"true\""));
+        }
+        let lone = drive(Axis::Y, Part::None, true);
+        assert_eq!(lone.shaped(|_| None), lone);
+    }
+
+    #[test]
     fn drives_side_by_side_form_a_chain() {
         // Three x-axis drives in a row along z, placed north to south.
         let lone = drive(Axis::X, Part::None, false);

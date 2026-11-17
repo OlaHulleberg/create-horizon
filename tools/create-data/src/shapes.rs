@@ -57,6 +57,11 @@ fn units(b: Px) -> Value {
     json!(b.map(|v| v / 16.0))
 }
 
+/// A constant shape for a block whose geometry has no state selector.
+pub fn fixed(boxes: &[Px]) -> Value {
+    json!({ "default": boxes.iter().map(|b| units(*b)).collect::<Vec<_>>() })
+}
+
 /// A `shapes` object selecting by `axis`.
 pub fn by_axis(boxes: &[Px]) -> Value {
     let values: serde_json::Map<String, Value> = ["x", "y", "z"]

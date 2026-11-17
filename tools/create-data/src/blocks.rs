@@ -964,12 +964,8 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
         // SpoutBlock: a copper-propertied block, AllShapes.SPOUT approximated by its body.
         "spout" => (
             "minecraft:copper_block",
-            Some(by_property(
-                "waterlogged",
-                bools,
-                &[[1., 2., 1., 15., 14., 15.]],
-            )),
-            own(&[("waterlogged", bools)]),
+            Some(fixed(&[[1., 2., 1., 15., 14., 15.]])),
+            None,
         ),
         // SawBlock (DirectionalAxisKineticBlock): facing, its shaft's axis, `flipped`;
         // AllShapes.CASING_12PX to its facing, so items land on its top at 12 px, under the
@@ -981,7 +977,6 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 ("axis_along_first", bools),
                 ("facing", facing),
                 ("flipped", bools),
-                ("waterlogged", bools),
             ]),
         ),
         // DeployerBlock (DirectionalAxisKineticBlock): AllShapes.DEPLOYER_INTERACTION (the 12 px
@@ -1151,10 +1146,7 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 &["regular", "soul"],
                 &[[1., 0., 1., 15., 14., 15.]],
             )),
-            own(&[
-                ("facing", &["north", "south", "west", "east"]),
-                ("flame_type", &["regular", "soul"]),
-            ]),
+            own(&[("flame_type", &["regular", "soul"])]),
         ),
         // CrushingWheelBlock (RotatedPillarKineticBlock): a full block on an axis, stone's
         // properties, not hiding its neighbours; an iron chain's template places it on the
@@ -1245,18 +1237,15 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             Some(by_axis(&[LARGE_GEAR, SIX_VOXEL_POLE])),
             own(&[("axis", &["y", "x", "z"])]),
         ),
-        // TurntableBlock (KineticBlock, `SharedProperties::wooden`): AllShapes.TURNTABLE_SHAPE,
-        // which content shapes select by a property: `axis`, its one value `y` (its rotation
-        // axis; one state, as Create's). Its plate is drawn turning; what stands on it is turned
-        // (`entityInside`, `entity_inside`).
+        // TurntableBlock.getShape returns AllShapes.TURNTABLE_SHAPE independently of
+        // state. Its rotation axis is Y, without an axis state property.
         "turntable" => (
             "minecraft:oak_planks",
-            Some(by_property(
-                "axis",
-                &["y"],
-                &[[1., 4., 1., 15., 8., 15.], [5., 0., 5., 11., 4., 11.]],
-            )),
-            own(&[("axis", &["y"])]),
+            Some(fixed(&[
+                [1., 4., 1., 15., 8., 15.],
+                [5., 0., 5., 11., 4., 11.],
+            ])),
+            own(&[]),
         ),
         // LargeWaterWheelBlock (RotatedPillarKineticBlock, `SharedProperties::wooden`,
         // `noOcclusion`): its axis (y first) and `extension`; glass's template hides nothing
@@ -1654,11 +1643,10 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
             "minecraft:waxed_copper_grate",
             "minecraft:netherite_block",
             true,
-            Some(by_property(
-                "waterlogged",
-                bools,
-                &[[0., 0., 0., 16., 4., 16.], [2., 2., 2., 14., 14., 14.]],
-            )),
+            Some(fixed(&[
+                [0., 0., 0., 16., 4., 16.],
+                [2., 2., 2., 14., 14., 14.],
+            ])),
             // `waterlogged` is the template's own.
             own(&[]),
             true,
@@ -3870,10 +3858,15 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     if *template == "minecraft:scaffolding" && b.name.ends_with("_scaffolding") {
         scaffolding_shapes(&mut doc);
     }
-    let (declared, default) = match own {
-        Some(Value::Object(o)) => fork_states(template, o),
-        _ => (Map::new(), Map::new()),
-    };
+    let defaults = &runtime_defaults()[&b.name];
+    let own = own.as_ref().and_then(Value::as_object).map(|o| {
+        o.iter()
+            .filter(|(key, _)| defaults.contains_key(*key))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<Map<_, _>>()
+    });
+    let empty = Map::new();
+    let (declared, default) = fork_states(template, own.as_ref().unwrap_or(&empty), defaults);
     if let Some(s) = shapes {
         doc.insert("shapes".into(), fork_shapes(template, &default, s));
     }
@@ -4106,15 +4099,25 @@ pub fn fork_shapes(template: &str, default_state: &Map<String, Value>, shapes: &
     out
 }
 
-/// A block's own properties (`{name: [values, Create's default first]}`) in the content schema's form
+/// Defaults observed by enumerating `BuiltInRegistries.BLOCK` and calling
+/// `defaultBlockState().getValues()` on Create 6.0.11, Minecraft 1.21.1,
+/// NeoForge 21.1.219. No implementation sources or assets are inputs.
+fn runtime_defaults() -> &'static BTreeMap<String, Map<String, Value>> {
+    static DEFAULTS: std::sync::OnceLock<BTreeMap<String, Map<String, Value>>> =
+        std::sync::OnceLock::new();
+    DEFAULTS.get_or_init(|| serde_json::from_str(include_str!("default_states.json")).unwrap())
+}
+
+/// A block's proposed property domains (`{name: [values]}`) in the content schema's form
 /// (`docs/modding/src/how-to/content-mods.md`): the properties its template lacks, typed
 /// (`{"type": "boolean"}`, `{"type": "enum", "values": [..]}`), and its `default_state`: each
-/// declared property's default, and Create's default of a template property where it is not
-/// the template's. A template's own property is never declared again (the loader refuses it):
+/// declared property's measured Create default. Inherited properties retain main's
+/// existing value-list handling and partial template table. A template's own property is never declared again (the loader refuses it):
 /// the block takes the template's values for it.
 pub fn fork_states(
     template: &str,
     own: &Map<String, Value>,
+    defaults: &Map<String, Value>,
 ) -> (Map<String, Value>, Map<String, Value>) {
     let on_template = template_properties(template);
     let (mut declared, mut default) = (Map::new(), Map::new());
@@ -4140,7 +4143,15 @@ pub fn fork_states(
             json!({ "type": "enum", "values": values })
         };
         declared.insert(name.clone(), kind);
-        default.insert(name.clone(), json!(first));
+        let value = defaults
+            .get(name)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("missing Create runtime default: {name}"));
+        assert!(
+            values.contains(&value),
+            "Create runtime default outside declared domain: {name}={value}"
+        );
+        default.insert(name.clone(), json!(value));
     }
     (declared, default)
 }
@@ -4148,6 +4159,183 @@ pub fn fork_states(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pending_properties(doc: &Value, defaults: &Map<String, Value>) -> Vec<String> {
+        let template = template_properties(doc["template"].as_str().unwrap());
+        defaults
+            .keys()
+            .filter(|key| {
+                doc["state_properties"].get(*key).is_none()
+                    && !template.iter().any(|(name, _, _)| *name == key.as_str())
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn differing_inherited_defaults(doc: &Value, defaults: &Map<String, Value>) -> Vec<String> {
+        template_properties(doc["template"].as_str().unwrap())
+            .iter()
+            .filter(|(name, value, _)| {
+                defaults
+                    .get(*name)
+                    .and_then(Value::as_str)
+                    .is_some_and(|runtime| runtime != *value)
+            })
+            .map(|(name, _, _)| (*name).into())
+            .collect()
+    }
+
+    #[test]
+    fn template_decisions_have_exact_pending_lists() {
+        let expected: Value =
+            serde_json::from_str(include_str!("pending_template_decisions.json")).unwrap();
+        let root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../create/data/create/horizon/block");
+        let mut unlisted = BTreeSet::new();
+        let mut differing = BTreeSet::new();
+        for (name, defaults) in runtime_defaults() {
+            if matches!(name.as_str(), "chocolate" | "honey") {
+                continue;
+            }
+            let doc: Value =
+                serde_json::from_slice(&fs::read(root.join(format!("{name}.json"))).unwrap())
+                    .unwrap();
+            if let Some(properties) = doc["state_properties"].as_object() {
+                for property in properties.keys() {
+                    assert_eq!(
+                        doc["default_state"][property], defaults[property],
+                        "{name}.{property}: declared default must come from Create runtime"
+                    );
+                }
+            }
+            unlisted.extend(
+                pending_properties(&doc, defaults)
+                    .into_iter()
+                    .map(|property| format!("{name}.{property}")),
+            );
+            differing.extend(
+                differing_inherited_defaults(&doc, defaults)
+                    .into_iter()
+                    .map(|property| format!("{name}.{property}")),
+            );
+        }
+        for (key, actual, count) in [
+            ("unlisted_properties", unlisted, 975),
+            ("differing_inherited_defaults", differing, 9),
+        ] {
+            let list = expected[key].as_object().unwrap();
+            assert_eq!(actual, list.keys().cloned().collect());
+            assert_eq!(list.len(), count);
+            assert!(list.values().all(|reason| {
+                reason
+                    .as_str()
+                    .unwrap()
+                    .contains("owner's template-data decision")
+            }));
+        }
+    }
+
+    #[test]
+    fn declared_defaults_do_not_depend_on_domain_order() {
+        let defaults = &runtime_defaults()["encased_chain_drive"];
+        let own = json!({"axis": ["x", "y", "z"], "axis_along_first": ["false", "true"], "part": ["none", "start", "middle", "end"]});
+        let mut reordered = own.clone();
+        reordered["axis_along_first"]
+            .as_array_mut()
+            .unwrap()
+            .reverse();
+        reordered["part"].as_array_mut().unwrap().reverse();
+        let (_, a) = fork_states(
+            "minecraft:quartz_pillar",
+            own.as_object().unwrap(),
+            defaults,
+        );
+        let (_, b) = fork_states(
+            "minecraft:quartz_pillar",
+            reordered.as_object().unwrap(),
+            defaults,
+        );
+        assert_eq!(a, b);
+        assert_eq!(a["axis_along_first"], "true");
+        assert_eq!(a["axis"], "x"); // Preserve main's inherited-property handling.
+    }
+
+    #[test]
+    fn every_default_state_key_exists_on_declared_block() {
+        let root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../create/data/create/horizon/block");
+        let pending: Value =
+            serde_json::from_str(include_str!("pending_template_decisions.json")).unwrap();
+        for entry in fs::read_dir(root).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_stem().unwrap().to_str().unwrap();
+            let doc: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            fn check_shape(value: &Value, exists: &impl Fn(&str) -> bool, name: &str) {
+                match value {
+                    Value::Object(object) => {
+                        if let Some(properties) = object.get("properties").and_then(Value::as_array)
+                        {
+                            for property in properties {
+                                let property = property.as_str().unwrap();
+                                assert!(
+                                    exists(property),
+                                    "{name}: shape refers to absent property {property}"
+                                );
+                            }
+                        }
+                        for child in object.values() {
+                            check_shape(child, exists, name);
+                        }
+                    }
+                    Value::Array(array) => {
+                        for child in array {
+                            check_shape(child, exists, name);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let inherited = template_properties(doc["template"].as_str().unwrap());
+            for shape in [
+                "shapes",
+                "collision_shapes",
+                "outline_context_shapes",
+                "collision_context_shapes",
+            ] {
+                check_shape(
+                    &doc[shape],
+                    &|key| {
+                        doc["state_properties"].get(key).is_some()
+                            || inherited.iter().any(|(property, _, _)| *property == key)
+                            // Main's partial table cannot validate these existing shape
+                            // selectors. Track the Create runtime property explicitly
+                            // pending the owner's decision; never allow it as a default.
+                            || runtime_defaults().get(name).is_some_and(|defaults| defaults.contains_key(key))
+                                && pending["unlisted_properties"].get(format!("{name}.{key}")).is_some()
+                    },
+                    name,
+                );
+            }
+            if let Some(values) = doc["default_state"].as_object() {
+                for (key, value) in values {
+                    assert!(
+                        doc["state_properties"].get(key).is_some()
+                            || inherited.iter().any(|(property, _, _)| *property == key),
+                        "create:{name}: default_state key {key} does not exist on {}",
+                        doc["template"]
+                    );
+                    if let Some((_, _, domain)) =
+                        inherited.iter().find(|(property, _, _)| *property == key)
+                    {
+                        assert!(
+                            domain.contains(&value.as_str().unwrap()),
+                            "{name}.{key}: invalid inherited default"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn shape_tables_cover_the_template_s_values_create_never_sets() {
@@ -4171,7 +4359,13 @@ mod tests {
             "part": ["none", "start", "middle", "end"],
             "top_shaft": ["true", "false"],
         });
-        let (declared, default) = fork_states("minecraft:quartz_pillar", own.as_object().unwrap());
+        let (declared, default) = fork_states(
+            "minecraft:quartz_pillar",
+            own.as_object().unwrap(),
+            json!({"powered":"false", "part":"none", "top_shaft":"true"})
+                .as_object()
+                .unwrap(),
+        );
         assert_eq!(
             Value::Object(declared),
             json!({

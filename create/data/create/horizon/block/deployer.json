@@ -139,7 +139,7 @@
     }
   },
   "default_state": {
-    "axis_along_first": "false",
-    "facing": "up"
+    "axis_along_first": "true",
+    "facing": "north"
   }
 }

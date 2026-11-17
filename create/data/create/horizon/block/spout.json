@@ -8,38 +8,15 @@
   },
   "item": true,
   "shapes": {
-    "properties": [
-      "waterlogged"
-    ],
-    "values": {
-      "false": [
-        [
-          0.0625,
-          0.125,
-          0.0625,
-          0.9375,
-          0.875,
-          0.9375
-        ]
-      ],
-      "true": [
-        [
-          0.0625,
-          0.125,
-          0.0625,
-          0.9375,
-          0.875,
-          0.9375
-        ]
+    "default": [
+      [
+        0.0625,
+        0.125,
+        0.0625,
+        0.9375,
+        0.875,
+        0.9375
       ]
-    }
-  },
-  "state_properties": {
-    "waterlogged": {
-      "type": "boolean"
-    }
-  },
-  "default_state": {
-    "waterlogged": "false"
+    ]
   }
 }

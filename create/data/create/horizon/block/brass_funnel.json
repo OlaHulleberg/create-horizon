@@ -98,7 +98,7 @@
   },
   "default_state": {
     "extracting": "false",
-    "facing": "up",
+    "facing": "north",
     "powered": "false",
     "waterlogged": "false"
   }

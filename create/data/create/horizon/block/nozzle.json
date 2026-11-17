@@ -283,6 +283,6 @@
     }
   },
   "default_state": {
-    "facing": "down"
+    "facing": "north"
   }
 }

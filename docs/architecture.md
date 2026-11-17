@@ -70,3 +70,30 @@ ambience), packages, stock, schematics, decor, copycats, items and equipment, ad
   when nothing changed.
 - Per-object helpers go on the handle they act on, in the subsystem's own module.
 - A new hook: add a method to `Subsystem` and its one call in `lib.rs`.
+
+## Create default states
+
+`tools/create-data/src/default_states.json` records all 643 registered Create blocks' default
+properties, measured from Create 6.0.11 running on Minecraft 1.21.1 / NeoForge 21.1.219.
+It contains runtime observations, not extracted implementation data or assets. `compile` uses
+these defaults for properties declared by the block itself, independently of domain ordering.
+Inherited properties keep main's existing `TEMPLATE_PROPERTIES` table and handling. No new
+template facts are included. Proposed own properties absent from Create's runtime are excluded.
+A missing declared default or a value outside its declared domain fails compilation.
+
+To refresh it: start [create-fuzz](https://github.com/OlaHulleberg/create-fuzz)'s server (`./run.sh server`), which
+writes `work/default-states.json` (each Create block's `defaultBlockState()`, property and value names as serialized),
+copy that file here, then regenerate with `create-data compile`.
+
+`pending_template_decisions.json` lists 975 runtime block/property pairs neither declared nor
+covered by main's partial template table, and nine inherited defaults differing from that
+table's known defaults. Each has a one-line reason and awaits the owner's decision about
+template data. The first list covers 263 blocks and includes the previously identified 61
+modelling omissions; the partial table cannot resolve the remaining entries. The second
+covers nine blocks. Neither list causes new defaults to be emitted or changes main's
+inherited-property handling. Exact-list tests prevent either list from drifting silently.
+
+Every emitted default key must exist among the declared properties or main's table.
+Shape references must also be known there or explicitly tracked as unresolved Create runtime
+properties. Constant spout, turntable and frogport shapes need no property selector, matching
+those blocks' Java `getShape` methods. No vanilla report extract is committed on this branch.

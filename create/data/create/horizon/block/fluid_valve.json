@@ -97,8 +97,8 @@
     }
   },
   "default_state": {
-    "axis_along_first": "false",
+    "axis_along_first": "true",
     "enabled": "false",
-    "facing": "down"
+    "facing": "north"
   }
 }

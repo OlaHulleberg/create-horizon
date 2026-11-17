@@ -55,7 +55,7 @@
     }
   },
   "default_state": {
-    "facing": "down",
+    "facing": "north",
     "powered": "false",
     "linked": "false"
   }

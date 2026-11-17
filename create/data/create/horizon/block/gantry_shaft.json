@@ -101,8 +101,8 @@
     }
   },
   "default_state": {
-    "facing": "up",
-    "part": "start",
+    "facing": "north",
+    "part": "single",
     "powered": "false"
   }
 }

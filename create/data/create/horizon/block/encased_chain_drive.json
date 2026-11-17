@@ -24,7 +24,7 @@
   },
   "default_state": {
     "axis": "x",
-    "axis_along_first": "false",
+    "axis_along_first": "true",
     "part": "none"
   }
 }

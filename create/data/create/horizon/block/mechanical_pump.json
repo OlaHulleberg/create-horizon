@@ -91,7 +91,7 @@
     }
   },
   "default_state": {
-    "facing": "up",
+    "facing": "north",
     "waterlogged": "false"
   }
 }

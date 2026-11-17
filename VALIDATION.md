@@ -133,3 +133,40 @@ none reproduced.
 
 - **A player's build.** Without a published SDK for the pin, the launcher builds the mod only on a developer base
   built from Sunrise at the pin, and CI's `cargo horizon-mod check` fails at the SDK fetch.
+
+## Issue #17: declared-property defaults only (2026-11-17)
+
+Branch `fix/issue-17-declared`, based on `f4a7f18`, leaves the held `fix/issue-17`
+branch at `681df08`. Only properties declared by a block take their default from
+Create's runtime measurement. The measurement is byte-identical to the one documented
+in `41e60e4`: create-fuzz's server writes `work/default-states.json` at startup.
+Main's existing partial `TEMPLATE_PROPERTIES` table and lookup are unchanged, and every
+emitted override for its known inherited properties was compared against main: no changes.
+No vanilla-report extract or new template facts are included.
+
+Two exact pending lists contain one reason per block/property pair, each awaiting the
+owner's template-data decision: **975 unlisted properties across 263 blocks**, and
+**9 differing inherited defaults across 9 blocks**. The first includes the previously
+identified 61 modelling omissions and properties the partial table cannot resolve.
+These lists do not emit defaults or change main's inherited-property handling.
+
+Default keys must exist among a block's declarations or main's table. Shape references
+are checked there too, with explicitly tracked unresolved Create runtime properties
+remaining pending. Spout, turntable and frogport shapes are constant as their Java
+`getShape` methods specify; they need no artificial state selector.
+
+- Rust 1.99.1 formatting and Clippy (`--all-targets -- -D warnings`) pass for engine
+  and generator; generator Clippy/tests use `--locked`.
+- All 691 engine tests and 49 generator tests pass, including both asset licence checks.
+- The chain placement regression fails with main's old declarations; the property-key
+  regression rejects the held branch's invalid pillar defaults; the domain-order
+  regression fails when declared defaults revert to first-value selection. All pass
+  with the narrower fix.
+- Issue #17's shrunk case matches Java, including all checkpoints. The current fuzzer
+  was copied to scratch, with its hardcoded chain default replaced by the generated
+  declaration's value. Shared create-fuzz and its server were not edited or restarted.
+  The full seed sweep was not repeated for this narrower follow-up.
+- `hz_rebuild` succeeded. With no live non-zombie game process present, `FRESH=1
+  hz_launch t17b` reached `screen=playing`, joined the local world and advanced to tick 19.
+  No new crash report appeared during launch or after `hz_quit`. The tested declarations
+  match the final generated declarations exactly.

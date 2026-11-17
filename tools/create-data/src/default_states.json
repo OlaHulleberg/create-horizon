@@ -1,0 +1,2703 @@
+{
+  "acacia_window": {},
+  "acacia_window_pane": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "adjustable_chain_gearshift": {
+    "axis": "y",
+    "axis_along_first": "true",
+    "part": "none",
+    "powered": "false"
+  },
+  "analog_lever": {
+    "face": "floor",
+    "facing": "north"
+  },
+  "andesite_alloy_block": {},
+  "andesite_bars": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "andesite_belt_funnel": {
+    "facing": "north",
+    "powered": "false",
+    "shape": "retracted",
+    "waterlogged": "false"
+  },
+  "andesite_casing": {},
+  "andesite_door": {
+    "facing": "north",
+    "half": "lower",
+    "hinge": "left",
+    "open": "false",
+    "powered": "false",
+    "visible": "true"
+  },
+  "andesite_encased_cogwheel": {
+    "axis": "y",
+    "bottom_shaft": "false",
+    "top_shaft": "false"
+  },
+  "andesite_encased_large_cogwheel": {
+    "axis": "y",
+    "bottom_shaft": "false",
+    "top_shaft": "false"
+  },
+  "andesite_encased_shaft": {
+    "axis": "y"
+  },
+  "andesite_funnel": {
+    "extracting": "false",
+    "facing": "north",
+    "powered": "false",
+    "waterlogged": "false"
+  },
+  "andesite_ladder": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "andesite_pillar": {
+    "axis": "y",
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "west": "false"
+  },
+  "andesite_scaffolding": {
+    "bottom": "false",
+    "distance": "7",
+    "waterlogged": "false"
+  },
+  "andesite_table_cloth": {
+    "entity": "true"
+  },
+  "andesite_tunnel": {
+    "axis": "x",
+    "shape": "straight"
+  },
+  "asurine": {},
+  "asurine_pillar": {
+    "axis": "y",
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "west": "false"
+  },
+  "bamboo_window": {},
+  "bamboo_window_pane": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "basin": {
+    "facing": "down"
+  },
+  "belt": {
+    "casing": "false",
+    "facing": "north",
+    "part": "start",
+    "slope": "horizontal",
+    "waterlogged": "false"
+  },
+  "birch_window": {},
+  "birch_window_pane": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "black_nixie_tube": {
+    "double_face": "floor",
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "black_postbox": {
+    "facing": "north",
+    "open": "false",
+    "waterlogged": "false"
+  },
+  "black_sail": {
+    "facing": "north"
+  },
+  "black_seat": {
+    "waterlogged": "false"
+  },
+  "black_table_cloth": {
+    "entity": "false"
+  },
+  "black_toolbox": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "black_valve_handle": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "blaze_burner": {
+    "blaze": "none",
+    "facing": "north"
+  },
+  "blue_nixie_tube": {
+    "double_face": "floor",
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "blue_postbox": {
+    "facing": "north",
+    "open": "false",
+    "waterlogged": "false"
+  },
+  "blue_sail": {
+    "facing": "north"
+  },
+  "blue_seat": {
+    "waterlogged": "false"
+  },
+  "blue_table_cloth": {
+    "entity": "false"
+  },
+  "blue_toolbox": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "blue_valve_handle": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "bound_cardboard_block": {
+    "axis": "x"
+  },
+  "brass_bars": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "brass_belt_funnel": {
+    "facing": "north",
+    "powered": "false",
+    "shape": "retracted",
+    "waterlogged": "false"
+  },
+  "brass_block": {},
+  "brass_casing": {},
+  "brass_door": {
+    "facing": "north",
+    "half": "lower",
+    "hinge": "left",
+    "open": "false",
+    "powered": "false",
+    "visible": "true"
+  },
+  "brass_encased_cogwheel": {
+    "axis": "y",
+    "bottom_shaft": "false",
+    "top_shaft": "false"
+  },
+  "brass_encased_large_cogwheel": {
+    "axis": "y",
+    "bottom_shaft": "false",
+    "top_shaft": "false"
+  },
+  "brass_encased_shaft": {
+    "axis": "y"
+  },
+  "brass_funnel": {
+    "extracting": "false",
+    "facing": "north",
+    "powered": "false",
+    "waterlogged": "false"
+  },
+  "brass_ladder": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "brass_scaffolding": {
+    "bottom": "false",
+    "distance": "7",
+    "waterlogged": "false"
+  },
+  "brass_table_cloth": {
+    "entity": "true"
+  },
+  "brass_tunnel": {
+    "axis": "x",
+    "shape": "straight"
+  },
+  "brown_nixie_tube": {
+    "double_face": "floor",
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "brown_postbox": {
+    "facing": "north",
+    "open": "false",
+    "waterlogged": "false"
+  },
+  "brown_sail": {
+    "facing": "north"
+  },
+  "brown_seat": {
+    "waterlogged": "false"
+  },
+  "brown_table_cloth": {
+    "entity": "false"
+  },
+  "brown_toolbox": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "brown_valve_handle": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "calcite_pillar": {
+    "axis": "y",
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "west": "false"
+  },
+  "cardboard_block": {
+    "axis": "x"
+  },
+  "cart_assembler": {
+    "backwards": "false",
+    "powered": "false",
+    "rail_type": "powered_rail",
+    "shape": "east_west",
+    "waterlogged": "false"
+  },
+  "chain_conveyor": {},
+  "cherry_window": {},
+  "cherry_window_pane": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "chocolate": {
+    "level": "0"
+  },
+  "chute": {
+    "facing": "down",
+    "shape": "normal",
+    "waterlogged": "false"
+  },
+  "clipboard": {
+    "face": "floor",
+    "facing": "north",
+    "waterlogged": "false",
+    "written": "false"
+  },
+  "clockwork_bearing": {
+    "facing": "north"
+  },
+  "clutch": {
+    "axis": "y",
+    "powered": "false"
+  },
+  "cogwheel": {
+    "axis": "y",
+    "waterlogged": "false"
+  },
+  "content_observer": {
+    "facing": "north",
+    "powered": "false",
+    "target": "wall"
+  },
+  "contraption_controls": {
+    "facing": "north",
+    "open": "false",
+    "virtual": "false",
+    "waterlogged": "false"
+  },
+  "controller_rail": {
+    "backwards": "false",
+    "power": "0",
+    "shape": "north_south",
+    "waterlogged": "false"
+  },
+  "controls": {
+    "facing": "north",
+    "open": "false",
+    "virtual": "false",
+    "waterlogged": "false"
+  },
+  "copper_backtank": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "copper_bars": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "copper_casing": {},
+  "copper_door": {
+    "facing": "north",
+    "half": "lower",
+    "hinge": "left",
+    "open": "false",
+    "powered": "false",
+    "visible": "true"
+  },
+  "copper_ladder": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "copper_scaffolding": {
+    "bottom": "false",
+    "distance": "7",
+    "waterlogged": "false"
+  },
+  "copper_shingle_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "copper_shingle_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "copper_shingles": {},
+  "copper_table_cloth": {
+    "entity": "true"
+  },
+  "copper_tile_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "copper_tile_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "copper_tiles": {},
+  "copper_valve_handle": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "copycat_bars": {
+    "facing": "north"
+  },
+  "copycat_base": {},
+  "copycat_panel": {
+    "facing": "up",
+    "waterlogged": "false"
+  },
+  "copycat_step": {
+    "facing": "south",
+    "half": "bottom",
+    "waterlogged": "false"
+  },
+  "creative_crate": {
+    "facing": "north"
+  },
+  "creative_fluid_tank": {
+    "bottom": "true",
+    "shape": "window",
+    "top": "true"
+  },
+  "creative_motor": {
+    "facing": "north"
+  },
+  "crimsite": {},
+  "crimsite_pillar": {
+    "axis": "y",
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "west": "false"
+  },
+  "crimson_window": {},
+  "crimson_window_pane": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "crushing_wheel": {
+    "axis": "y"
+  },
+  "crushing_wheel_controller": {
+    "facing": "north",
+    "valid": "true"
+  },
+  "cuckoo_clock": {
+    "facing": "north"
+  },
+  "cut_andesite": {},
+  "cut_andesite_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_andesite_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_andesite_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_andesite_bricks": {},
+  "cut_andesite_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_andesite_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_andesite_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_asurine": {},
+  "cut_asurine_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_asurine_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_asurine_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_asurine_bricks": {},
+  "cut_asurine_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_asurine_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_asurine_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_calcite": {},
+  "cut_calcite_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_calcite_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_calcite_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_calcite_bricks": {},
+  "cut_calcite_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_calcite_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_calcite_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_crimsite": {},
+  "cut_crimsite_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_crimsite_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_crimsite_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_crimsite_bricks": {},
+  "cut_crimsite_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_crimsite_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_crimsite_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_deepslate": {},
+  "cut_deepslate_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_deepslate_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_deepslate_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_deepslate_bricks": {},
+  "cut_deepslate_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_deepslate_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_deepslate_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_diorite": {},
+  "cut_diorite_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_diorite_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_diorite_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_diorite_bricks": {},
+  "cut_diorite_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_diorite_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_diorite_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_dripstone": {},
+  "cut_dripstone_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_dripstone_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_dripstone_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_dripstone_bricks": {},
+  "cut_dripstone_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_dripstone_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_dripstone_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_granite": {},
+  "cut_granite_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_granite_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_granite_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_granite_bricks": {},
+  "cut_granite_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_granite_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_granite_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_limestone": {},
+  "cut_limestone_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_limestone_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_limestone_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_limestone_bricks": {},
+  "cut_limestone_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_limestone_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_limestone_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_ochrum": {},
+  "cut_ochrum_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_ochrum_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_ochrum_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_ochrum_bricks": {},
+  "cut_ochrum_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_ochrum_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_ochrum_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_scorchia": {},
+  "cut_scorchia_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_scorchia_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_scorchia_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_scorchia_bricks": {},
+  "cut_scorchia_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_scorchia_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_scorchia_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_scoria": {},
+  "cut_scoria_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_scoria_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_scoria_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_scoria_bricks": {},
+  "cut_scoria_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_scoria_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_scoria_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_tuff": {},
+  "cut_tuff_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_tuff_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_tuff_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_tuff_bricks": {},
+  "cut_tuff_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_tuff_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_tuff_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_veridium": {},
+  "cut_veridium_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_veridium_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_veridium_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cut_veridium_bricks": {},
+  "cut_veridium_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "cut_veridium_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "cut_veridium_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "cyan_nixie_tube": {
+    "double_face": "floor",
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "cyan_postbox": {
+    "facing": "north",
+    "open": "false",
+    "waterlogged": "false"
+  },
+  "cyan_sail": {
+    "facing": "north"
+  },
+  "cyan_seat": {
+    "waterlogged": "false"
+  },
+  "cyan_table_cloth": {
+    "entity": "false"
+  },
+  "cyan_toolbox": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "cyan_valve_handle": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "dark_oak_window": {},
+  "dark_oak_window_pane": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "deepslate_pillar": {
+    "axis": "y",
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "west": "false"
+  },
+  "deepslate_zinc_ore": {},
+  "deployer": {
+    "axis_along_first": "true",
+    "facing": "north"
+  },
+  "depot": {
+    "waterlogged": "false"
+  },
+  "desk_bell": {
+    "facing": "up",
+    "powered": "false",
+    "waterlogged": "false"
+  },
+  "diorite_pillar": {
+    "axis": "y",
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "west": "false"
+  },
+  "display_board": {
+    "down": "false",
+    "facing": "north",
+    "up": "false",
+    "waterlogged": "false"
+  },
+  "display_link": {
+    "facing": "north",
+    "powered": "false"
+  },
+  "dripstone_pillar": {
+    "axis": "y",
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "west": "false"
+  },
+  "elevator_contact": {
+    "calling": "false",
+    "facing": "south",
+    "powered": "false",
+    "powering": "false"
+  },
+  "elevator_pulley": {
+    "facing": "north"
+  },
+  "encased_chain_drive": {
+    "axis": "y",
+    "axis_along_first": "true",
+    "part": "none"
+  },
+  "encased_fan": {
+    "facing": "north"
+  },
+  "encased_fluid_pipe": {
+    "down": "false",
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "up": "false",
+    "west": "false"
+  },
+  "experience_block": {},
+  "exposed_copper_shingle_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "exposed_copper_shingle_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "exposed_copper_shingles": {},
+  "exposed_copper_tile_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "exposed_copper_tile_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "exposed_copper_tiles": {},
+  "factory_gauge": {
+    "face": "floor",
+    "facing": "north",
+    "powered": "false",
+    "waterlogged": "false"
+  },
+  "fake_track": {
+    "waterlogged": "false"
+  },
+  "fluid_pipe": {
+    "down": "true",
+    "east": "true",
+    "north": "true",
+    "south": "true",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "true"
+  },
+  "fluid_tank": {
+    "bottom": "true",
+    "shape": "window",
+    "top": "true"
+  },
+  "fluid_valve": {
+    "axis_along_first": "true",
+    "enabled": "false",
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "flywheel": {
+    "axis": "y"
+  },
+  "framed_glass": {},
+  "framed_glass_door": {
+    "facing": "north",
+    "half": "lower",
+    "hinge": "left",
+    "open": "false",
+    "powered": "false",
+    "visible": "true"
+  },
+  "framed_glass_pane": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "framed_glass_trapdoor": {
+    "facing": "north",
+    "half": "bottom",
+    "open": "false",
+    "powered": "false",
+    "waterlogged": "false"
+  },
+  "gantry_carriage": {
+    "axis_along_first": "true",
+    "facing": "north"
+  },
+  "gantry_shaft": {
+    "facing": "north",
+    "part": "single",
+    "powered": "false"
+  },
+  "gearbox": {
+    "axis": "y"
+  },
+  "gearshift": {
+    "axis": "y",
+    "powered": "false"
+  },
+  "glass_fluid_pipe": {
+    "alt": "false",
+    "axis": "y",
+    "waterlogged": "false"
+  },
+  "granite_pillar": {
+    "axis": "y",
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "west": "false"
+  },
+  "gray_nixie_tube": {
+    "double_face": "floor",
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "gray_postbox": {
+    "facing": "north",
+    "open": "false",
+    "waterlogged": "false"
+  },
+  "gray_sail": {
+    "facing": "north"
+  },
+  "gray_seat": {
+    "waterlogged": "false"
+  },
+  "gray_table_cloth": {
+    "entity": "false"
+  },
+  "gray_toolbox": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "gray_valve_handle": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "green_nixie_tube": {
+    "double_face": "floor",
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "green_postbox": {
+    "facing": "north",
+    "open": "false",
+    "waterlogged": "false"
+  },
+  "green_sail": {
+    "facing": "north"
+  },
+  "green_seat": {
+    "waterlogged": "false"
+  },
+  "green_table_cloth": {
+    "entity": "false"
+  },
+  "green_toolbox": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "green_valve_handle": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "hand_crank": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "haunted_bell": {
+    "attachment": "floor",
+    "facing": "north",
+    "powered": "false"
+  },
+  "honey": {
+    "level": "0"
+  },
+  "horizontal_framed_glass": {},
+  "horizontal_framed_glass_pane": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "hose_pulley": {
+    "facing": "north"
+  },
+  "industrial_iron_block": {},
+  "industrial_iron_window": {},
+  "industrial_iron_window_pane": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "item_drain": {},
+  "item_hatch": {
+    "facing": "north",
+    "open": "false",
+    "waterlogged": "false"
+  },
+  "item_vault": {
+    "axis": "x",
+    "large": "false"
+  },
+  "jungle_window": {},
+  "jungle_window_pane": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "large_bogey": {
+    "axis": "x",
+    "waterlogged": "false"
+  },
+  "large_cogwheel": {
+    "axis": "y",
+    "waterlogged": "false"
+  },
+  "large_water_wheel": {
+    "axis": "y",
+    "extension": "false"
+  },
+  "layered_andesite": {},
+  "layered_asurine": {},
+  "layered_calcite": {},
+  "layered_crimsite": {},
+  "layered_deepslate": {},
+  "layered_diorite": {},
+  "layered_dripstone": {},
+  "layered_granite": {},
+  "layered_limestone": {},
+  "layered_ochrum": {},
+  "layered_scorchia": {},
+  "layered_scoria": {},
+  "layered_tuff": {},
+  "layered_veridium": {},
+  "lectern_controller": {
+    "facing": "north",
+    "has_book": "true",
+    "powered": "false"
+  },
+  "light_blue_nixie_tube": {
+    "double_face": "floor",
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "light_blue_postbox": {
+    "facing": "north",
+    "open": "false",
+    "waterlogged": "false"
+  },
+  "light_blue_sail": {
+    "facing": "north"
+  },
+  "light_blue_seat": {
+    "waterlogged": "false"
+  },
+  "light_blue_table_cloth": {
+    "entity": "false"
+  },
+  "light_blue_toolbox": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "light_blue_valve_handle": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "light_gray_nixie_tube": {
+    "double_face": "floor",
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "light_gray_postbox": {
+    "facing": "north",
+    "open": "false",
+    "waterlogged": "false"
+  },
+  "light_gray_sail": {
+    "facing": "north"
+  },
+  "light_gray_seat": {
+    "waterlogged": "false"
+  },
+  "light_gray_table_cloth": {
+    "entity": "false"
+  },
+  "light_gray_toolbox": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "light_gray_valve_handle": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "lime_nixie_tube": {
+    "double_face": "floor",
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "lime_postbox": {
+    "facing": "north",
+    "open": "false",
+    "waterlogged": "false"
+  },
+  "lime_sail": {
+    "facing": "north"
+  },
+  "lime_seat": {
+    "waterlogged": "false"
+  },
+  "lime_table_cloth": {
+    "entity": "false"
+  },
+  "lime_toolbox": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "lime_valve_handle": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "limestone": {},
+  "limestone_pillar": {
+    "axis": "y",
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "west": "false"
+  },
+  "linear_chassis": {
+    "axis": "y",
+    "sticky_bottom": "false",
+    "sticky_top": "false"
+  },
+  "lit_blaze_burner": {
+    "flame_type": "regular"
+  },
+  "magenta_nixie_tube": {
+    "double_face": "floor",
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "magenta_postbox": {
+    "facing": "north",
+    "open": "false",
+    "waterlogged": "false"
+  },
+  "magenta_sail": {
+    "facing": "north"
+  },
+  "magenta_seat": {
+    "waterlogged": "false"
+  },
+  "magenta_table_cloth": {
+    "entity": "false"
+  },
+  "magenta_toolbox": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "magenta_valve_handle": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "mangrove_window": {},
+  "mangrove_window_pane": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "mechanical_arm": {
+    "ceiling": "false"
+  },
+  "mechanical_bearing": {
+    "facing": "north"
+  },
+  "mechanical_crafter": {
+    "facing": "north",
+    "pointing": "up"
+  },
+  "mechanical_drill": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "mechanical_harvester": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "mechanical_mixer": {},
+  "mechanical_piston": {
+    "axis_along_first": "true",
+    "facing": "north",
+    "state": "retracted"
+  },
+  "mechanical_piston_head": {
+    "facing": "north",
+    "type": "normal",
+    "waterlogged": "false"
+  },
+  "mechanical_plough": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "mechanical_press": {
+    "facing": "north"
+  },
+  "mechanical_pump": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "mechanical_roller": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "mechanical_saw": {
+    "axis_along_first": "true",
+    "facing": "north",
+    "flipped": "true"
+  },
+  "metal_bracket": {
+    "axis_along_first": "true",
+    "facing": "north",
+    "type": "pipe"
+  },
+  "metal_girder": {
+    "axis": "y",
+    "bottom": "false",
+    "top": "false",
+    "waterlogged": "false",
+    "x": "false",
+    "z": "false"
+  },
+  "metal_girder_encased_shaft": {
+    "axis": "x",
+    "bottom": "false",
+    "top": "false",
+    "waterlogged": "false"
+  },
+  "millstone": {},
+  "minecart_anchor": {
+    "axis": "x"
+  },
+  "mysterious_cuckoo_clock": {
+    "facing": "north"
+  },
+  "netherite_backtank": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "nixie_tube": {
+    "double_face": "floor",
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "nozzle": {
+    "facing": "north"
+  },
+  "oak_window": {},
+  "oak_window_pane": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "ochrum": {},
+  "ochrum_pillar": {
+    "axis": "y",
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "west": "false"
+  },
+  "orange_postbox": {
+    "facing": "north",
+    "open": "false",
+    "waterlogged": "false"
+  },
+  "orange_sail": {
+    "facing": "north"
+  },
+  "orange_seat": {
+    "waterlogged": "false"
+  },
+  "orange_table_cloth": {
+    "entity": "false"
+  },
+  "orange_toolbox": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "orange_valve_handle": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "ornate_iron_window": {},
+  "ornate_iron_window_pane": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "oxidized_copper_shingle_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "oxidized_copper_shingle_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "oxidized_copper_shingles": {},
+  "oxidized_copper_tile_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "oxidized_copper_tile_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "oxidized_copper_tiles": {},
+  "package_frogport": {},
+  "packager": {
+    "facing": "north",
+    "linked": "false",
+    "powered": "false"
+  },
+  "peculiar_bell": {
+    "attachment": "floor",
+    "facing": "north",
+    "powered": "false"
+  },
+  "pink_nixie_tube": {
+    "double_face": "floor",
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "pink_postbox": {
+    "facing": "north",
+    "open": "false",
+    "waterlogged": "false"
+  },
+  "pink_sail": {
+    "facing": "north"
+  },
+  "pink_seat": {
+    "waterlogged": "false"
+  },
+  "pink_table_cloth": {
+    "entity": "false"
+  },
+  "pink_toolbox": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "pink_valve_handle": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "piston_extension_pole": {
+    "facing": "up",
+    "waterlogged": "false"
+  },
+  "placard": {
+    "face": "floor",
+    "facing": "north",
+    "powered": "false",
+    "waterlogged": "false"
+  },
+  "polished_cut_andesite": {},
+  "polished_cut_andesite_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "polished_cut_andesite_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "polished_cut_andesite_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "polished_cut_asurine": {},
+  "polished_cut_asurine_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "polished_cut_asurine_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "polished_cut_asurine_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "polished_cut_calcite": {},
+  "polished_cut_calcite_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "polished_cut_calcite_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "polished_cut_calcite_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "polished_cut_crimsite": {},
+  "polished_cut_crimsite_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "polished_cut_crimsite_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "polished_cut_crimsite_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "polished_cut_deepslate": {},
+  "polished_cut_deepslate_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "polished_cut_deepslate_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "polished_cut_deepslate_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "polished_cut_diorite": {},
+  "polished_cut_diorite_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "polished_cut_diorite_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "polished_cut_diorite_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "polished_cut_dripstone": {},
+  "polished_cut_dripstone_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "polished_cut_dripstone_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "polished_cut_dripstone_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "polished_cut_granite": {},
+  "polished_cut_granite_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "polished_cut_granite_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "polished_cut_granite_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "polished_cut_limestone": {},
+  "polished_cut_limestone_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "polished_cut_limestone_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "polished_cut_limestone_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "polished_cut_ochrum": {},
+  "polished_cut_ochrum_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "polished_cut_ochrum_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "polished_cut_ochrum_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "polished_cut_scorchia": {},
+  "polished_cut_scorchia_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "polished_cut_scorchia_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "polished_cut_scorchia_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "polished_cut_scoria": {},
+  "polished_cut_scoria_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "polished_cut_scoria_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "polished_cut_scoria_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "polished_cut_tuff": {},
+  "polished_cut_tuff_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "polished_cut_tuff_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "polished_cut_tuff_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "polished_cut_veridium": {},
+  "polished_cut_veridium_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "polished_cut_veridium_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "polished_cut_veridium_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "portable_fluid_interface": {
+    "facing": "north"
+  },
+  "portable_storage_interface": {
+    "facing": "north"
+  },
+  "powered_latch": {
+    "facing": "north",
+    "powered": "false",
+    "powered_side": "false",
+    "powering": "false"
+  },
+  "powered_shaft": {
+    "axis": "y",
+    "waterlogged": "false"
+  },
+  "powered_toggle_latch": {
+    "facing": "north",
+    "powered": "false",
+    "powering": "false"
+  },
+  "pulley_magnet": {
+    "waterlogged": "false"
+  },
+  "pulse_extender": {
+    "facing": "north",
+    "inverted": "false",
+    "powered": "false",
+    "powering": "false"
+  },
+  "pulse_repeater": {
+    "facing": "north",
+    "inverted": "false",
+    "powered": "false",
+    "powering": "false"
+  },
+  "pulse_timer": {
+    "facing": "north",
+    "inverted": "false",
+    "powered": "false",
+    "powering": "false"
+  },
+  "purple_nixie_tube": {
+    "double_face": "floor",
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "purple_postbox": {
+    "facing": "north",
+    "open": "false",
+    "waterlogged": "false"
+  },
+  "purple_sail": {
+    "facing": "north"
+  },
+  "purple_seat": {
+    "waterlogged": "false"
+  },
+  "purple_table_cloth": {
+    "entity": "false"
+  },
+  "purple_toolbox": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "purple_valve_handle": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "radial_chassis": {
+    "axis": "y",
+    "sticky_east": "false",
+    "sticky_north": "false",
+    "sticky_south": "false",
+    "sticky_west": "false"
+  },
+  "railway_casing": {},
+  "raw_zinc_block": {},
+  "red_nixie_tube": {
+    "double_face": "floor",
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "red_postbox": {
+    "facing": "north",
+    "open": "false",
+    "waterlogged": "false"
+  },
+  "red_sail": {
+    "facing": "north"
+  },
+  "red_seat": {
+    "waterlogged": "false"
+  },
+  "red_table_cloth": {
+    "entity": "false"
+  },
+  "red_toolbox": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "red_valve_handle": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "redstone_contact": {
+    "facing": "up",
+    "powered": "false"
+  },
+  "redstone_link": {
+    "facing": "north",
+    "powered": "false",
+    "receiver": "false"
+  },
+  "redstone_requester": {
+    "axis": "x",
+    "powered": "false"
+  },
+  "refined_radiance_casing": {},
+  "repackager": {
+    "facing": "north",
+    "powered": "false"
+  },
+  "rope": {
+    "waterlogged": "false"
+  },
+  "rope_pulley": {
+    "axis": "x"
+  },
+  "rose_quartz_block": {
+    "axis": "y"
+  },
+  "rose_quartz_lamp": {
+    "activate": "false",
+    "powered": "false",
+    "powering": "false"
+  },
+  "rose_quartz_tiles": {},
+  "rotation_speed_controller": {
+    "axis": "x"
+  },
+  "sail_frame": {
+    "facing": "north"
+  },
+  "schematic_table": {
+    "facing": "north"
+  },
+  "schematicannon": {},
+  "scorchia": {},
+  "scorchia_pillar": {
+    "axis": "y",
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "west": "false"
+  },
+  "scoria": {},
+  "scoria_pillar": {
+    "axis": "y",
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "west": "false"
+  },
+  "secondary_linear_chassis": {
+    "axis": "y",
+    "sticky_bottom": "false",
+    "sticky_top": "false"
+  },
+  "sequenced_gearshift": {
+    "axis": "x",
+    "state": "0",
+    "vertical": "true"
+  },
+  "shadow_steel_casing": {},
+  "shaft": {
+    "axis": "y",
+    "waterlogged": "false"
+  },
+  "small_andesite_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "small_andesite_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "small_andesite_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "small_andesite_bricks": {},
+  "small_asurine_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "small_asurine_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "small_asurine_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "small_asurine_bricks": {},
+  "small_bogey": {
+    "axis": "x",
+    "waterlogged": "false"
+  },
+  "small_calcite_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "small_calcite_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "small_calcite_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "small_calcite_bricks": {},
+  "small_crimsite_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "small_crimsite_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "small_crimsite_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "small_crimsite_bricks": {},
+  "small_deepslate_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "small_deepslate_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "small_deepslate_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "small_deepslate_bricks": {},
+  "small_diorite_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "small_diorite_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "small_diorite_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "small_diorite_bricks": {},
+  "small_dripstone_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "small_dripstone_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "small_dripstone_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "small_dripstone_bricks": {},
+  "small_granite_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "small_granite_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "small_granite_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "small_granite_bricks": {},
+  "small_limestone_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "small_limestone_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "small_limestone_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "small_limestone_bricks": {},
+  "small_ochrum_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "small_ochrum_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "small_ochrum_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "small_ochrum_bricks": {},
+  "small_rose_quartz_tiles": {},
+  "small_scorchia_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "small_scorchia_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "small_scorchia_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "small_scorchia_bricks": {},
+  "small_scoria_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "small_scoria_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "small_scoria_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "small_scoria_bricks": {},
+  "small_tuff_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "small_tuff_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "small_tuff_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "small_tuff_bricks": {},
+  "small_veridium_brick_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "small_veridium_brick_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "small_veridium_brick_wall": {
+    "east": "none",
+    "north": "none",
+    "south": "none",
+    "up": "true",
+    "waterlogged": "false",
+    "west": "none"
+  },
+  "small_veridium_bricks": {},
+  "smart_chute": {
+    "powered": "true"
+  },
+  "smart_fluid_pipe": {
+    "face": "floor",
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "speedometer": {
+    "axis_along_first": "true",
+    "facing": "north"
+  },
+  "spout": {},
+  "spruce_window": {},
+  "spruce_window_pane": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "steam_engine": {
+    "face": "floor",
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "steam_whistle": {
+    "facing": "north",
+    "powered": "false",
+    "size": "medium",
+    "wall": "false"
+  },
+  "steam_whistle_extension": {
+    "shape": "single",
+    "size": "medium"
+  },
+  "sticker": {
+    "extended": "false",
+    "facing": "north",
+    "powered": "false"
+  },
+  "sticky_mechanical_piston": {
+    "axis_along_first": "true",
+    "facing": "north",
+    "state": "retracted"
+  },
+  "stock_link": {
+    "face": "floor",
+    "facing": "north",
+    "powered": "false",
+    "waterlogged": "false"
+  },
+  "stock_ticker": {
+    "facing": "north"
+  },
+  "stockpile_switch": {
+    "facing": "north",
+    "level": "0",
+    "target": "wall"
+  },
+  "stressometer": {
+    "axis_along_first": "true",
+    "facing": "north"
+  },
+  "tiled_glass": {},
+  "tiled_glass_pane": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "track": {
+    "shape": "zo",
+    "turn": "false",
+    "waterlogged": "false"
+  },
+  "track_observer": {
+    "powered": "false"
+  },
+  "track_signal": {
+    "powered": "false",
+    "type": "entry_signal"
+  },
+  "track_station": {
+    "assembling": "false",
+    "waterlogged": "false"
+  },
+  "train_door": {
+    "facing": "north",
+    "half": "lower",
+    "hinge": "left",
+    "open": "false",
+    "powered": "false",
+    "visible": "true"
+  },
+  "train_trapdoor": {
+    "facing": "north",
+    "half": "bottom",
+    "open": "false",
+    "powered": "false",
+    "waterlogged": "false"
+  },
+  "tuff_pillar": {
+    "axis": "y",
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "west": "false"
+  },
+  "turntable": {},
+  "veridium": {},
+  "veridium_pillar": {
+    "axis": "y",
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "west": "false"
+  },
+  "vertical_framed_glass": {},
+  "vertical_framed_glass_pane": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "warped_window": {},
+  "warped_window_pane": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "water_wheel": {
+    "facing": "north"
+  },
+  "water_wheel_structure": {
+    "facing": "north"
+  },
+  "waxed_copper_shingle_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "waxed_copper_shingle_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "waxed_copper_shingles": {},
+  "waxed_copper_tile_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "waxed_copper_tile_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "waxed_copper_tiles": {},
+  "waxed_exposed_copper_shingle_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "waxed_exposed_copper_shingle_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "waxed_exposed_copper_shingles": {},
+  "waxed_exposed_copper_tile_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "waxed_exposed_copper_tile_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "waxed_exposed_copper_tiles": {},
+  "waxed_oxidized_copper_shingle_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "waxed_oxidized_copper_shingle_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "waxed_oxidized_copper_shingles": {},
+  "waxed_oxidized_copper_tile_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "waxed_oxidized_copper_tile_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "waxed_oxidized_copper_tiles": {},
+  "waxed_weathered_copper_shingle_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "waxed_weathered_copper_shingle_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "waxed_weathered_copper_shingles": {},
+  "waxed_weathered_copper_tile_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "waxed_weathered_copper_tile_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "waxed_weathered_copper_tiles": {},
+  "weathered_copper_shingle_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "weathered_copper_shingle_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "weathered_copper_shingles": {},
+  "weathered_copper_tile_slab": {
+    "type": "bottom",
+    "waterlogged": "false"
+  },
+  "weathered_copper_tile_stairs": {
+    "facing": "north",
+    "half": "bottom",
+    "shape": "straight",
+    "waterlogged": "false"
+  },
+  "weathered_copper_tiles": {},
+  "weathered_iron_block": {},
+  "weathered_iron_window": {},
+  "weathered_iron_window_pane": {
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "waterlogged": "false",
+    "west": "false"
+  },
+  "weighted_ejector": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "white_nixie_tube": {
+    "double_face": "floor",
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "white_postbox": {
+    "facing": "north",
+    "open": "false",
+    "waterlogged": "false"
+  },
+  "white_sail": {
+    "facing": "north"
+  },
+  "white_seat": {
+    "waterlogged": "false"
+  },
+  "white_table_cloth": {
+    "entity": "false"
+  },
+  "white_toolbox": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "white_valve_handle": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "windmill_bearing": {
+    "facing": "north"
+  },
+  "wooden_bracket": {
+    "axis_along_first": "true",
+    "facing": "north",
+    "type": "pipe"
+  },
+  "yellow_nixie_tube": {
+    "double_face": "floor",
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "yellow_postbox": {
+    "facing": "north",
+    "open": "false",
+    "waterlogged": "false"
+  },
+  "yellow_sail": {
+    "facing": "north"
+  },
+  "yellow_seat": {
+    "waterlogged": "false"
+  },
+  "yellow_table_cloth": {
+    "entity": "false"
+  },
+  "yellow_toolbox": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "yellow_valve_handle": {
+    "facing": "north",
+    "waterlogged": "false"
+  },
+  "zinc_block": {},
+  "zinc_ore": {}
+}

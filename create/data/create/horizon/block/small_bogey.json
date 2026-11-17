@@ -21,7 +21,7 @@
     }
   },
   "default_state": {
-    "axis": "z",
+    "axis": "x",
     "waterlogged": "false"
   }
 }
