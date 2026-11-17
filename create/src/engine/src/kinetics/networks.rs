@@ -2,12 +2,23 @@
 use super::Node;
 use std::collections::{HashMap, HashSet};
 
+/// Identity of Create's KineticBlockEntity within this dimension. Shaft faces are ports,
+/// not separate entities (`SplitShaftBlockEntity.getRotationSpeedModifier`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Entity([i32; 3]);
+
+/// One Java network member, with all engine ports that must receive its figures.
+struct Member {
+    ports: HashSet<u32>,
+    stress: f32,
+}
+
 /// KineticNetwork stores base stress/capacity; actual contributions use current entity speeds.
 #[derive(Default)]
 pub(super) struct KineticNetwork {
     id: i64,
-    members: HashMap<u32, f32>,
-    sources: HashMap<u32, f32>,
+    members: HashMap<Entity, Member>,
+    sources: HashMap<Entity, f32>,
     stress: f32,
     capacity: f32,
     initialized: bool,
@@ -36,10 +47,11 @@ impl KineticNetwork {
         last_capacity: f32,
         last_stress: f32,
     ) {
-        if self.members.contains_key(&id) {
+        let n = &nodes[id as usize];
+        if self.members.contains_key(&Entity(n.pos)) {
+            self.add(id, nodes);
             return;
         }
-        let n = &nodes[id as usize];
         if n.part.generated != 0.0 {
             self.unloaded_capacity =
                 (self.unloaded_capacity - last_capacity * n.part.generated.abs()).max(0.0);
@@ -51,50 +63,92 @@ impl KineticNetwork {
     }
     /// KineticNetwork.add enrolls a fresh live member.
     pub(super) fn add(&mut self, id: u32, nodes: &[Node]) {
-        if self.members.contains_key(&id) {
-            return;
-        }
         self.initialized = true;
         let n = &nodes[id as usize];
-        self.members.insert(id, n.part.impact);
+        self.members
+            .entry(Entity(n.pos))
+            .or_insert_with(|| Member {
+                ports: HashSet::new(),
+                stress: n.part.impact,
+            })
+            .ports
+            .insert(id);
         if n.part.generated != 0.0 {
-            self.sources.insert(id, n.part.capacity);
+            self.sources.insert(Entity(n.pos), n.part.capacity);
         }
     }
-    /// KineticNetwork.remove: detach the member and its capacity contribution.
+    /// Detach a port; the entity leaves only when its last enrolled port leaves.
     pub(super) fn remove(&mut self, id: u32) {
-        self.members.remove(&id);
-        self.sources.remove(&id);
+        self.members.retain(|entity, member| {
+            member.ports.remove(&id);
+            if member.ports.is_empty() {
+                self.sources.remove(entity);
+                false
+            } else {
+                true
+            }
+        });
     }
-    pub(super) fn update_capacity_for(&mut self, id: u32, capacity: f32) {
-        self.sources.insert(id, capacity);
+    pub(super) fn update_capacity_for(&mut self, id: u32, capacity: f32, nodes: &[Node]) {
+        self.sources
+            .insert(Entity(nodes[id as usize].pos), capacity);
     }
-    pub(super) fn update_stress_for(&mut self, id: u32, stress: f32) {
-        self.members.insert(id, stress);
-    }
-    fn get_actual_capacity_of(&self, id: u32, nodes: &[Node]) -> f32 {
-        self.sources[&id] * nodes[id as usize].part.generated.abs()
-    }
-    fn get_actual_stress_of(&self, id: u32, nodes: &[Node]) -> f32 {
-        self.members[&id] * nodes[id as usize].state.theoretical.abs()
+    pub(super) fn update_stress_for(&mut self, id: u32, stress: f32, nodes: &[Node]) {
+        if !self.members.contains_key(&Entity(nodes[id as usize].pos)) {
+            self.add(id, nodes);
+        }
+        self.members
+            .get_mut(&Entity(nodes[id as usize].pos))
+            .unwrap()
+            .stress = stress;
     }
     fn calculate_capacity(&mut self, nodes: &[Node]) -> f32 {
-        self.sources.retain(|&id, _| {
-            nodes[id as usize].live && nodes[id as usize].state.net == Some(self.id)
-        });
         self.sources
-            .keys()
-            .map(|&id| self.get_actual_capacity_of(id, nodes))
+            .iter()
+            .map(|(entity, capacity)| {
+                let speed = self
+                    .members
+                    .get(entity)
+                    .into_iter()
+                    .flat_map(|m| &m.ports)
+                    .map(|&id| nodes[id as usize].part.generated.abs())
+                    .fold(0.0_f32, f32::max);
+                capacity * speed
+            })
             .sum::<f32>()
             + self.unloaded_capacity
     }
     fn calculate_stress(&mut self, nodes: &[Node]) -> f32 {
-        self.members.retain(|&id, _| {
-            nodes[id as usize].live && nodes[id as usize].state.net == Some(self.id)
+        self.members.retain(|entity, member| {
+            member.ports.retain(|&id| {
+                nodes[id as usize].live && nodes[id as usize].state.net == Some(self.id)
+            });
+            if member.ports.is_empty() {
+                self.sources.remove(entity);
+                false
+            } else {
+                true
+            }
         });
         self.members
-            .keys()
-            .map(|&id| self.get_actual_stress_of(id, nodes))
+            .values()
+            .map(|member| {
+                // A split shaft has one theoretical speed; face modifiers only affect
+                // conveyed rotation. Prefer its externally driven port to its relay.
+                let id = member
+                    .ports
+                    .iter()
+                    .copied()
+                    .min_by_key(|&id| {
+                        let n = &nodes[id as usize];
+                        (
+                            n.state.source.is_none_or(|source| source.pos == n.pos),
+                            n.sub,
+                        )
+                    })
+                    .unwrap();
+                member.stress * nodes[id as usize].state.theoretical.abs()
+            })
             .sum::<f32>()
             + self.unloaded_stress
     }
@@ -130,7 +184,11 @@ impl KineticNetwork {
     /// KineticNetwork.sync enumerates only this network's members.
     fn sync(&self) -> NetworkSync {
         NetworkSync {
-            members: self.members.keys().copied().collect(),
+            members: self
+                .members
+                .values()
+                .flat_map(|m| m.ports.iter().copied())
+                .collect(),
             stress: self.stress,
             capacity: self.capacity,
         }
@@ -191,7 +249,7 @@ impl TorquePropagator {
     pub(super) fn members(&self, id: Option<i64>) -> impl Iterator<Item = u32> + '_ {
         id.and_then(|id| self.networks.get(&id))
             .into_iter()
-            .flat_map(|n| n.members.keys().copied())
+            .flat_map(|n| n.members.values().flat_map(|m| m.ports.iter().copied()))
     }
     pub(super) fn figures(&self, id: Option<i64>) -> (f32, f32, u32) {
         id.and_then(|id| self.networks.get(&id))

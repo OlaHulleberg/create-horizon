@@ -1736,6 +1736,72 @@ mod tests {
     }
 
     #[test]
+    fn split_shaft_is_one_network_entity() {
+        // Create Java, issue #12's seed 4675: motor + unpowered clutch,
+        // 32 rpm, network size 2 at both positions (not 3 shaft ports).
+        // Exercise either input face and GearshiftBlockEntity's -1 modifier too.
+        for input in [Dir::Up, Dir::Down] {
+            for modifier in [1.0, -1.0] {
+                let mut k = Kinetics::new();
+                let pos = [-5, 8, 2];
+                let motor_pos = add(pos, input.offset());
+                k.set(pos, 0, Part::half(Dir::Down));
+                k.set(
+                    pos,
+                    1,
+                    Part {
+                        link: Some(modifier),
+                        ..Part::half(Dir::Up)
+                    },
+                );
+                solve(&mut k);
+                k.set(motor_pos, 0, motor(input.opposite(), 32.0));
+                solve(&mut k);
+                let expected = Some((network_id(motor_pos), 2));
+                assert_eq!(k.network_membership(motor_pos, 0), expected);
+                for sub in [0, 1] {
+                    assert_eq!(k.network_membership(pos, sub), expected);
+                    assert_eq!(k.saved_state(pos, sub).unwrap().network.unwrap().size, 2);
+                }
+                // addSilently consumes one unloaded member per entity, even when
+                // its two ports restore in the opposite order.
+                for order in [[0, 1], [1, 0]] {
+                    let mut restored = Kinetics::new();
+                    restored.set(pos, 0, Part::half(Dir::Down));
+                    restored.set(
+                        pos,
+                        1,
+                        Part {
+                            link: Some(modifier),
+                            ..Part::half(Dir::Up)
+                        },
+                    );
+                    restored.set(motor_pos, 0, motor(input.opposite(), 32.0));
+                    for sub in order {
+                        assert!(restored.restore_state(pos, sub, k.saved_state(pos, sub).unwrap()));
+                    }
+                    assert!(restored.restore_state(
+                        motor_pos,
+                        0,
+                        k.saved_state(motor_pos, 0).unwrap()
+                    ));
+                    solve(&mut restored);
+                    for sub in [0, 1] {
+                        assert_eq!(restored.network_membership(pos, sub), expected);
+                    }
+                    assert_eq!(restored.network_membership(motor_pos, 0), expected);
+                }
+                k.remove(pos);
+                solve(&mut k);
+                assert_eq!(
+                    k.network_membership(motor_pos, 0),
+                    Some((network_id(motor_pos), 1))
+                );
+            }
+        }
+    }
+
+    #[test]
     fn split_shafts_cut_or_reverse() {
         let mut k = Kinetics::new();
         k.set([-1, 0, 0], 0, motor(Dir::East, 12.0));

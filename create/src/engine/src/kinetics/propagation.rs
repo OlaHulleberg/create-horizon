@@ -135,7 +135,7 @@ impl Kinetics {
         if net.is_some() {
             self.networks
                 .get_or_create_network_for(net)
-                .update_stress_for(id, self.nodes[id as usize].part.impact);
+                .update_stress_for(id, self.nodes[id as usize].part.impact, &self.nodes);
             self.networks.mark_dirty(net);
         }
         if changed {
@@ -352,11 +352,11 @@ impl Kinetics {
             };
             let impact = n.part.impact;
             let network = self.networks.get_or_create_network_for(net);
-            network.update_capacity_for(id, capacity);
+            network.update_capacity_for(id, capacity, &self.nodes);
             let sync = network.update_capacity(&self.nodes);
             self.sync_network(sync);
             let network = self.networks.get_or_create_network_for(net);
-            network.update_stress_for(id, impact);
+            network.update_stress_for(id, impact, &self.nodes);
             let sync = network.update_stress(&self.nodes);
             self.sync_network(sync);
             self.networks.mark_dirty(net);
