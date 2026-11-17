@@ -120,6 +120,8 @@ pub struct Dimension {
     pub unsaved: Vec<(i32, i32)>,
     /// Java crank/valve block entity use state, including the unsaved valve cooldown.
     handles: HashMap<[i32; 3], crate::valve::Handle>,
+    /// Handles whose saved use state changed since the glue last wrote it.
+    handle_changes: HashSet<[i32; 3]>,
     /// Sliding doors whose `open` changed (position, open before), for the glue to apply
     /// Create's rules after the tick; and the lower halves whose panel still slides
     /// (`SlidingDoorBlockEntity.animation`), the only doors that tick.
@@ -2366,6 +2368,7 @@ impl CreateWorld {
         let handle = d.handles.entry(pos).or_default();
         handle.saved.in_use = 10;
         handle.saved.backwards = back;
+        d.handle_changes.insert(pos);
         let crank = if back { -1 } else { 1 };
         let old = d.settings.get(&pos).copied().unwrap_or_default();
         if old.crank != crank {
@@ -2439,6 +2442,7 @@ impl CreateWorld {
         {
             return false;
         }
+        d.handle_changes.insert(pos);
         d.handles.insert(
             pos,
             crate::valve::Handle {
@@ -2482,9 +2486,11 @@ impl CreateWorld {
     /// stopped count their cooldown down (`ValveHandleBlockEntity.tick`, after the crank's).
     pub fn tick_cranks(&mut self, dim: usize) {
         let mut stopped = Vec::new();
-        for (pos, handle) in &mut self.dims[dim].handles {
+        let d = &mut self.dims[dim];
+        for (pos, handle) in &mut d.handles {
             if handle.saved.in_use > 0 {
                 handle.saved.in_use -= 1;
+                d.handle_changes.insert(*pos);
                 if handle.saved.in_use == 0 {
                     stopped.push(*pos);
                 }
@@ -2512,8 +2518,10 @@ impl CreateWorld {
     }
 
     /// Loaded crank/valve positions whose use data the host writes each tick.
-    pub fn handle_positions(&self, dim: usize) -> Vec<[i32; 3]> {
-        self.dims[dim].handles.keys().copied().collect()
+    /// Handles whose saved use state changed since the last call (`HandCrankBlockEntity.write`
+    /// runs when the entity is saved; the glue writes only what changed).
+    pub fn take_handle_changes(&mut self, dim: usize) -> Vec<[i32; 3]> {
+        self.dims[dim].handle_changes.drain().collect()
     }
 
     /// `HandCrankBlockEntity.write`, extended by `ValveHandleBlockEntity.write`.

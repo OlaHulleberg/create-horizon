@@ -535,7 +535,7 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
             }
         }
     }
-    let handles = with_world(|w| w.handle_positions(dim)).unwrap_or_default();
+    let handles = with_world(|w| w.take_handle_changes(dim)).unwrap_or_default();
     for pos in handles {
         if let Some(saved) = with_world(|w| w.saved_handle(dim, pos)).flatten() {
             lv.write_entity_field(pos, "HandleState", handle_to_nbt(saved));
