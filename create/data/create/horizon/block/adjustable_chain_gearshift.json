@@ -26,7 +26,6 @@
     }
   },
   "default_state": {
-    "axis": "x",
     "axis_along_first": "true",
     "part": "none",
     "powered": "false"

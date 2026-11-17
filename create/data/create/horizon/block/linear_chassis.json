@@ -16,7 +16,6 @@
     }
   },
   "default_state": {
-    "axis": "x",
     "sticky_bottom": "false",
     "sticky_top": "false"
   },

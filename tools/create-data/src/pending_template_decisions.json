@@ -1,15 +1,4 @@
 {
-  "differing_inherited_defaults": {
-    "analog_lever.face": "Create runtime default differs from main's known template default; main's handling is retained pending the owner's template-data decision.",
-    "basin.facing": "Create runtime default differs from main's known template default; main's handling is retained pending the owner's template-data decision.",
-    "cart_assembler.shape": "Create runtime default differs from main's known template default; main's handling is retained pending the owner's template-data decision.",
-    "chute.facing": "Create runtime default differs from main's known template default; main's handling is retained pending the owner's template-data decision.",
-    "clipboard.face": "Create runtime default differs from main's known template default; main's handling is retained pending the owner's template-data decision.",
-    "factory_gauge.face": "Create runtime default differs from main's known template default; main's handling is retained pending the owner's template-data decision.",
-    "metal_girder_encased_shaft.axis": "Create runtime default differs from main's known template default; main's handling is retained pending the owner's template-data decision.",
-    "placard.face": "Create runtime default differs from main's known template default; main's handling is retained pending the owner's template-data decision.",
-    "stock_link.face": "Create runtime default differs from main's known template default; main's handling is retained pending the owner's template-data decision."
-  },
   "source": "Create runtime default_states.json versus main f4a7f18's declarations and existing TEMPLATE_PROPERTIES; no new vanilla template facts",
   "unlisted_properties": {
     "acacia_window_pane.east": "Not declared or covered by main's template table; awaiting the owner's template-data decision.",

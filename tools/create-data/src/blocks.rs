@@ -4126,12 +4126,19 @@ pub fn fork_states(
             .as_array()
             .map(|v| v.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
-        let Some(&first) = values.first() else {
+        if values.is_empty() {
             continue;
-        };
+        }
+        // A template property: overridden only where Create's runtime default isn't the template's.
         if let Some((_, vanilla, _)) = on_template.iter().find(|(k, _, _)| k == name) {
-            if first != *vanilla {
-                default.insert(name.clone(), json!(first));
+            if let Some(value) = defaults.get(name).and_then(Value::as_str)
+                && value != *vanilla
+            {
+                assert!(
+                    values.contains(&value),
+                    "Create runtime default outside its domain: {name}={value}"
+                );
+                default.insert(name.clone(), json!(value));
             }
             continue;
         }
@@ -4172,19 +4179,6 @@ mod tests {
             .collect()
     }
 
-    fn differing_inherited_defaults(doc: &Value, defaults: &Map<String, Value>) -> Vec<String> {
-        template_properties(doc["template"].as_str().unwrap())
-            .iter()
-            .filter(|(name, value, _)| {
-                defaults
-                    .get(*name)
-                    .and_then(Value::as_str)
-                    .is_some_and(|runtime| runtime != *value)
-            })
-            .map(|(name, _, _)| (*name).into())
-            .collect()
-    }
-
     #[test]
     fn template_decisions_have_exact_pending_lists() {
         let expected: Value =
@@ -4192,7 +4186,6 @@ mod tests {
         let root =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../create/data/create/horizon/block");
         let mut unlisted = BTreeSet::new();
-        let mut differing = BTreeSet::new();
         for (name, defaults) in runtime_defaults() {
             if matches!(name.as_str(), "chocolate" | "honey") {
                 continue;
@@ -4213,19 +4206,18 @@ mod tests {
                     .into_iter()
                     .map(|property| format!("{name}.{property}")),
             );
-            differing.extend(
-                differing_inherited_defaults(&doc, defaults)
-                    .into_iter()
-                    .map(|property| format!("{name}.{property}")),
-            );
+            // Every template property the table knows defaults as Create's runtime has it.
+            for (property, vanilla, _) in template_properties(doc["template"].as_str().unwrap()) {
+                if let Some(runtime) = defaults.get(*property).and_then(Value::as_str) {
+                    let actual = doc["default_state"][*property].as_str().unwrap_or(vanilla);
+                    assert_eq!(actual, runtime, "{name}.{property}");
+                }
+            }
         }
-        for (key, actual, count) in [
-            ("unlisted_properties", unlisted, 975),
-            ("differing_inherited_defaults", differing, 9),
-        ] {
-            let list = expected[key].as_object().unwrap();
-            assert_eq!(actual, list.keys().cloned().collect());
-            assert_eq!(list.len(), count);
+        {
+            let list = expected["unlisted_properties"].as_object().unwrap();
+            assert_eq!(unlisted, list.keys().cloned().collect());
+            assert_eq!(list.len(), 975);
             assert!(list.values().all(|reason| {
                 reason
                     .as_str()
@@ -4257,7 +4249,8 @@ mod tests {
         );
         assert_eq!(a, b);
         assert_eq!(a["axis_along_first"], "true");
-        assert_eq!(a["axis"], "x"); // Preserve main's inherited-property handling.
+        // Create's runtime axis is y, the pillar template's: no override.
+        assert!(a.get("axis").is_none());
     }
 
     #[test]
@@ -4374,10 +4367,10 @@ mod tests {
                 "top_shaft": { "type": "boolean" },
             })
         );
-        // `axis` is the pillar's, defaulting to x where vanilla's is y.
+        // `axis` is the pillar's: overridden only by a Create runtime default that differs.
         assert_eq!(
             Value::Object(default),
-            json!({ "axis": "x", "powered": "false", "part": "none", "top_shaft": "true" })
+            json!({ "powered": "false", "part": "none", "top_shaft": "true" })
         );
     }
 
