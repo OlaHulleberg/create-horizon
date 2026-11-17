@@ -38,6 +38,11 @@ Each entry: what Create does → what's missing → the API that would close it.
   Create keeps it until a neighbour changes (#7) → `state_for_placement` gets a `&dyn LevelHost`, which has no
   `has_neighbor_signal`; `LevelTicksHost` has it (`best_neighbor_signal`, `signal` too). Still so at Sunrise `bd21c4d`
   and head (2026-11-17). Fix: pass a level with signal reads (`&dyn LevelTicksHost`) to `state_for_placement`.
+- **A block entity reading data it is given.** `/data merge block` on a Create block entity (a table cloth given a
+  `Price`, a motor a `KineticState`) changes its saved data, but the mod keeps its own state and never sees it; Create
+  runs the entity's `read` (`BlockDataAccessor.setData` → `loadWithComponents`) and takes it up at once → the server has
+  only `block_entity_on_load`, once per instance (`block_entity_data_received` is the client's). Still so at Sunrise
+  head 1f799a9 (2026-11-17). Fix: a server hook when a block entity loads data into an existing instance.
 - **A placement answering another block.** A shaft placed in front of a steam engine becomes a powered shaft a tick
   later (`pickCorrectShaftType`) → `state_for_placement` can't read another block's state.
 - **Collision shapes in `can_survive`.** Hand cranks and valve handles are refused only against air or fluid →
