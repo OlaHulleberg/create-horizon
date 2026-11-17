@@ -246,7 +246,7 @@ fn loading_legacy_save(data: &Compound) -> bool {
         && (data.contains_key(&SPEEDS.into()) || data.contains_key(&THEORY.into()))
 }
 
-/// KineticBlockEntity.write's server fields. Nested replacement removes stale Source/Network.
+/// KineticBlockEntity.write's server fields.
 fn saved_to_nbt(saved: SavedKineticState) -> Compound {
     let mut out = Compound::from([
         ("Speed".into(), Tag::Float(saved.speed.to_bits())),
@@ -504,10 +504,13 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
                     state.map(|s| (["0", "1"][i].into(), Tag::Compound(saved_to_nbt(s))))
                 })
                 .collect();
-            let _ = entity.merge_data(
-                &mut *lv.host,
-                Compound::from([(SAVED_KINETICS.into(), Tag::Compound(ports))]),
-            );
+            // KineticBlockEntity.write rewrites its fields: a merge (recursive, as `/data merge`)
+            // would keep a `Source` or `Network` the entity no longer has.
+            let Some(mut data) = entity.data(&*lv.host) else {
+                continue;
+            };
+            data.insert(SAVED_KINETICS.into(), Tag::Compound(ports));
+            let _ = entity.replace_data(&mut *lv.host, data);
         }
     }
 }
