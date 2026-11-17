@@ -8,6 +8,24 @@ use crate::parts::{Settings, StateInfo, is_generating, is_kinetic, parts};
 use crate::states;
 use std::collections::{HashMap, HashSet};
 
+/// Whether Create keeps the block entity when `old` is replaced by `new`: the same block, or one
+/// whose `onRemove` keeps it for its own kind (`ValveHandleBlock`, `NixieTubeBlock` and
+/// `ToolboxBlock` for another colour; `FunnelBlock` and `BeltFunnelBlock` for the other form of
+/// the same material, `isOfSameType`).
+fn keeps_block_entity(old: Block, new: Block) -> bool {
+    use crate::dye::{is_nixie_tube, is_toolbox, is_valve_handle};
+    let funnel = |b| match b {
+        Block::AndesiteFunnel | Block::AndesiteBeltFunnel => Some(false),
+        Block::BrassFunnel | Block::BrassBeltFunnel => Some(true),
+        _ => None,
+    };
+    old == new
+        || (is_valve_handle(old) && is_valve_handle(new))
+        || (is_nixie_tube(old) && is_nixie_tube(new))
+        || (is_toolbox(old) && is_toolbox(new))
+        || funnel(old).is_some_and(|brass| funnel(new) == Some(brass))
+}
+
 /// `KineticBlock.areStatesKineticallyEquivalent` and its block overrides.
 fn kinetically_equivalent(a: Block, x: &StateInfo, b: Block, y: &StateInfo) -> bool {
     let axis = |b, s| parts(b, s, &Settings::default())[0].map(|p| p.axis);
@@ -1171,11 +1189,9 @@ impl CreateWorld {
         let settings = d.settings.get(&pos).copied().unwrap_or_default();
         let [a, b] = parts(block, info, &settings);
         let previous = d.states.get(&pos).and_then(|s| self.table.get(*s));
-        // ValveHandleBlock.onRemove skips removal for another valve handle, including
-        // another colour. KineticBlock.onPlace still treats those states as non-equivalent.
-        let same = previous.is_some_and(|(b, _)| {
-            b == block || (crate::dye::is_valve_handle(b) && crate::dye::is_valve_handle(block))
-        });
+        // The block entity survives (another valve colour too); `KineticBlock.onPlace` still
+        // treats a different block as non-equivalent.
+        let same = previous.is_some_and(|(b, _)| keeps_block_entity(b, block));
         let equivalent =
             previous.is_some_and(|(b, old)| kinetically_equivalent(b, old, block, info));
         if !same {
