@@ -526,9 +526,6 @@ impl mod_api::ItemPart for ToolboxItem {
         host: &mut dyn ServerHost,
         event: &mut mod_api::OnBlockPlacedByEvent<'_>,
     ) {
-        if event.placer.is_none() {
-            return;
-        }
         let Some(dimension) = event.level.dimension().id(&*host).map(|d| d.to_string()) else {
             return;
         };

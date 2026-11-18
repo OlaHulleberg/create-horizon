@@ -3154,10 +3154,7 @@ struct RollerItem;
 #[mod_api::sunrise_part]
 impl ItemPart for RollerItem {
     fn on_block_placed_by(&self, host: &mut dyn ServerHost, event: &mut OnBlockPlacedByEvent<'_>) {
-        let Some(level) = event.placer.and_then(|p| p.level(&*host)) else {
-            return;
-        };
-        let Some(dimension) = level.dimension().id(&*host) else {
+        let Some(dimension) = event.level.dimension().id(&*host) else {
             return;
         };
         if let Some(dim) = super::super::world::level_index(&dimension) {

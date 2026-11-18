@@ -577,7 +577,12 @@ impl ItemPart for PlacedBacktank {
         if backtank_block(event.state).is_none() {
             return;
         }
-        let Some(dim) = event.placer.and_then(|p| player_dim(&*host, p)) else {
+        let Some(dim) = event
+            .level
+            .dimension()
+            .id(&*host)
+            .and_then(|d| crate::glue::world::level_index(&d))
+        else {
             return;
         };
         let (air, capacity) = (stack_air(event.stack), capacity(event.stack));
