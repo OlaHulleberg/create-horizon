@@ -1174,8 +1174,11 @@ pub(crate) fn grip_tick(host: &dyn mod_api::ClientHost) {
         let off = super::items::held(host, p, Hand::Off);
         let main = super::items::held(host, p, Hand::Main);
         off.is_some_and(|s| matches!(gear_of(host, &s), Gear::ExtendoGrip))
-            && main
-                .is_some_and(|s| host.item_uses_block_light(&s, mod_api::ItemDisplayContext::Gui))
+            && main.is_some_and(|s| {
+                // ExtendoGripRenderHandler.tick: BlockItem, then model.isGui3d().
+                host.item_block(s.item()).is_some()
+                    && host.item_uses_block_light(&s, mod_api::ItemDisplayContext::Gui)
+            })
     });
     GRIP_SWING.set((a, hold));
 }
