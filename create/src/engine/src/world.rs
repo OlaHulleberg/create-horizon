@@ -2248,12 +2248,8 @@ impl CreateWorld {
         d.kinetics.advance();
         let from = events.len();
         let stats = d.kinetics.solve(events);
-        for (pos, speed) in d.kinetics.take_speed_notifications() {
-            if let Some(pointer) = d.plumbing.valves.get_mut(&pos) {
-                pointer.speed_changed(speed);
-                d.kinetics.mark_saved_changed(pos);
-            }
-        }
+        self.flush_kinetic_callbacks(dim);
+        let d = &mut self.dims[dim];
         // Sequenced gearshifts follow their speed (`onSpeedChanged`).
         if !d.sequencers.is_empty() {
             let turned: Vec<[i32; 3]> = events[from..]
@@ -4778,6 +4774,19 @@ impl CreateWorld {
 
 /// Valves, smart pipes, hose pulleys, creative tanks and whistles.
 impl CreateWorld {
+    /// Deliver KineticBlockEntity subclass onSpeedChanged callbacks before publishing
+    /// entity data. Java invokes these synchronously during rotation propagation;
+    /// pointer.chase changes the saved target without advancing the pointer.
+    pub fn flush_kinetic_callbacks(&mut self, dim: usize) {
+        let d = &mut self.dims[dim];
+        for (pos, speed) in d.kinetics.take_speed_notifications() {
+            if let Some(pointer) = d.plumbing.valves.get_mut(&pos) {
+                pointer.speed_changed(speed);
+                d.kinetics.mark_saved_changed(pos);
+            }
+        }
+    }
+
     /// FluidValveBlockEntity.write / LerpedFloat.writeNBT: value, chase target and speed.
     pub fn saved_valve_pointer(&self, dim: usize, pos: [i32; 3]) -> Option<crate::fluids::Pointer> {
         self.dims[dim].plumbing.valves.get(&pos).copied()
@@ -4828,12 +4837,8 @@ impl CreateWorld {
         if d.plumbing.valves.contains_key(&pos) {
             d.kinetics.tick_base_through(pos);
         }
-        for (p, speed) in d.kinetics.take_speed_notifications() {
-            if let Some(pointer) = d.plumbing.valves.get_mut(&p) {
-                pointer.speed_changed(speed);
-                d.kinetics.mark_saved_changed(p);
-            }
-        }
+        self.flush_kinetic_callbacks(dim);
+        let d = &mut self.dims[dim];
         d.tanks.tick(pos);
         d.creative_tanks.tick(pos);
         let mut out = None;
@@ -7139,6 +7144,93 @@ mod tests {
         w.fluid_transport_base_tick(0, pipe);
         assert_eq!(w.speed(0, drive), Some(64.));
         states::clear_range();
+    }
+
+    // Java's reload cases: chase speed at 32 rpm is 0.1, with targets 1/0.
+    // Publication after an interaction must include onSpeedChanged's chase, even
+    // though the next FluidValveBlockEntity.tick has not moved its value yet.
+    fn valve_interaction_reload(rpm: f32, value: f32, target: f32) {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        states::set_range(10, 2);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            [
+                ("create:creative_motor", vec![("facing", "south")]),
+                (
+                    "create:fluid_valve",
+                    vec![
+                        ("facing", "down"),
+                        ("axis_along_first", "false"),
+                        ("enabled", "true"),
+                    ],
+                ),
+            ]
+            .into_iter()
+            .map(|(n, p)| (n, p.into_iter())),
+        ));
+        let (motor, valve) = ([0, 8, 1], [0, 8, 2]);
+        w.block_changed(0, motor, 0, 10);
+        w.block_changed(0, valve, 0, 11);
+        w.tick_fluid_entities(0, |_| Some(true));
+        w.tick(0, &mut Vec::new());
+        w.restore_valve_pointer(
+            0,
+            valve,
+            crate::fluids::Pointer {
+                value,
+                target: 1.0 - target,
+                speed: 0.0,
+            },
+        );
+        w.board_motor(
+            0,
+            motor,
+            crate::board::Settings {
+                row: i32::from(rpm >= 0.0),
+                value: rpm.abs() as i32,
+            },
+        );
+        w.flush_kinetic_callbacks(0);
+        let saved = w.saved_valve_pointer(0, valve).unwrap();
+        assert_eq!(
+            saved,
+            crate::fluids::Pointer {
+                value,
+                target,
+                speed: 0.1
+            }
+        );
+        let kinetics: Vec<_> = [motor, valve]
+            .into_iter()
+            .map(|p| (p, w.dims[0].kinetics.saved_state(p, 0).unwrap()))
+            .collect();
+        w.column_unloaded(0, 0, 0);
+        w.load_settings(0, [(motor, rpm as i32)].into_iter());
+        for (p, state) in [(motor, 10), (valve, 11)] {
+            w.block_loaded(0, p, state);
+        }
+        w.restore_valve_pointer(0, valve, saved);
+        for (p, saved) in kinetics {
+            w.dims[0].kinetics.restore_state(p, 0, saved);
+        }
+        assert!(w.tick_fluid_entities(0, |_| Some(true)).is_empty());
+        assert!(
+            (w.saved_valve_pointer(0, valve).unwrap().value
+                - if target == 1.0 { 0.1 } else { 0.9 })
+            .abs()
+                < 1e-6
+        );
+        states::clear_range();
+    }
+
+    #[test]
+    fn valve_placement_interaction_publishes_chase_before_reload() {
+        valve_interaction_reload(32.0, 0.0, 1.0);
+    }
+
+    #[test]
+    fn valve_reversal_interaction_publishes_chase_before_reload() {
+        valve_interaction_reload(-32.0, 1.0, 0.0);
     }
 
     #[test]

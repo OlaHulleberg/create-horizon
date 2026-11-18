@@ -598,6 +598,7 @@ fn apply_events(lv: &mut ServerLevel<'_>, mut events: Vec<Event>) {
 /// Publish the engine saved-change journals without advancing simulation.
 fn publish_saved(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
+    with_world(|w| w.flush_kinetic_callbacks(dim));
     let handles = with_world(|w| w.take_handle_changes(dim)).unwrap_or_default();
     for pos in handles {
         if let Some(saved) = with_world(|w| w.saved_handle(dim, pos)).flatten() {
