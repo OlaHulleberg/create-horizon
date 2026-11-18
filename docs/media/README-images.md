@@ -1,27 +1,27 @@
 # README images
 
-Every image is an in-game capture of this port running in Sunrise (Minecraft 26.3), HUD hidden,
-seed 1, just before sunset. Every machine shown is running (belts, presses, mixers, arms, wheels,
-the windmill, the train on its schedule). Nothing is painted over; the banner and panels only add
-a gradient and type. Credit line for the README: *Create's textures and models © the Create Team.*
+Every image is an in-game capture of the native port in Sunrise (Minecraft 26.3), with the HUD
+hidden. The four feature panels were captured on the official 2026-11-17 nightly in a normally
+generated seed-1 world. The text and brass rule come from the original panels. Credit line for
+the README: *Create's textures and models © the Create Team.*
 
-The scene: a factory hall on the coast (two belts at different levels crossing, two mechanical
-arms sorting onto depots, presses on a line shaft, mixers over basins on lit blaze burners,
-meshing cogwheels and large cogwheels, gearboxes, brass-encased shafts, pipes and single-column
-fluid tanks, a display board and nixie tubes). Behind it, an older mill with a large water wheel
-in a stream and an eight-bladed windmill on a tall tower. In front, a stone viaduct over the sea
-where a copper-and-brass locomotive on large bogeys pulls a coach and a cargo wagon (barrels,
-item vaults) between three stations.
+The scene is built into a sandy, wooded coast. The timber hall has two carrying belts, two
+mechanical arms transferring items from a belt to depots, a single shaft driving three presses,
+and three mixers making andesite alloy over kindled blaze burners. Copper pipes and single-column
+tanks, meshing cogs, nixie tubes, and a powered flap display fill out the floor. The mill has
+an eight-bladed windmill and a large water wheel driven by a water race. A copper-and-brass
+locomotive hauls a glazed coach and a barrel-and-vault wagon. The three cars ride on six
+large bogeys along a stone viaduct linking Foundry and Coast, with a third station at Mill.
 
 ## Files
 
 | File | Size | Shows | Goes |
 |---|---|---|---|
 | `banner.webp` | 1600x600 | The train on the viaduct into the sunset, the factory hall and windmill; title "Create / for Sunrise & Horizon" | Top of the README, `width="100%"` |
-| `readme/panel-machines.webp` | 1200x760 | The factory hall: belts, arms, presses, mixers on blaze burners, nixie tubes, display board | Feature grid, row 1 left |
-| `readme/panel-trains.webp` | 1200x760 | The locomotive head-on, coming off the viaduct past the hall | Feature grid, row 1 right |
-| `readme/panel-kinetics.webp` | 1200x760 | The eight-bladed windmill against the sunset | Feature grid, row 2 left |
-| `readme/panel-world.webp` | 1200x760 | Aerial: the train on the viaduct, the hall, the windmill, the coast | Feature grid, row 2 right |
+| `readme/panel-machines.webp` | 1200x760, 4 s, 16 fps; 1,458,896 bytes | The rebuilt factory hall: carrying belts, arms transferring, presses, mixers on blaze burners and nixie tubes | Feature grid, row 1 left |
+| `readme/panel-trains.webp` | 1200x760, 4 s, 16 fps; 1,465,408 bytes | The copper locomotive, coach and cargo wagon on the coastal viaduct | Feature grid, row 1 right |
+| `readme/panel-kinetics.webp` | 1200x760, 4 s, 16 fps; 1,426,844 bytes | The eight-bladed windmill against the sunset | Feature grid, row 2 left |
+| `readme/panel-world.webp` | 1200x760, 4 s, 16 fps; 1,455,466 bytes | Aerial: the train on the viaduct, the rebuilt hall, the windmill and sea | Feature grid, row 2 right |
 | `readme/anim-factory.webp` | 960x540, 3.5 s | The hall at work: both belts carrying, arms swinging, mixers and presses turning | "In motion" section |
 | `readme/anim-windmill.webp` | 960x540, 3 s | The windmill turning (seamless loop) | "In motion" section |
 | `readme/anim-train-arrival.webp` | 960x540, 2.6 s | The train running in over the viaduct towards the camera | "In motion" section |
@@ -85,18 +85,40 @@ the gallery 2 per row, ending with `<sub>` lines naming the Sunrise build and th
   "for Sunrise & Horizon", a tracked condensed kicker and a short brass rule.
 - Palette from Create's materials: andesite greys (#1E1F22 band), brass (#E2AC52, rule #966828),
   cream type (#F6EEDE), muted grey for subtitles. No transparency, so no light/dark variants.
-- Panels: all 1200x760 (~1.58:1) with one 150 px andesite caption band and a brass rule, one
-  headline and one short line, so they pair in 2-up rows and scale down cleanly.
+- Panels: 1200x760 animated WebP. A 1200x610 in-game crop sits over the original
+  150 px caption band with its brass rule, headline and subtitle. The first frame holds the
+  complete composition for still previews. The train uses a tighter crop around the
+  locomotive and hall. Later frames update only the game scene.
+- Capture: Sunrise nightly `2d81263`, instance `create-nightly-c` on display `:93`. The camera
+  uses the normal 70° FOV with gamma at 1 and 12-chunk render distance. Daylight and weather
+  progression were disabled with the 26.3 gamerules before setting the time to 12200 with clear weather. The west-facing
+  angles show the sunset. The machines and rotor close-up were captured at 8 ticks/s, the
+  train approach at 1.5 ticks/s, and the aerial at 2 ticks/s.
+- Camera: cosine-eased translations aimed at fixed subjects. Machines drift 1.05 blocks east,
+  0.12 up, and 0.42 south along the open shopfront. The train camera pulls back 1.32 blocks east,
+  0.12 up, and 0.25 north. The windmill shot moves 1.12 blocks east, 0.25 up, and 0.68 north.
+  The aerial rises 0.45 blocks while moving 1.10 east and 0.85 north. A two-degree yaw pan was
+  also tried for each panel. The selected dollies show more depth between the moving subjects
+  and their backgrounds.
+- Loops: 33 captured frames forward, followed by 31 in reverse. Alternating 62/63 ms holds
+  yield four seconds at 16 fps. The camera and machine motion retrace their path, including
+  the train approach. The moving images are filtered through 640x325 for the factory and
+  800x407 for the other panels before resizing to 1200x610. The first image keeps a sharper
+  full-size crop. The caption is pixel-identical across the loop and to the original still.
+  Each file stays under 1.5 MB.
+- Rebuild and capture scripts, raw frames and review sheets are retained under
+  `/mnt/lanes/agent-media/`. See `scene/rebuild.sh`, `capture-coast.py`, `encode-coast.py`,
+  `camera-notes-coast.md` and `review/compare-*.png`. The compositions use the rendered game
+  frames and caption bands.
 - Gallery and animations: 16:9 with no text. Animations are 960x540 at about 16 fps and at most
   1.35 MB each. They were captured with the game's tick rate slowed (`/tick rate 8`; windmill
   `4`), because screenshots arrive at about 6 per second. The windmill clip loops on a full
   symmetry period.
-- Golden hour is `/time set 12000`–`12200` with gamma at max, so the machines stay readable
-  against the sky.
 
 ## Limits
 
-- Captures are 1910x1027, the offscreen window's real size: `--width/--height 2560x1440` were
+- New animated panel captures are 1280x720, cropped and resized to the scene portion.
+  Original captures are 1910x1027, the offscreen window's real size: `--width/--height 2560x1440` were
   ignored and the game has no render scale. Enough for the 1600-wide banner, not true 2x.
 - Rendering bug: a fluid tank with a 2x2 footprint draws only its top layer; the bottom layer is
   invisible although its block states are right (`bottom=true,shape=window_nw`...).
@@ -105,3 +127,10 @@ the gallery 2 per row, ending with `<sub>` lines naming the Sunrise build and th
 - Not investigated: an andesite funnel set with `/setblock` past a belt's end, on a barrel
   (`facing=west,extracting=false`), did not take items; the shots end belts on depots or let
   arms take from them.
+
+- A campfire stayed at the locomotive's assembly point during a moving trial. Create's Java
+  registers `CampfireMovementBehaviour` to emit smoke at the moving campfire's position.
+  The capture locomotive uses a blackstone stack.
+- Arm setup used targeted block interactions to select the belt and depot before placing
+  each arm. The selection summaries showed one input and one output, and both depots
+  received items. Create's Java uses the same point-selection and placement sequence.
