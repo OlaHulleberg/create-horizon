@@ -1,11 +1,8 @@
 //! The cardboard sword: it bonks instead of hurting (`CardboardSwordItem`), knocking the target
 //! back as a blow would, slowing creatures it hits (`MobCategory.CREATURE`/`MISC`, players not)
 //! and the attacker, as hard as the attacker's `ATTACK_KNOCKBACK` + 2, the sword's Knockback
-//! level and a sprint make it, less the target's knockback resistance. Left out: stopping the
-//! attacker's sprint (no API sets it; `API_GAPS.md`). Its click on a block
-//! (`cardboardSwordsMakeNoiseOnClick`: the clicking client plays it, the server plays it to the
-//! others) is played here from the server to every player near it, the clicker included: the
-//! API has no sound at a position that leaves one player out (API_GAPS.md).
+//! level and a sprint make it, less the target’s knockback resistance.
+//! `CardboardSwordItem` also stops the attacker’s sprint after a positive-strength blow.
 
 use super::{Item, held, is};
 use mod_api::{
@@ -143,6 +140,7 @@ fn knock_back(host: &mut dyn ServerHost, player: mod_api::PlayerRef, target: mod
         if let Some(v) = attacker.velocity(&*host) {
             attacker.set_velocity(host, [v[0] * 0.6, v[1], v[2] * 0.6]);
         }
+        attacker.set_sprinting(host, false);
         return;
     }
     let (x, z) = (f64::from(yaw.sin()), f64::from(-yaw.cos()));
@@ -160,4 +158,5 @@ fn knock_back(host: &mut dyn ServerHost, player: mod_api::PlayerRef, target: mod
     if let Some(v) = attacker.velocity(&*host) {
         attacker.set_velocity(host, [v[0] * 0.6, v[1], v[2] * 0.6]);
     }
+    attacker.set_sprinting(host, false);
 }
