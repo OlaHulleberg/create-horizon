@@ -1,0 +1,132 @@
+
+import java.util.*;
+public class FanEntityOracle {
+ static final class Vec3 {
+  double x,y,z;Vec3(double a,double b,double c){x=a;y=b;z=c;}
+  static final Vec3 ZERO=new Vec3(0,0,0);
+  Vec3 add(Vec3 v){return new Vec3(x+v.x,y+v.y,z+v.z);}
+  Vec3 add(double a,double b,double c){return new Vec3(x+a,y+b,z+c);}
+  Vec3 scale(double s){return new Vec3(x*s,y*s,z*s);}
+  Vec3 multiply(double a,double b,double c){return new Vec3(x*a,y*b,z*c);}
+  Vec3 normalize(){return scale(1/Math.sqrt(x*x+y*y+z*z));}
+  double distanceTo(Vec3 b){return Math.sqrt(Math.pow(x-b.x,2)+Math.pow(y-b.y,2)+Math.pow(z-b.z,2));}
+ }
+ static final class Vec3i {
+  int x,y,z;Vec3i(int a,int b,int c){x=a;y=b;z=c;}
+  int getX(){return x;}int getY(){return y;}int getZ(){return z;}
+ }
+ static final class Direction {
+  Vec3i normal;Direction(int a,int b,int c){normal=new Vec3i(a,b,c);}
+  Vec3i getNormal(){return normal;}
+  Direction getOpposite(){return new Direction(-normal.x,-normal.y,-normal.z);}
+ }
+ static final class VecHelper {
+  static Vec3 offsetRandomly(Vec3 p,Random r,double range){return p;}
+  static Vec3 getCenterOf(Vec3 p){return p;}
+  static double alignedDistanceToFace(Vec3 p,Vec3 origin,Direction d){return 0;}
+ }
+ static final class Mth {
+  static double clamp(double v,double min,double max){return Math.max(min,Math.min(max,v));}
+  static float clamp(float v,float min,float max){return Math.max(min,Math.min(max,v));}
+ }
+ static final class Bounds {boolean intersects(Bounds b){return true;}}
+ static class CompoundTag {
+  Map<String,Integer> ints=new HashMap<>();
+  int getInt(String k){return ints.getOrDefault(k,0);}void putInt(String k,int v){ints.put(k,v);}
+  void remove(String k){}
+ }
+ static class Entity {
+  boolean immune,onFire,cleared,alive=true,sneak,creative,flying,discarded;
+  int ignite,above=9;float damage;String damageId="-";
+  Vec3 pos=new Vec3(1,0,0),velocity=Vec3.ZERO;float fallDistance=7;
+  Object type=new Object();CompoundTag nbt=new CompoundTag();
+  Map<String,MobEffectInstance> effects=new HashMap<>();
+  boolean fireImmune(){return immune;}void igniteForSeconds(int seconds){ignite=seconds*20;}
+  void hurt(String id,float amount){damageId=id;damage=amount;}
+  boolean isOnFire(){return onFire&&!immune;}void clearFire(){cleared=true;onFire=false;}
+  Object getType(){return type;}Vec3 blockPosition(){return pos;}
+  Vec3 getPosition(int a){return pos;}Vec3 position(){return pos;}
+  boolean isAlive(){return alive;}Bounds getBoundingBox(){return new Bounds();}
+  boolean isShiftKeyDown(){return sneak;}Vec3 getDeltaMovement(){return velocity;}
+  void setDeltaMovement(Vec3 v){velocity=v;}
+  void discard(){discarded=true;}Object registryAccess(){return null;} DamageSources damageSources(){return new DamageSources();}
+ }
+ static class LivingEntity extends Entity {void addEffect(MobEffectInstance effect){effects.put(effect.id,effect);}}
+ static class Horse extends LivingEntity {
+  CompoundTag getPersistentData(){return nbt;}
+  ItemStack getBodyArmorItem(){return new ItemStack();}void spawnAtLocation(ItemStack item){}
+  CompoundTag saveWithoutId(CompoundTag tag){return tag;}
+ }
+ static class EnderMan extends LivingEntity {}
+ static class SkeletonHorse extends LivingEntity {void deserializeNBT(Object r,CompoundTag t){}void setPos(Vec3 p){pos=p;}}
+ static class ItemStack {boolean isEmpty(){return true;}}
+ static class ItemEntity extends Entity {}
+ static class ServerPlayer extends Entity {Connection connection=new Connection();}
+ static class Connection {int aboveGroundTickCount=9;}
+ static class MobEffectInstance {
+  String id;int ticks,amp;boolean ambient,particles;
+  MobEffectInstance(String i,int t,int a,boolean b,boolean p){id=i;ticks=t;amp=a;ambient=b;particles=p;}
+ }
+ static class MobEffects {static final String BLINDNESS="blindness",MOVEMENT_SLOWDOWN="slowness";}
+ static class EntityType {
+  static final Object SNOW_GOLEM=new Object(),BLAZE=new Object();
+  static final EntityType SKELETON_HORSE=new EntityType();
+  SkeletonHorse create(Level level){return new SkeletonHorse();}
+ }
+ static class CreateDamageSources {static String fanFire(Level l){return "create:fan_fire";}static String fanLava(Level l){return "create:fan_lava";}}
+ static class DamageSources {String drown(){return "minecraft:drown";}}
+ static class Level {
+  boolean isClientSide,converted;Random random=new Random(1);float soulPitch=-1;
+  DamageSources damageSources(){return new DamageSources();}
+  void addFreshEntity(Entity entity){converted=true;}
+  void playSound(Object who,Vec3 at,String sound,Object source,float volume,float pitch){if(sound.equals("soul"))soulPitch=pitch;}
+  void addParticle(Object kind,double x,double y,double z,double vx,double vy,double vz){}
+ }
+ static class SoundHolder {String value(){return "soul";}}
+ static class SoundEvents {static final SoundHolder SOUL_ESCAPE=new SoundHolder();static final String GENERIC_EXTINGUISH_FIRE="extinguish";}
+ static class SoundSource {static final Object NEUTRAL=new Object();}
+ static class ParticleTypes {static final Object SOUL_FIRE_FLAME=new Object(),LARGE_SMOKE=new Object();}
+ static class BlastingType {void affectEntity(Entity entity,Level level) @@BLAST@@}
+ static class HauntingType {void affectEntity(Entity entity,Level level) @@HAUNT@@}
+ static class SmokingType {void affectEntity(Entity entity,Level level) @@SMOKE@@}
+ static class SplashingType {void affectEntity(Entity entity,Level level) @@SPLASH@@}
+ static class FanProcessingType {void spawnProcessingParticles(Level l,Vec3 p){}void affectEntity(Entity e,Level l){}}
+ static class FanProcessing {static boolean canProcess(ItemEntity e,FanProcessingType t){return false;}static boolean applyProcessing(ItemEntity e,FanProcessingType t){return false;}}
+ static class AllAdvancements {static final int FAN_PROCESSING=1;}
+ static class Source {float rpm;Vec3 getAirCurrentPos(){return Vec3.ZERO;}float getSpeed(){return rpm;}}
+ static class EncasedFanBlockEntity extends Source {void award(int a){}}
+ static class CatnipServices {static final Platform PLATFORM=new Platform();}
+ static class Platform {Env getEnv(){return new Env();}}
+ static class Env {boolean isClient(){return false;}}
+ static class AirCurrent {
+  List<Entity> caughtEntities=new ArrayList<>();Bounds bounds=new Bounds();
+  Direction direction;boolean pushing=true;float maxDistance;Source source=new Source();
+  FanProcessingType getTypeAt(float offset){return null;}
+  static boolean isPlayerCreativeFlying(Entity e){return e.creative&&e.flying;}
+  static class Client {static void enableClientPlayerSound(Entity e,float volume){}}
+  void tickAffectedEntities(Level world) @@MOTION@@
+ }
+ static String status(Entity e,String id){var s=e.effects.get(id);return s==null?"0 0 false false":s.ticks+" "+s.amp+" "+s.ambient+" "+s.particles;}
+ public static void main(String[] args) {
+  var scanner=new Scanner(System.in);
+  while(scanner.hasNextLine()){
+   var a=scanner.nextLine().split(" ");
+   if(a[0].equals("E")){
+    int kind=Integer.parseInt(a[1]),category=Integer.parseInt(a[2]),progress=Integer.parseInt(a[5]);
+    Entity e=switch(category){case 1->new LivingEntity();case 2->new Horse();case 3->new EnderMan();default->new Entity();};
+    if(category==4){e=new LivingEntity();e.type=EntityType.SNOW_GOLEM;}
+    if(category==5){e=new LivingEntity();e.type=EntityType.BLAZE;}
+    e.immune=a[3].equals("1");e.onFire=a[4].equals("1");e.nbt.putInt("CreateHaunting",progress);var l=new Level();
+    switch(kind){case 0->new BlastingType().affectEntity(e,l);case 1->new HauntingType().affectEntity(e,l);case 2->new SmokingType().affectEntity(e,l);case 3->new SplashingType().affectEntity(e,l);}
+    System.out.println(e.ignite+" "+e.damageId+" "+e.damage+" "+status(e,"blindness")+" "+status(e,"slowness")+" "+e.cleared+" "+e.nbt.getInt("CreateHaunting")+" "+l.soulPitch+" "+l.converted);
+   }else{
+    var c=new AirCurrent();var e=new ServerPlayer();c.source.rpm=Float.parseFloat(a[1]);c.maxDistance=Float.parseFloat(a[2]);
+    int axis=Integer.parseInt(a[3]),sign=Integer.parseInt(a[4]);int[] d=new int[3];d[axis]=sign;c.direction=new Direction(d[0],d[1],d[2]);
+    e.sneak=a[5].equals("1");e.creative=a[6].equals("1");e.flying=a[7].equals("1");e.alive=a[9].equals("1");
+    e.pos=new Vec3(Double.parseDouble(a[10]),Double.parseDouble(a[11]),Double.parseDouble(a[12]));e.velocity=new Vec3(Double.parseDouble(a[13]),Double.parseDouble(a[14]),Double.parseDouble(a[15]));
+    if(!a[8].equals("1"))c.caughtEntities.add(e);c.tickAffectedEntities(new Level());
+    System.out.println(!c.caughtEntities.isEmpty()+" "+e.velocity.x+" "+e.velocity.y+" "+e.velocity.z+" "+e.fallDistance+" "+e.connection.aboveGroundTickCount);
+   }
+  }
+ }
+}

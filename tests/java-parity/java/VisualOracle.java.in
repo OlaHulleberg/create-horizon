@@ -1,0 +1,44 @@
+// Development-only fixture. Method bodies are exported unchanged from pinned Create.
+import java.io.*;
+import java.util.*;
+public class VisualOracle {
+ enum Axis {X,Y,Z}
+ record Vec3i(int x,int y,int z) {int getX(){return x;}int getY(){return y;}int getZ(){return z;}}
+ record BlockState(boolean large) {}
+ static class ICogWheel {static boolean isLargeCog(BlockState state){return state.large;}}
+ static boolean shouldOffset(Axis axis,Vec3i pos) @@OFFSET_TEST@@
+ static float rotationOffset(BlockState state,Axis axis,Vec3i pos) @@OFFSET@@
+ static class Setting {float v;Setting(float v){this.v=v;}Float get(){return v;}}
+ static class Config {Setting mediumSpeed=new Setting(30),fastSpeed=new Setting(100),maxRotationSpeed=new Setting(256);Config kinetics=this;}
+ static class AllConfigs {static Config server(){return new Config();}}
+ static class Mth {static float lerp(float t,float a,float b){return a+t*(b-a);}static int clamp(int n,int min,int max){return Math.min(max,Math.max(min,n));}}
+ static float getDialTarget(float speed) @@SPEED@@
+ static class Base {void tick(){} }
+ static class Level {boolean isClientSide=true;}
+ static class KineticBlockEntity {float speed;float getSpeed(){return speed;}Object getLevel(){return null;}static float convertToAngular(float speed) @@ANGULAR@@ }
+ record BlockPos() {}
+ static float offset;
+ static class AnimationTickHolder {static float time;static float getRenderTime(Object level){return time;}}
+ static float getRotationOffsetForPosition(KineticBlockEntity be,BlockPos pos,Axis axis){return offset;}
+ static float getAngleForBe(KineticBlockEntity be,BlockPos pos,Axis axis) @@ANGLE@@
+ static class Crank extends Base {
+  float independentAngle,chasingAngularVelocity,speed;int inUse;Object sequenceContext;Level level=new Level();
+  float getSpeed(){return speed;}void updateGeneratedRotation(){}
+  public void tick() @@CRANK@@
+  float getIndependentAngle(float partialTicks) @@CRANK_ANGLE@@
+ }
+ static class Wheel {int flowScore,size;int getSize(){return size;}float getGeneratedSpeed() @@WHEEL@@ }
+ public static void main(String[] args)throws Exception{
+  var in=new BufferedReader(new InputStreamReader(System.in));String line;var out=new StringBuilder();
+  while((line=in.readLine())!=null){var p=line.split(" ");float result=0;
+   switch(p[0]){
+    case "O" -> result=rotationOffset(new BlockState(p[5].equals("1")),Axis.values()[Integer.parseInt(p[1])],new Vec3i(Integer.parseInt(p[2]),Integer.parseInt(p[3]),Integer.parseInt(p[4])));
+    case "S" -> result=getDialTarget(Float.parseFloat(p[1]));
+    case "A" -> {AnimationTickHolder.time=Float.parseFloat(p[1]);var be=new KineticBlockEntity();be.speed=Float.parseFloat(p[2]);offset=Float.parseFloat(p[3]);result=getAngleForBe(be,new BlockPos(),Axis.X);}
+    case "C" -> {var c=new Crank();for(int t=0;t<200;t++){c.speed=t<50?Float.parseFloat(p[1]):t<100?-Float.parseFloat(p[1]):0;c.tick();}result=c.getIndependentAngle(Float.parseFloat(p[2]));}
+    case "W" -> {var w=new Wheel();w.flowScore=Integer.parseInt(p[1]);w.size=Integer.parseInt(p[2]);result=w.getGeneratedSpeed();}
+   }
+   out.append(result).append('\n');
+  }System.out.print(out);
+ }
+}

@@ -1,0 +1,53 @@
+// Test context only. @@ methods come unchanged from the pinned Java AST.
+import java.io.*;
+import java.util.*;
+public class FanMediaOracle {
+ record Property<T>(String name) {}
+ static class BlazeBurnerBlock {
+  enum HeatLevel {NONE,SMOULDERING,FADING,KINDLED,SEETHING;
+   boolean isAtLeast(HeatLevel value){return ordinal()>=value.ordinal();}}
+  static final Property<HeatLevel> HEAT_LEVEL=new Property<>("blaze");
+ }
+ static class LitBlazeBurnerBlock {
+  enum FlameType {REGULAR,SOUL}
+  static final Property<FlameType> FLAME_TYPE=new Property<>("flame_type");
+ }
+ static class CampfireBlock {static final Property<Boolean> LIT=new Property<>("lit");}
+ static class BlockTags {static final int CAMPFIRES=16;}
+ static class BlockPos {}
+ record Tag(int index,boolean fluid){
+  boolean matches(FluidState state){return fluid && (state.mask & (1<<index))!=0;}
+  boolean matches(BlockState state){return !fluid && (state.mask & (1<<index))!=0;}
+ }
+ static class AllFluidTags {
+  static final Tag FAN_PROCESSING_CATALYSTS_BLASTING=new Tag(0,true),FAN_PROCESSING_CATALYSTS_HAUNTING=new Tag(1,true),FAN_PROCESSING_CATALYSTS_SMOKING=new Tag(2,true),FAN_PROCESSING_CATALYSTS_SPLASHING=new Tag(3,true);
+ }
+ static class AllBlockTags {
+  static final Tag FAN_PROCESSING_CATALYSTS_BLASTING=new Tag(0,false),FAN_PROCESSING_CATALYSTS_HAUNTING=new Tag(1,false),FAN_PROCESSING_CATALYSTS_SMOKING=new Tag(2,false),FAN_PROCESSING_CATALYSTS_SPLASHING=new Tag(3,false);
+ }
+ record FluidState(int mask){}
+ static class BlockState {
+  int mask;boolean campfire;Map<String,Object> props=new HashMap<>();
+  boolean is(int tag){return campfire;}
+  boolean hasProperty(Property<?> property){return props.containsKey(property.name());}
+  @SuppressWarnings("unchecked") <T>T getValue(Property<T> property){return (T)props.get(property.name());}
+ }
+ record Level(FluidState fluid,BlockState block){FluidState getFluidState(BlockPos p){return fluid;}BlockState getBlockState(BlockPos p){return block;}}
+ interface Test {boolean isValidAt(Level level,BlockPos pos);}
+ static class BlastingType implements Test{public boolean isValidAt(Level level,BlockPos pos) @@BlastingType@@}
+ static class HauntingType implements Test{public boolean isValidAt(Level level,BlockPos pos) @@HauntingType@@}
+ static class SmokingType implements Test{public boolean isValidAt(Level level,BlockPos pos) @@SmokingType@@}
+ static class SplashingType implements Test{public boolean isValidAt(Level level,BlockPos pos) @@SplashingType@@}
+ public static void main(String[]args)throws Exception {
+  var tests=List.of(new BlastingType(),new HauntingType(),new SmokingType(),new SplashingType());
+  try(var in=new BufferedReader(new InputStreamReader(System.in))) {for(String line;(line=in.readLine())!=null;){
+   var v=Arrays.stream(line.split(" ")).mapToInt(Integer::parseInt).toArray();
+   var block=new BlockState();block.mask=v[1];block.campfire=v[2]!=0;
+   if(v[3]<2)block.props.put("lit",v[3]!=0);if(v[4]<2)block.props.put("flame_type",LitBlazeBurnerBlock.FlameType.values()[v[4]]);if(v[5]<5)block.props.put("blaze",BlazeBurnerBlock.HeatLevel.values()[v[5]]);
+   var level=new Level(new FluidState(v[0]),block);int mask=0;for(int i=0;i<4;i++)if(tests.get(i).isValidAt(level,new BlockPos()))mask|=1<<i;
+   // Source priorities: Splashing400,Haunting300,Smoking200,Blasting100.
+   int selected=-1;for(int i:new int[]{3,1,2,0})if((mask&(1<<i))!=0){selected=i;break;}
+   System.out.println(mask+" "+selected);
+  }}
+ }
+}

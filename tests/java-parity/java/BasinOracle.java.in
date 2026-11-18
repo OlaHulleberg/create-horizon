@@ -1,0 +1,98 @@
+// SPDX-License-Identifier: MIT
+// Fixture contexts ported from Delete228/create-horizon; no original method bodies embedded.
+import java.util.*;import java.util.function.*;
+public class BasinOracle {
+ enum HeatLevel{NONE,SMOULDERING,FADING,KINDLED,SEETHING}
+ enum HeatCondition{NONE,HEATED,SUPERHEATED;boolean testBlazeBurner(HeatLevel level) @@HEAT@@}
+ static class ItemStack {
+  static final ItemStack EMPTY=new ItemStack(-1,0,64);int key,count,max;
+  ItemStack(int k,int c,int m){key=k;count=c;max=m;}boolean isEmpty(){return count==0;}int getCount(){return count;}void setCount(int n){count=n;}
+  int getMaxStackSize(){return max;}ItemStack copy(){return new ItemStack(key,count,max);}
+  static boolean isSameItemSameComponents(ItemStack a,ItemStack b){return !a.isEmpty()&&!b.isEmpty()&&a.key==b.key;}
+ }
+ interface IItemHandler{int getSlots();ItemStack getStackInSlot(int s);ItemStack insertItem(int s,ItemStack a,boolean sim);ItemStack extractItem(int s,int n,boolean sim);}
+ static class SmartInventory implements IItemHandler {
+  ItemStack[] slots=new ItemStack[9];SmartInventory(){Arrays.fill(slots,ItemStack.EMPTY);}int consumed;
+  public int getSlots(){return 9;}public ItemStack getStackInSlot(int s){return slots[s];}
+  public ItemStack insertItem(int s,ItemStack a,boolean sim){if(a.isEmpty())return a;var old=slots[s];if(!old.isEmpty()&&old.key!=a.key)return a;int n=Math.min(a.count,Math.max(0,Math.min(64,a.max)-old.count));if(!sim&&n>0)slots[s]=new ItemStack(a.key,old.count+n,a.max);return new ItemStack(a.key,a.count-n,a.max);}
+  public ItemStack extractItem(int s,int n,boolean sim){var a=slots[s];int take=Math.min(n,a.count);if(take==0)return ItemStack.EMPTY;var out=new ItemStack(a.key,take,a.max);if(!sim){consumed+=take;slots[s]=new ItemStack(a.key,a.count-take,a.max);}return out;}
+ }
+ static class BasinInventory extends SmartInventory {boolean packagerMode;IItemHandler inv=new IItemHandler(){public int getSlots(){return 9;}public ItemStack getStackInSlot(int s){return slots[s];}public ItemStack insertItem(int s,ItemStack a,boolean sim){return BasinInventory.super.insertItem(s,a,sim);}public ItemStack extractItem(int s,int n,boolean sim){return BasinInventory.super.extractItem(s,n,sim);}};
+  public ItemStack insertItem(int slot,ItemStack stack,boolean simulate) @@INSERT@@
+  void allowInsertion(){}void forbidInsertion(){}
+ }
+ static class CombinedItems implements IItemHandler{BasinInventory a,b;CombinedItems(BasinInventory a,BasinInventory b){this.a=a;this.b=b;}public int getSlots(){return 18;}IItemHandler at(int s){return s<9?a:b;}public ItemStack getStackInSlot(int s){return at(s).getStackInSlot(s%9);}public ItemStack insertItem(int s,ItemStack a,boolean sim){return at(s).insertItem(s%9,a,sim);}public ItemStack extractItem(int s,int n,boolean sim){return at(s).extractItem(s%9,n,sim);}}
+ static class ItemHandlerHelper {
+  static ItemStack insertItemStacked(IItemHandler h,ItemStack a,boolean sim){if(a.isEmpty())return a;if(a.max>1)for(int i=0;i<h.getSlots();i++)if(ItemStack.isSameItemSameComponents(h.getStackInSlot(i),a)){a=h.insertItem(i,a,sim);if(a.isEmpty())return a;}for(int i=0;i<h.getSlots();i++)if(h.getStackInSlot(i).isEmpty()){a=h.insertItem(i,a,sim);if(a.isEmpty())return a;}return a;}
+ }
+ static class FluidStack{int key,amount;static final FluidStack EMPTY=new FluidStack(-1,0);FluidStack(int k,int n){key=k;amount=n;}int getAmount(){return amount;}boolean isEmpty(){return amount==0;}void shrink(int n){amount-=n;}FluidStack copy(){return new FluidStack(key,amount);}static boolean isSameFluidSameComponents(FluidStack a,FluidStack b){return !a.isEmpty()&&!b.isEmpty()&&a.key==b.key;}}
+ enum FluidAction{SIMULATE,EXECUTE}
+ interface IFluidHandler{int getTanks();FluidStack getFluidInTank(int s);int fill(FluidStack f,FluidAction action);}
+ static class OneTank implements IFluidHandler{FluidStack stack=FluidStack.EMPTY;public int getTanks(){return 1;}public FluidStack getFluidInTank(int i){return stack;}public int fill(FluidStack f,FluidAction action){if(!stack.isEmpty()&&!FluidStack.isSameFluidSameComponents(stack,f))return 0;int n=Math.min(f.amount,Math.max(0,1000-stack.amount));if(action==FluidAction.EXECUTE&&n>0)stack=new FluidStack(f.key,stack.amount+n);return n;}}
+ static class CombinedTank implements IFluidHandler{IFluidHandler[] itemHandler;boolean enforceVariety=true;CombinedTank(IFluidHandler...h){itemHandler=h;}public int getTanks(){return Arrays.stream(itemHandler).mapToInt(IFluidHandler::getTanks).sum();}public FluidStack getFluidInTank(int i){for(var h:itemHandler){if(i<h.getTanks())return h.getFluidInTank(i);i-=h.getTanks();}return FluidStack.EMPTY;}
+  public int fill(FluidStack resource,FluidAction action) @@FILL@@
+ }
+ static class SmartFluidTankBehaviour{static final int INPUT=0,OUTPUT=1;List<TankSegment> segments;SmartFluidTankBehaviour(BasinBlockEntity b){segments=List.of(new TankSegment(b),new TankSegment(b));}void forEach(Consumer<TankSegment> c){segments.forEach(c);}boolean isEmpty(){return true;}static class InternalFluidHandler extends CombinedTank{InternalFluidHandler(IFluidHandler...h){super(h);}int forceFill(FluidStack f,FluidAction a){return fill(f,a);}void allowInsertion(){}void forbidInsertion(){}IFluidHandler getCapability(){return this;}}}
+ static class TankSegment{BasinBlockEntity b;TankSegment(BasinBlockEntity b){this.b=b;}void onFluidStackChanged(){b.notifications++;}}
+ static class Ingredient{int mask;Ingredient(int m){mask=m;}boolean test(ItemStack s){return !s.isEmpty()&&(mask&(1<<s.key))!=0;}}
+ static class SizedFluidIngredient{int key,n;SizedFluidIngredient(int k,int a){key=k;n=a;}int amount(){return n;}boolean test(FluidStack f){return !f.isEmpty()&&f.key==key&&f.amount>=n;}}
+ static class RandomSource{int cursor;float nextFloat(){return new float[]{0,.25f,.5f,.75f}[cursor++%4];}}
+ static class ProcessingOutput{ItemStack stack;float chance;int count;ProcessingOutput(ItemStack s,float c){stack=s;count=s.count;chance=c;}ItemStack getStack(){return stack.copy();}ItemStack getStack(int n){var a=stack.copy();a.count=n;return a;}ItemStack rollOutput(RandomSource randomSource) @@ROLL@@}
+ static class CraftingInput{List<ItemStack> items;CraftingInput(List<ItemStack> i){items=i;}CraftingInput(int width,int height,List<ItemStack> i){items=i;}}
+ static class NonNullList<T> extends ArrayList<T>{static <T>NonNullList<T> create(){return new NonNullList<T>();}}
+ interface Recipe<T>{List<Ingredient>getIngredients();ItemStack getResultItem(Object registry);}
+ static class CraftingRecipe implements Recipe<Object>{List<Ingredient> ingredients=new ArrayList<>();List<ProcessingOutput> outputs=new ArrayList<>();public List<Ingredient>getIngredients(){return ingredients;}public ItemStack getResultItem(Object r){return outputs.isEmpty()?ItemStack.EMPTY:outputs.getFirst().getStack();}List<ItemStack> getRemainingItems(CraftingInput input){var out=new ArrayList<ItemStack>();for(var a:input.items)if(a.key==9)out.add(new ItemStack(10,1,64));return out;}}
+ static class BasinRecipe extends CraftingRecipe{List<SizedFluidIngredient> fluidIngredients=new ArrayList<>();List<FluidStack>fluidOutputs=new ArrayList<>();HeatCondition heat;HeatCondition getRequiredHeat(){return heat;}List<SizedFluidIngredient>getFluidIngredients(){return fluidIngredients;}List<FluidStack>getFluidResults(){return fluidOutputs;}List<ItemStack>rollResults(RandomSource r){var a=new ArrayList<ItemStack>();for(var o:outputs){var s=o.rollOutput(r);if(!s.isEmpty())a.add(s);}return a;}
+  static CraftingInput getCraftingInput(IItemHandler itemHandler,int[] extractedItemsFromSlot) @@DUMMY@@
+  static boolean apply(BasinBlockEntity basin,Recipe<?> recipe,boolean test) @@APPLY@@
+ }
+ static class Capability<T>{int kind;Capability(int k){kind=k;}}
+ static class Capabilities{static class ItemHandler{static final Capability<IItemHandler> BLOCK=new Capability<>(0);}static class FluidHandler{static final Capability<IFluidHandler> BLOCK=new Capability<>(1);}}
+ enum Direction{DOWN,EAST;Direction getOpposite(){return this;}}
+ static class BasinBlock{static final Object FACING=new Object();}
+ static class BlockState{int mode;boolean valid;BlockState(int m,boolean v){mode=m;valid=v;}Object getBlock(){return valid?new BasinBlock():new Object();}Direction getValue(Object p){return mode==0?Direction.DOWN:Direction.EAST;}}
+ record Pos(int x,int y,int z){Pos below(){return new Pos(x,y-1,z);}Pos relative(Direction d){return new Pos(x+1,y,z);}}
+ static class BlockEntity{Pos getBlockPos(){return new Pos(1,0,0);}}
+ static class InvManipulationBehaviour{static final int TYPE=1;IItemHandler getInventory(){return null;}}
+ static class BlockEntityBehaviour{static InvManipulationBehaviour get(Level l,Pos p,int type){return null;}}
+ static class Iterate{static final boolean[]trueAndFalse={true,false};}
+ static class Level{BasinBlockEntity b;RandomSource random=new RandomSource();Level(BasinBlockEntity b){this.b=b;}Object registryAccess(){return null;}@SuppressWarnings("unchecked")<T>T getCapability(Capability<T> type,Pos p,Object face){if(p.x==0)return (T)(type.kind==0?(b.itemsPresent?b.combined:null):(b.fluidsPresent?b.combinedFluids:null));return(T)(type.kind==0?(b.itemDest?new SmartInventory():null):(b.fluidDest?new OneTank():null));}BlockEntity getBlockEntity(Pos p){return b.itemDest||b.fluidDest?new BlockEntity():null;}}
+ static class BasinBlockEntity{
+  BasinInventory input=new BasinInventory(),outputInventory=new BasinInventory();CombinedItems combined=new CombinedItems(input,outputInventory);
+  OneTank[] tanks={new OneTank(),new OneTank(),new OneTank(),new OneTank()};SmartFluidTankBehaviour.InternalFluidHandler outputTank=new SmartFluidTankBehaviour.InternalFluidHandler(tanks[0],tanks[1]);CombinedTank combinedFluids=new CombinedTank(tanks[0],tanks[1],tanks[2],tanks[3]);
+  List<ItemStack>spoutputBuffer=new ArrayList<>();List<FluidStack>spoutputFluidBuffer=new ArrayList<>();boolean itemDest,fluidDest,valid=true,itemsPresent=true,fluidsPresent=true;int mode,notifications;Pos worldPosition=new Pos(0,0,0);Level level=new Level(this);HeatLevel heat;
+  Level getLevel(){return level;}Pos getBlockPos(){return worldPosition;}HeatLevel getHeatLevel(){return heat;}BlockState getBlockState(){return new BlockState(mode,valid);}Couple<SmartFluidTankBehaviour>getTanks(){return null;}SmartFluidTankBehaviour getBehaviour(int k){return new SmartFluidTankBehaviour(this);}
+  boolean acceptOutputs(List<ItemStack>outputItems,List<FluidStack>outputFluids,boolean simulate) @@ACCEPT@@
+  boolean acceptOutputsInner(List<ItemStack>outputItems,List<FluidStack>outputFluids,boolean simulate) @@ACCEPT_INNER@@
+  boolean acceptFluidOutputsIntoBasin(List<FluidStack>outputFluids,boolean simulate,IFluidHandler targetTank) @@ACCEPT_FLUID@@
+  boolean acceptItemOutputsIntoBasin(List<ItemStack>outputItems,boolean simulate,IItemHandler targetInv) @@ACCEPT_ITEM@@
+ }
+ static class Mth{static int log2(int n){return n==0?-1:31-Integer.numberOfLeadingZeros(n);}static int ceil(float n){return (int)Math.ceil(n);}}
+ static class SoundEvents{static final int BUBBLE_COLUMN_WHIRLPOOL_AMBIENT=0;}static class SoundSource{static final int BLOCKS=0;}
+ static class Couple<T>{T getFirst(){return null;}T getSecond(){return null;}}
+ static class StandardProcessingRecipe<T>{int t;StandardProcessingRecipe(int t){this.t=t;}int getProcessingDuration(){return t;}}
+ static class MixerLevel{boolean isClientSide;void playSound(Object a,Object b,int c,int d,float e,float f){}}
+ static class Checker{Mixer owner;Checker(Mixer m){owner=m;}void scheduleUpdate(){owner.scheduled++;}}
+ static class BaseMixer{void tick(){}void startProcessingBasin(){}}
+ static class Mixer extends BaseMixer{boolean running;int runningTicks,processingTicks,applied,scheduled;float speed,minimum;boolean repeat;Object currentRecipe,worldPosition;MixerLevel level=new MixerLevel();Checker basinChecker=new Checker(this);float getSpeed(){return speed;}boolean isSpeedRequirementFulfilled(){return Math.abs(speed)>=minimum;}boolean isVirtual(){return false;}void renderParticles(){}Optional<BasinBlockEntity>getBasin(){return Optional.empty();}void applyBasinRecipe(){applied++;if(repeat)runningTicks=20;}void sendData(){}
+  public void tick() @@TICK@@
+  public void startProcessingBasin() @@START@@
+  void onBasinRemoved() @@REMOVE@@
+ }
+ static String item(ItemStack s){return s.isEmpty()?"-1:0:64":s.key+":"+s.count+":"+s.max;}static String fluid(FluidStack f){return f.isEmpty()?"-1:0":f.key+":"+f.amount;}
+ public static void main(String[]args){var in=new Scanner(System.in);var out=new StringBuilder();while(in.hasNext()){
+  String op=in.next();if(op.equals("A")){
+   var b=new BasinBlockEntity();boolean test=in.nextInt()!=0;boolean basin=in.nextInt()!=0;b.heat=HeatLevel.values()[in.nextInt()];int heat=in.nextInt();b.mode=in.nextInt();b.itemDest=in.nextInt()!=0;b.fluidDest=in.nextInt()!=0;b.itemsPresent=in.nextInt()!=0;b.fluidsPresent=in.nextInt()!=0;b.valid=in.nextInt()!=0;
+   CraftingRecipe r=basin?new BasinRecipe():new CraftingRecipe();if(basin)((BasinRecipe)r).heat=HeatCondition.values()[heat];int n=in.nextInt();for(int i=0;i<n;i++)r.ingredients.add(new Ingredient(in.nextInt()));
+   n=in.nextInt();for(int i=0;i<n;i++){int key=in.nextInt(),amount=in.nextInt();if(basin)((BasinRecipe)r).fluidIngredients.add(new SizedFluidIngredient(key,amount));}
+   n=in.nextInt();for(int i=0;i<n;i++)r.outputs.add(new ProcessingOutput(new ItemStack(in.nextInt(),in.nextInt(),in.nextInt()),in.nextFloat()));
+   n=in.nextInt();for(int i=0;i<n;i++){var f=new FluidStack(in.nextInt(),in.nextInt());if(basin)((BasinRecipe)r).fluidOutputs.add(f);}
+   for(int i=0;i<18;i++){var a=new ItemStack(in.nextInt(),in.nextInt(),in.nextInt());(i<9?b.input:b.outputInventory).slots[i%9]=a;}
+   for(int i=0;i<4;i++)b.tanks[i].stack=new FluidStack(in.nextInt(),in.nextInt());
+   boolean success=BasinRecipe.apply(b,r,test);out.append(success?1:0).append(' ').append(b.level.random.cursor).append(' ').append(b.notifications>0?1:0);
+   for(int i=0;i<18;i++)out.append(' ').append(item(b.combined.getStackInSlot(i)));for(var t:b.tanks)out.append(' ').append(fluid(t.stack));out.append(" I");for(var a:b.spoutputBuffer)out.append(' ').append(item(a));out.append(" F");for(var f:b.spoutputFluidBuffer)out.append(' ').append(fluid(f));out.append('\n');
+  }else{
+   var m=new Mixer();m.speed=in.nextFloat();m.minimum=in.nextFloat();m.currentRecipe=new StandardProcessingRecipe(in.nextInt());m.running=in.nextInt()!=0;m.runningTicks=in.nextInt();m.processingTicks=in.nextInt();int ticks=in.nextInt(),cut=in.nextInt();m.repeat=in.nextInt()!=0;int start=in.nextInt(),remove=in.nextInt();if(start!=0)m.startProcessingBasin();if(remove!=0)m.onBasinRemoved();for(int i=0;i<ticks;i++){if(i==cut)m.speed=0;m.tick();}out.append(m.running?1:0).append(' ').append(m.runningTicks).append(' ').append(m.processingTicks).append(' ').append(m.applied).append(' ').append(m.scheduled).append('\n');
+  }
+ }System.out.print(out);}
+}

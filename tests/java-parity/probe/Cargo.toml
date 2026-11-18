@@ -1,0 +1,12 @@
+[package]
+name = "create-java-parity-probe"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "Development-only observer of create-engine; not part of the mod build"
+
+[dependencies]
+create-engine = { path = "../../../create/src/engine" }
+
+[workspace]

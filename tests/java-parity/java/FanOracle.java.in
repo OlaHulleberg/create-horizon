@@ -1,0 +1,108 @@
+// Development-only fixture. Marked method bodies are exported unchanged from pinned Create.
+import java.io.*;
+import java.util.*;
+public class FanOracle {
+ enum AxisDirection {POSITIVE,NEGATIVE}
+ enum Direction {
+  DOWN(1),UP(0),NORTH(1),SOUTH(0),WEST(1),EAST(0);
+  final int negative;Direction(int n){negative=n;}
+  AxisDirection getAxisDirection(){return negative==0?AxisDirection.POSITIVE:AxisDirection.NEGATIVE;}
+  Direction getOpposite(){return values()[ordinal()^1];}
+ }
+ static class CKinetics {
+  Setting fanRotationArgmax=new Setting(256),fanPushDistance=new Setting(20),fanPullDistance=new Setting(20),fanProcessingTime=new Setting(150);
+ }
+ static class Setting {final int value;Setting(int value){this.value=value;}Integer get(){return value;}}
+ static class Config {CKinetics kinetics=new CKinetics();}
+ static class AllConfigs {static Config server(){return new Config();}}
+ static class Mth {static float lerp(float t,float a,float b){return a+t*(b-a);}static float clamp(float n,float a,float b){return Math.min(b,Math.max(a,n));}}
+ static class BlockStateProperties {static final int FACING=0;}
+ static class BlockState {Direction facing;Direction getValue(int property){return facing;}}
+ static class Fan {
+  float speed;BlockState state=new BlockState();float getSpeed(){return speed;}BlockState getBlockState(){return state;}
+  float getMaxDistance() @@RANGE@@
+  Direction getAirFlowDirection() @@DIRECTION@@
+ }
+ static float convertToDirection(float axisSpeed,Direction d) @@CONVERT@@
+ static class FanVisual {
+  Fan blockEntity=new Fan();
+  float getFanSpeed() @@PROPELLER@@
+ }
+ static class CompoundTag {
+  Map<String,Object> values=new HashMap<>();
+  boolean contains(String key){return values.containsKey(key);}
+  CompoundTag getCompound(String key){return (CompoundTag)values.getOrDefault(key,new CompoundTag());}
+  String getString(String key){return (String)values.getOrDefault(key,"");}
+  int getInt(String key){return (Integer)values.getOrDefault(key,0);}
+  void put(String key,CompoundTag tag){values.put(key,tag);}void putString(String key,String value){values.put(key,value);}void putInt(String key,int value){values.put(key,value);}
+ }
+ record ResourceLocation(String path){public String toString(){return path;}}
+ static class FanRegistry {ResourceLocation getKey(FanProcessingType type){return new ResourceLocation(type.name());}}
+ static class CreateBuiltInRegistries {static FanRegistry FAN_PROCESSING_TYPE=new FanRegistry();}
+ static class AllFanProcessingTypes {static FanProcessingType parseLegacy(String name){try{return FanProcessingType.valueOf(name);}catch(IllegalArgumentException e){return null;}}}
+ enum FanProcessingType {
+  Blasting,Haunting,Smoking,Splashing;
+  boolean canProcess(ItemStack stack,Level level){return level.valid;}
+  List<ItemStack> process(ItemStack stack,Level level){return new ArrayList<>(List.of(stack));}
+ }
+ static class ItemStack {int count;ItemStack(int count){this.count=count;}int getCount(){return count;}ItemStack copy(){return new ItemStack(count);}}
+ static class Level {boolean valid;void addFreshEntity(ItemEntity entity){}}
+ static class ItemEntity {
+  CompoundTag nbt=new CompoundTag();ItemStack stack;Level world=new Level();
+  ItemEntity(int count){stack=new ItemStack(count);}
+  ItemEntity(Level level,double x,double y,double z,ItemStack stack){world=level;this.stack=stack;}
+  CompoundTag getPersistentData(){return nbt;}ItemStack getItem(){return stack;}Level level(){return world;}
+  void setItem(ItemStack value){stack=value;}void discard(){}double getX(){return 0;}double getY(){return 0;}double getZ(){return 0;}
+  Object getDeltaMovement(){return null;}void setDeltaMovement(Object value){}
+ }
+ static class TransportedItemStack {
+  ItemStack stack;FanProcessingType processedBy;int processingTime;
+  TransportedItemStack(int count){stack=new ItemStack(count);}
+  TransportedItemStack getSimilar(){var other=new TransportedItemStack(stack.count);other.processedBy=processedBy;other.processingTime=processingTime;return other;}
+ }
+ static class TransportedResult {
+  boolean converted;TransportedResult(boolean converted){this.converted=converted;}
+  static TransportedResult doNothing(){return new TransportedResult(false);}
+  static TransportedResult convertTo(List<TransportedItemStack> stacks){return new TransportedResult(true);}
+ }
+ static boolean canProcess(ItemEntity entity,FanProcessingType type) @@CAN_PROCESS@@
+ static boolean applyProcessing(ItemEntity entity,FanProcessingType type) @@DROPPED@@
+ static TransportedResult applyProcessing(TransportedItemStack transported,Level world,FanProcessingType type) @@TRANSPORTED@@
+ static int decrementProcessingTime(ItemEntity entity,FanProcessingType type) @@DECREMENT@@
+ static String state(FanProcessingType kind,int time,boolean converted){return (kind==null?-1:kind.ordinal())+":"+time+":"+(converted?1:0);}
+ public static void main(String[] args)throws Exception {
+  var reader=new BufferedReader(new InputStreamReader(System.in));String line;var out=new StringBuilder();
+  while((line=reader.readLine())!=null){var p=line.split(" ");
+   switch(p[0]) {
+    case "M" -> {var fan=new Fan();fan.speed=Float.parseFloat(p[1]);out.append(fan.getMaxDistance());}
+    case "V" -> {var visual=new FanVisual();visual.blockEntity.speed=Float.parseFloat(p[1]);out.append(visual.getFanSpeed());}
+    case "P" -> {var fan=new Fan();fan.speed=Float.parseFloat(p[1]);fan.state.facing=Direction.values()[Integer.parseInt(p[2])];out.append(fan.getAirFlowDirection()==fan.state.facing?1:0);}
+    case "D","T" -> {
+     var item=new ItemEntity(1);var transported=new TransportedItemStack(1);var level=new Level();
+     int initialKind=Integer.parseInt(p[1]),initialTime=Integer.parseInt(p[2]);
+     if(initialKind>=0){
+      var processing=new CompoundTag();processing.putString("Type",FanProcessingType.values()[initialKind].name());processing.putInt("Time",initialTime);
+      var data=new CompoundTag();data.put("Processing",processing);item.nbt.put("CreateData",data);
+      transported.processedBy=FanProcessingType.values()[initialKind];transported.processingTime=initialTime;
+     }
+     for(int phase=3;phase<p.length;phase++){
+      var q=p[phase].split(",");var kind=FanProcessingType.values()[Integer.parseInt(q[0])];int count=Integer.parseInt(q[1]);
+      boolean valid=q[2].equals("1");int ticks=Integer.parseInt(q[3]);
+      item.stack.count=count;item.world.valid=valid;transported.stack.count=count;level.valid=valid;
+      for(int tick=0;tick<ticks;tick++){
+       boolean converted;
+       if(p[0].equals("D")){
+        converted=canProcess(item,kind)&&applyProcessing(item,kind);
+        var processing=item.nbt.getCompound("CreateData").getCompound("Processing");
+        out.append(state(AllFanProcessingTypes.parseLegacy(processing.getString("Type")),processing.getInt("Time"),converted));
+       }else{
+        converted=applyProcessing(transported,level,kind).converted;out.append(state(transported.processedBy,transported.processingTime,converted));
+       }
+       out.append(' ');
+      }
+     }
+    }
+   }out.append('\n');
+  }System.out.print(out);
+ }
+}

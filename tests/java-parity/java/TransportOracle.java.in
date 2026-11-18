@@ -1,0 +1,131 @@
+import java.util.*;
+public class TransportOracle {
+ enum Axis { X,Y,Z; int choose(int x,int y,int z){return new int[]{x,y,z}[ordinal()];} boolean isVertical(){return this==Y;} }
+ enum AxisDirection {NEGATIVE(-1),POSITIVE(1);int step;AxisDirection(int s){step=s;}int getStep(){return step;} }
+ enum Direction {
+  DOWN(Axis.Y,-1),UP(Axis.Y,1),NORTH(Axis.Z,-1),SOUTH(Axis.Z,1),WEST(Axis.X,-1),EAST(Axis.X,1);
+  Axis axis;int step;Direction(Axis a,int s){axis=a;step=s;}Axis getAxis(){return axis;}
+  AxisDirection getAxisDirection(){return step<0?AxisDirection.NEGATIVE:AxisDirection.POSITIVE;}
+  Direction getOpposite(){return values()[ordinal()^1];} Vec3i getNormal(){return new Vec3i(axis==Axis.X?step:0,axis==Axis.Y?step:0,axis==Axis.Z?step:0);}
+  static Direction get(AxisDirection s,Axis a){for(var d:values())if(d.axis==a&&d.step==s.step)return d;throw new AssertionError();}
+  static Direction fromAxisAndDirection(Axis a,AxisDirection s){return get(s,a);}
+ }
+ static final AxisDirection NEGATIVE=AxisDirection.NEGATIVE,POSITIVE=AxisDirection.POSITIVE;
+ enum BeltSlope {HORIZONTAL,UPWARD,DOWNWARD,VERTICAL,SIDEWAYS}
+ enum BeltPart{START,MIDDLE,END,PULLEY}
+ static final BeltSlope HORIZONTAL=BeltSlope.HORIZONTAL;static final BeltPart MIDDLE=BeltPart.MIDDLE;
+ record Vec3i(int x,int y,int z){int getX(){return x;}int getY(){return y;}int getZ(){return z;}}
+ static class Property<T>{}
+ static class BlockStateProperties {static final Property<Axis> AXIS=new Property<>();static final Property<Direction> HORIZONTAL_FACING=new Property<>();}
+ static class BeltBlock {static final Property<BeltSlope> SLOPE=new Property<>();static final Property<BeltPart> PART=new Property<>();}
+ static class BlockState {
+  Axis axis;BeltSlope slope;Direction facing;boolean shaft,replaceable;
+  @SuppressWarnings("unchecked") <T>T getValue(Property<T> key){return (T)(key==BlockStateProperties.AXIS?axis:key==BlockStateProperties.HORIZONTAL_FACING?facing:key==BeltBlock.PART?BeltPart.START:slope);}
+  boolean canBeReplaced(){return replaceable;}
+ }
+ record BlockPos(int x,int y,int z) {static final Vec3i ZERO=new Vec3i(0,0,0);
+  int getX(){return x;}int getY(){return y;}int getZ(){return z;}
+  BlockPos subtract(BlockPos o){return new BlockPos(x-o.x,y-o.y,z-o.z);}
+  BlockPos offset(BlockPos o){return new BlockPos(x+o.x,y+o.y,z+o.z);}
+  BlockPos above(int y){return new BlockPos(x,this.y+y,z);}
+  BlockPos relative(Direction d){return new BlockPos(x+(d.axis==Axis.X?d.step:0),y+(d.axis==Axis.Y?d.step:0),z+(d.axis==Axis.Z?d.step:0));}
+  boolean closerThan(BlockPos p,double distance){double a=x-p.x,b=y-p.y,c=z-p.z;return a*a+b*b+c*c<distance*distance;}
+  static BlockPos containing(double x,double y,double z){return new BlockPos((int)Math.floor(x),(int)Math.floor(y),(int)Math.floor(z));}
+ }
+ static class BlockEntity {}
+ static class KineticBlockEntity extends BlockEntity {float speed;KineticBlockEntity(float s){speed=s;}float getTheoreticalSpeed(){return speed;}}
+ static class ShaftBlock {static boolean isShaft(BlockState state){return state.shaft;}}
+ static class AbstractSimpleShaftBlock {static final Property<Axis> AXIS=BlockStateProperties.AXIS;}
+ static class Level {
+  boolean isClientSide;BlockPos first,second;Axis firstAxis,secondAxis;float firstRpm,secondRpm;int flags,space;int room;
+  boolean isLoaded(BlockPos p){return !(p.equals(first)&&(flags&1)!=0||p.equals(second)&&(flags&2)!=0);}
+  BlockState getBlockState(BlockPos p){var s=new BlockState();s.replaceable=space==0;s.shaft=space==1||space==2;s.axis=space==2?Axis.values()[(firstAxis.ordinal()+1)%3]:firstAxis;
+   if(p.equals(first)){s.shaft=(flags&4)==0;s.axis=firstAxis;}if(p.equals(second)){s.shaft=(flags&8)==0;s.axis=secondAxis;}return s;}
+  BlockEntity getBlockEntity(BlockPos p){return new KineticBlockEntity(p.equals(first)?firstRpm:secondRpm);}
+ }
+ static int maximum=20;static Integer maxLength(){return maximum;}
+ static boolean validateAxis(Level world,BlockPos pos) @@VALIDATE@@
+ static boolean canConnect(Level world,BlockPos first,BlockPos second) @@CONNECT@@
+ static BeltSlope getSlopeBetween(BlockPos start,BlockPos end) @@SLOPE@@
+ static Direction getFacingFromTo(BlockPos start,BlockPos end) @@FACING@@
+ static List<BlockPos> getBeltChainBetween(BlockPos start,BlockPos end,BeltSlope slope,Direction direction) @@CHAIN@@
+ static class ItemStack {
+  int count,key;ItemStack(int k,int c){key=k;count=c;}boolean isEmpty(){return count==0;}
+  static boolean matches(ItemStack a,ItemStack b){return a.key==b.key&&a.count==b.count;}
+ }
+ static class TransportedItemStack implements Comparable<TransportedItemStack> {
+  ItemStack stack;float beltPosition,prevBeltPosition,sideOffset,prevSideOffset;int angle,insertedAt;Direction insertedFrom=Direction.UP;boolean locked,lockedExternally;
+  float getTargetSideOffset() @@OFFSET@@
+  public int compareTo(TransportedItemStack o) @@COMPARE@@
+ }
+ static class BeltBlockEntity {
+  float speed;Direction facing;BeltSlope slope;int beltLength;Level level=new Level();BeltBlockEntity(float s,Direction f,BeltSlope l,int len){speed=s;facing=f;slope=l;beltLength=len;}
+  float getSpeed(){return speed;}Direction getBeltFacing(){return facing;}Level getLevel(){return level;}
+  boolean isVirtual(){return false;}void notifyUpdate(){}
+  BlockState getBlockState(){var s=new BlockState();s.slope=slope;s.facing=facing;return s;}
+  float getBeltMovementSpeed() @@SPEED@@
+  float getDirectionAwareBeltMovementSpeed() @@AWARE@@
+  Direction getMovementFacing() @@MOVEMENT_FACING@@
+ Vec3i getMovementDirection(boolean firstHalf,boolean ignoreHalves) @@MOVEMENT_DIRECTION@@
+ Vec3i getBeltChainDirection() @@CHAIN_DIRECTION@@
+ }
+ static class ServerSpeedProvider {static float get(){return 1;}}
+ static class BeltHelper {static BlockPos getPositionForOffset(BeltBlockEntity b,int i){return new BlockPos(i,0,0);}}
+ enum ProcessingResult {PASS,HOLD,REMOVE}
+ static class TransportedItemStackHandlerBehaviour {}
+ static class BeltProcessingBehaviour {
+  int mode;BeltProcessingBehaviour(int m){mode=m;}
+  ProcessingResult handleHeldItem(TransportedItemStack s,TransportedItemStackHandlerBehaviour h){return mode==1?ProcessingResult.HOLD:mode==3?ProcessingResult.REMOVE:ProcessingResult.PASS;}
+  ProcessingResult handleReceivedItem(TransportedItemStack s,TransportedItemStackHandlerBehaviour h){return handleHeldItem(s,h);}
+  static boolean isBlocked(Level l,BlockPos p){return false;}
+ }
+ static class DirectBeltInputBehaviour {
+  static final Class<DirectBeltInputBehaviour> TYPE=DirectBeltInputBehaviour.class;Level level;DirectBeltInputBehaviour(Level l){level=l;}
+  boolean canInsertFromSide(Direction d){return true;}
+  ItemStack handleInsertion(TransportedItemStack s,Direction d,boolean sim){int n=Math.min(level.room,s.stack.count);level.room-=n;return new ItemStack(s.stack.key,s.stack.count-n);}
+ }
+ static class BlockEntityBehaviour {@SuppressWarnings("unchecked") static<T>T get(Level l,BlockPos p,Class<T> type){return (T)new DirectBeltInputBehaviour(l);}}
+ static class BeltFunnelInteractionHandler {static boolean checkForFunnels(Inventory i,TransportedItemStack t,float n){return false;}}
+ static class BeltTunnelInteractionHandler {static boolean flapTunnelsAndCheckIfStuck(Inventory i,TransportedItemStack t,float n){return false;}}
+ static class BeltCrusherInteractionHandler {static boolean checkForCrushers(Inventory i,TransportedItemStack t,float n){return false;}}
+ static void flapTunnel(Inventory i,int segment,Direction d,boolean in){}
+ static class Mth {static float clamp(float x,float a,float b){return x<a?a:Math.min(x,b);}}
+ static class Inventory {
+  BeltBlockEntity belt;List<TransportedItemStack> items=new LinkedList<>(),toInsert=new LinkedList<>(),toRemove=new LinkedList<>(),ejected=new LinkedList<>();
+  TransportedItemStack lazyClientItem;boolean beltMovementPositive;int end,processorSegment,processorMode;
+  Inventory(BeltBlockEntity b){belt=b;}
+  enum Ending {UNRESOLVED(0),EJECT(0),INSERT(.25f),FUNNEL(.5f),BLOCKED(.45f);float margin;Ending(float m){margin=m;}}
+  Ending resolveEnding(){return Ending.values()[end+1];}
+  void eject(TransportedItemStack s){ejected.add(s);}
+  BeltProcessingBehaviour getBeltProcessingAtSegment(int segment){return processorMode!=0&&segment==processorSegment?new BeltProcessingBehaviour(processorMode):null;}
+  TransportedItemStackHandlerBehaviour getTransportedItemStackHandlerAtSegment(int segment){return new TransportedItemStackHandlerBehaviour();}
+  void insert(TransportedItemStack newStack) @@INSERT@@
+  boolean isBlocking(int segment,Direction side,float segmentPos,TransportedItemStack stack) @@BLOCKING@@
+  boolean canInsertAtFromSide(int segment,Direction side) @@CAN_INSERT@@
+  TransportedItemStack getStackAtOffset(int offset) @@GET_STACK@@
+  boolean handleBeltProcessingAndCheckIfRemoved(TransportedItemStack currentItem,float nextOffset,boolean noMovement) @@PROCESS@@
+  void tick() @@TICK@@
+ }
+ public static void main(String[] args){
+  var in=new Scanner(System.in);var out=new StringBuilder();
+  while(in.hasNext()){
+   String op=in.next();switch(op){
+    case "C"->{var l=new Level();l.first=new BlockPos(0,0,0);l.firstAxis=Axis.values()[in.nextInt()];l.secondAxis=Axis.values()[in.nextInt()];l.second=new BlockPos(in.nextInt(),in.nextInt(),in.nextInt());l.firstRpm=in.nextFloat();l.secondRpm=in.nextFloat();l.flags=in.nextInt();l.space=in.nextInt();maximum=in.nextInt();
+     boolean valid=validateAxis(l,l.first)&&validateAxis(l,l.second)&&canConnect(l,l.first,l.second);out.append(valid?1:0);
+     if(valid){var slope=getSlopeBetween(l.first,l.second);var facing=getFacingFromTo(l.first,l.second);if(l.second.x==l.second.z)facing=Direction.get(facing.getAxisDirection(),l.firstAxis==Axis.X?Axis.Z:Axis.X);var chain=getBeltChainBetween(l.first,l.second,slope,facing);if(l.firstAxis==Axis.Y)slope=BeltSlope.SIDEWAYS;out.append(' ').append(slope.ordinal()).append(' ').append(facing.ordinal()).append(' ').append(chain.size());}
+    }
+    case "E"->{var b=new BeltBlockEntity(in.nextFloat(),Direction.values()[in.nextInt()],BeltSlope.values()[in.nextInt()],6);var v=b.getBeltChainDirection();double speed=Math.max(Math.abs(b.getBeltMovementSpeed()),1/8f);out.append(Double.doubleToRawLongBits(v.x()*speed)).append(' ').append(Double.doubleToRawLongBits(v.y()*speed+1/8f)).append(' ').append(Double.doubleToRawLongBits(v.z()*speed));}
+    case "M"->{var b=new BeltBlockEntity(in.nextFloat(),Direction.values()[in.nextInt()],BeltSlope.HORIZONTAL,5);out.append(Float.floatToRawIntBits(b.getBeltMovementSpeed())).append(' ').append(Float.floatToRawIntBits(b.getDirectionAwareBeltMovementSpeed())).append(' ').append(b.getMovementFacing().ordinal());}
+    case "I"->{var b=new BeltBlockEntity(in.nextFloat(),Direction.values()[in.nextInt()],BeltSlope.HORIZONTAL,5);var inv=new Inventory(b);inv.beltMovementPositive=in.nextInt()!=0;int segment=in.nextInt();var side=Direction.values()[in.nextInt()];var item=new TransportedItemStack();item.beltPosition=in.nextFloat();item.insertedAt=in.nextInt();item.insertedFrom=Direction.values()[in.nextInt()];inv.items.add(item);out.append(inv.canInsertAtFromSide(segment,side)?1:0);}
+    case "G"->{var inv=new Inventory(new BeltBlockEntity(16,Direction.SOUTH,BeltSlope.HORIZONTAL,5));int segment=in.nextInt(),n=in.nextInt();for(int i=0;i<n;i++){var item=new TransportedItemStack();item.beltPosition=in.nextFloat();item.stack=new ItemStack(i,1);inv.items.add(item);}var stack=inv.getStackAtOffset(segment);out.append(stack==null?-1:stack.stack.key);}
+    case "T"->{var b=new BeltBlockEntity(in.nextFloat(),Direction.values()[in.nextInt()],BeltSlope.values()[in.nextInt()],in.nextInt());var inv=new Inventory(b);inv.beltMovementPositive=in.nextInt()!=0;inv.end=in.nextInt();int ticks=in.nextInt();b.level.room=in.nextInt();inv.processorSegment=in.nextInt();inv.processorMode=in.nextInt();int n=in.nextInt();
+     for(int i=0;i<n;i++){var item=new TransportedItemStack();item.stack=new ItemStack(i,in.nextInt());item.beltPosition=in.nextFloat();item.angle=in.nextInt();item.sideOffset=in.nextFloat();item.locked=in.nextInt()!=0;item.lockedExternally=in.nextInt()!=0;inv.items.add(item);}
+     for(int i=0;i<ticks;i++)inv.tick();out.append(b.level.room).append(' ').append(inv.items.size()).append(' ').append(inv.ejected.size());
+     for(var item:inv.items)out.append(' ').append(item.stack.key).append(':').append(item.stack.count).append(':').append(Float.floatToRawIntBits(item.beltPosition)).append(':').append(Float.floatToRawIntBits(item.sideOffset)).append(':').append(item.locked?1:0).append(':').append(item.lockedExternally?1:0);
+     for(var item:inv.ejected)out.append(" E").append(item.stack.key).append(':').append(item.stack.count);
+    }
+    default->throw new IllegalArgumentException(op);
+   }out.append('\n');
+  }System.out.print(out);
+ }
+}

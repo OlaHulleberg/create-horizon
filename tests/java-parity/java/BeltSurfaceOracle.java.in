@@ -1,0 +1,95 @@
+// Copyright (c) The Create Team / The Creators of Create
+// Copyright (c) 2026 create-horizon contributors
+// SPDX-License-Identifier: MIT
+// Source AST bodies run unchanged. Recording contexts isolate belt surfaces.
+import java.io.*;
+import java.util.*;
+import java.util.function.Supplier;
+
+public class BeltSurfaceOracle {
+ enum BeltSlope {
+  HORIZONTAL, UPWARD, DOWNWARD, VERTICAL, SIDEWAYS;
+  boolean isDiagonal() {return this==UPWARD || this==DOWNWARD;}
+ }
+ enum BeltPart {START, MIDDLE, END, PULLEY}
+ enum DyeColor {WHITE}
+ record Key<T>() {}
+ static class BeltBlock {
+  static final Key<BeltSlope> SLOPE=new Key<>();
+  static final Key<BeltPart> PART=new Key<>();
+  static final Key<Direction> HORIZONTAL_FACING=new Key<>();
+ }
+ static class CreativeMotorBlock {static final Key<Direction> FACING=BeltBlock.HORIZONTAL_FACING;}
+ static class BlockState {
+  Direction direction;BeltSlope slope;BeltPart part;
+  @SuppressWarnings("unchecked") <T>T getValue(Key<T> key) {return (T)(key==BeltBlock.SLOPE?slope:key==BeltBlock.PART?part:direction);}
+ }
+ static class BeltBlockEntity {
+  BlockState state;float speed;Optional<DyeColor> color=Optional.empty();
+  Object getLevel(){return null;}BlockState getBlockState(){return state;}
+  float getSpeed(){return speed;}boolean hasPulley(){return false;}
+ }
+ static class VisualizationManager {static boolean supportsVisualization(Object level){return false;}}
+ static class AllBlocks {static final AllBlocks BELT=new AllBlocks();boolean has(BlockState s){return true;}}
+ static class PoseStack {}
+ // Transform recording is deliberately outside this surface/UV observation.
+ static class TransformStack {
+  TransformStack(PoseStack p){}static TransformStack of(PoseStack p){return new TransformStack(p);}
+  TransformStack center(){return this;}TransformStack uncenter(){return this;}
+  TransformStack rotateYDegrees(float v){return this;}TransformStack rotateXDegrees(float v){return this;}TransformStack rotateZDegrees(float v){return this;}
+ }
+ static class VertexConsumer {}
+ static class MultiBufferSource {VertexConsumer getBuffer(Object v){return new VertexConsumer();}}
+ static class RenderType {static Object solid(){return null;}}
+ static class AnimationTickHolder {static float time;static float getRenderTime(Object level){return time;}}
+ static class Iterate {static final boolean[] trueAndFalse={true,false};}
+ record PartialModel(String name) {}
+ static class AllPartialModels {
+  static final PartialModel BELT_START=new PartialModel("start"),BELT_MIDDLE=new PartialModel("middle"),BELT_END=new PartialModel("end"),
+   BELT_START_BOTTOM=new PartialModel("start_bottom"),BELT_MIDDLE_BOTTOM=new PartialModel("middle_bottom"),BELT_END_BOTTOM=new PartialModel("end_bottom"),
+   BELT_DIAGONAL_START=new PartialModel("diagonal_start"),BELT_DIAGONAL_MIDDLE=new PartialModel("diagonal_middle"),BELT_DIAGONAL_END=new PartialModel("diagonal_end"),BELT_PULLEY=new PartialModel("pulley");
+ }
+ static class Sprite {float getV0(){return 0;}float getV1(){return 1;}}
+ static class SpriteShiftEntry {Sprite getTarget(){return new Sprite();}}
+ static final List<String> observations=new ArrayList<>();
+ static class SuperByteBuffer {
+  String model;float scroll;boolean shifted;
+  SuperByteBuffer(PartialModel p){model=p.name();}SuperByteBuffer light(int value){return this;}
+  SuperByteBuffer shiftUVScrolling(SpriteShiftEntry entry,float value){scroll=value;shifted=true;return this;}
+  SuperByteBuffer transform(PoseStack p){return this;}
+  void renderInto(PoseStack p,VertexConsumer consumer){observations.add(model+" "+(shifted?1:0)+" "+scroll);}
+ }
+ static class CachedBuffers {
+  static SuperByteBuffer partial(PartialModel p,BlockState s){return new SuperByteBuffer(p);}
+  static SuperByteBuffer partialDirectional(PartialModel p,BlockState s,Direction d,Supplier<PoseStack> supplier){return new SuperByteBuffer(p).transform(supplier.get());}
+ }
+ static class KineticBlockEntityRenderer {static SuperByteBuffer standardKineticRotationTransform(SuperByteBuffer b,BeltBlockEntity e,int light){return b;}}
+ static SpriteShiftEntry getSpriteShiftEntry(DyeColor color,boolean diagonal,boolean bottom){return new SpriteShiftEntry();}
+ enum AxisDirection {NEGATIVE(-1),POSITIVE(1);int step;AxisDirection(int s){step=s;}int getStep(){return step;}}
+ enum Direction {
+  DOWN(Axis.Y,false),UP(Axis.Y,true),NORTH(Axis.Z,false),SOUTH(Axis.Z,true),WEST(Axis.X,false),EAST(Axis.X,true);
+  enum Axis {X,Y,Z}
+  Axis axis;boolean positive;Direction(Axis a,boolean p){axis=a;positive=p;}
+  Axis getAxis(){return axis;}AxisDirection getAxisDirection(){return positive?AxisDirection.POSITIVE:AxisDirection.NEGATIVE;}
+  Direction getClockWise(){return switch(this){case NORTH->EAST;case EAST->SOUTH;case SOUTH->WEST;default->NORTH;};}
+ }
+ // Angle poses do not affect the recorded UV; no claim about their pixels/matrices.
+ static class AngleHelper {static float horizontalAngle(Direction d){return 0;}}
+ static class BeltRenderer {
+  static PartialModel getBeltPartial(boolean diagonal,boolean start,boolean end,boolean bottom) @@PARTIAL@@
+ }
+ static PartialModel getBeltPartial(boolean d,boolean s,boolean e,boolean b){return BeltRenderer.getBeltPartial(d,s,e,b);}
+ void renderItems(BeltBlockEntity e,float partial,PoseStack pose,MultiBufferSource out,int light,int overlay){}
+ void renderSafe(BeltBlockEntity be,float partialTicks,PoseStack ms,MultiBufferSource buffer,int light,int overlay) @@RENDER@@
+ public static void main(String[]args)throws Exception {
+  var reader=new BufferedReader(new InputStreamReader(System.in));var renderer=new BeltSurfaceOracle();
+  Direction[] directions={Direction.NORTH,Direction.SOUTH,Direction.WEST,Direction.EAST};
+  for(String line;(line=reader.readLine())!=null;){
+   var v=line.split(" ");var be=new BeltBlockEntity();be.state=new BlockState();
+   be.state.direction=directions[Integer.parseInt(v[0])];be.state.slope=BeltSlope.values()[Integer.parseInt(v[1])];be.state.part=BeltPart.values()[Integer.parseInt(v[2])];
+   be.speed=Float.parseFloat(v[3]);AnimationTickHolder.time=Long.parseLong(v[4])+Float.parseFloat(v[5]);
+   observations.clear();renderer.renderSafe(be,Float.parseFloat(v[5]),new PoseStack(),new MultiBufferSource(),0,0);
+   System.out.println(String.join(" ",observations));
+  }
+ }
+}

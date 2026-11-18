@@ -1,0 +1,75 @@
+{
+  "origin_revision": "b99cab50ffdccdcc827e54d547b39c81a53efe11",
+  "suites": {
+    "processing": {
+      "cases": 9282,
+      "inputs_sha256": "9c6ec457aa07e9a86a8ece66a1cb1b8125b5737dcfa11ff254bfd909486f0299",
+      "origin_path": "tools/processing_oracle.py"
+    },
+    "placement": {
+      "cases": 27648,
+      "inputs_sha256": "e8013fd288ddf7c1469f618a87590ee5711752884a2c2356606bf39c1fb8358c",
+      "origin_path": "tools/placement_oracle.py"
+    },
+    "rotation": {
+      "cases": 31752,
+      "inputs_sha256": "c4845fa47c1dcec62b8212112d9a2717a2a63ee209264d6f430ca0b52fc4e7b6",
+      "origin_path": "tools/rotation_oracle.py"
+    },
+    "milling": {
+      "cases": 29593,
+      "inputs_sha256": "56480068d7388d503697ca61d9359ca2f2c287fddac267a4360cb6c6ad7bd5ff",
+      "origin_path": "tools/milling_oracle.py"
+    },
+    "drilling": {
+      "cases": 39970,
+      "inputs_sha256": "06fbc4335129938d08027e56bc936535e357cce2645bac58685e8d7b6943a7d4",
+      "origin_path": "tools/drilling_oracle.py"
+    },
+    "visual": {
+      "cases": 6388,
+      "inputs_sha256": "f2939e8b379dd8ca2c237c68136378aa49cb92f76792bcd0b0f7942352b6fe17",
+      "origin_path": "tools/visual_oracle.py"
+    },
+    "fan-media": {
+      "cases": 27648,
+      "inputs_sha256": "c21fd7d47bd4c63366c8b721415f24b6bcba8cfa53e93449114d8ceee2c1fa98",
+      "origin_path": "tools/fan_media_oracle.py"
+    },
+    "transport": {
+      "cases": 65256,
+      "inputs_sha256": "971e53f12b0bf4b1a39824d2ed697fee8caeb0b611e399ed8b56a0f53e844a5c",
+      "origin_path": "tools/transport_oracle.py"
+    },
+    "transport-processing": {
+      "cases": 1448,
+      "inputs_sha256": "1e75dfaea344fa78a2b2e259a2d34549d1f5dab1a88533cc5633f7de34d63cf6",
+      "origin_path": "tools/transport_processing_oracle.py"
+    },
+    "fan-entity": {
+      "cases": 12192,
+      "inputs_sha256": "1b1b3c2d1a4b877c7609187b475ee55b0a7e3b708d95f43b0368c035576c1cf9",
+      "origin_path": "tools/fan_entity_checks.py"
+    },
+    "fan": {
+      "cases": 17680,
+      "inputs_sha256": "1ce937dd69ba608a4705e78ec370cb42207d8a652d16c3bd63a41cb4fae46f48",
+      "origin_path": "tools/fan_oracle.py"
+    },
+    "basin": {
+      "cases": 7147,
+      "inputs_sha256": "ca1f0fbf9ac27f14b6403478c6bf1ad51c498710cb1a7ad17882e5a2e7590535",
+      "origin_path": "tools/basin_oracle.py"
+    },
+    "burner": {
+      "cases": 17710,
+      "inputs_sha256": "73d28ef911dd6282874d54c2e1b627d2b238387bcda1fe0c5741c42502aed23f",
+      "origin_path": "tools/burner_oracle.py"
+    },
+    "network": {
+      "cases": 75,
+      "inputs_sha256": "9850859b55214ca573d43170048f6c3561481e04e7e80abcf9cb4d63cbbfe1f2",
+      "origin_path": "tools/oracle.py"
+    }
+  }
+}

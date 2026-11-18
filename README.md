@@ -189,6 +189,7 @@ docs/                   Architecture and README media
 - [docs/architecture.md](docs/architecture.md): how the mod is put together, and how to add to it.
 - [API_GAPS.md](API_GAPS.md): what the mod SDK can't do yet, and what the mod leaves out because of it.
 - [VALIDATION.md](VALIDATION.md): what was checked, on which build, and what was not.
+- [Java behaviour comparisons](tests/java-parity/README.md): optional isolated tests against pinned Create 6.0.11 methods, with their results and migration limits.
 
 ## Licences
 

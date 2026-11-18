@@ -1,0 +1,66 @@
+// Development contexts for original AST-exported BeltPressingCallbacks/PressingBehaviour.
+// One deterministic output per input; no Minecraft/NeoForge runtime is claimed.
+import java.util.*;
+import java.util.stream.Collectors;
+public class ProcessingOracle {
+    enum ProcessingResult {HOLD,PASS}
+    static final ProcessingResult HOLD=ProcessingResult.HOLD,PASS=ProcessingResult.PASS;
+    static class Create {static final Random RANDOM=new Random(0);}
+    static class ItemStack {
+        int count;ItemStack(int n){count=n;}int getCount(){return count;}
+        void shrink(int n){count-=n;}ItemStack copy(){return new ItemStack(count);}
+    }
+    static class TransportedItemStack {
+        ItemStack stack;boolean locked;int angle;
+        TransportedItemStack(int n){stack=new ItemStack(n);}
+        TransportedItemStack copy(){return new TransportedItemStack(stack.count);}
+        void clearFanProcessingData(){}
+    }
+    static class BeltHelper {static boolean isItemUpright(ItemStack s){return false;}}
+    record TransportedResult(List<TransportedItemStack> outputs,TransportedItemStack held){
+        static TransportedResult removeItem(){return new TransportedResult(List.of(),null);}
+        static TransportedResult convertTo(List<TransportedItemStack> v){return new TransportedResult(v,null);}
+        static TransportedResult convertTo(TransportedItemStack v){return new TransportedResult(List.of(),v);}
+        static TransportedResult convertToAndLeaveHeld(List<TransportedItemStack> v,TransportedItemStack h){return new TransportedResult(v,h);}
+    }
+    static class TransportedItemStackHandlerBehaviour {
+        TransportedResult result;
+        void handleProcessingOnItem(TransportedItemStack input,TransportedResult r){result=r;}
+    }
+    static class Specifics {
+        float rpm=16;boolean bulk;
+        float getKineticSpeed(){return rpm;}boolean canProcessInBulk(){return bulk;}
+        boolean tryProcessOnBelt(TransportedItemStack input,List<ItemStack> outputs,boolean simulate){
+            if(!simulate)outputs.add(new ItemStack(bulk?input.stack.count:1));return true;
+        }
+    }
+    static class BlockEntity {void sendData(){}}
+    static class Mth {
+        static float clamp(float x,float a,float b){return Math.max(a,Math.min(b,x));}
+        static double clamp(double x,double a,double b){return Math.max(a,Math.min(b,x));}
+        static float lerp(float t,float a,float b){return a+t*(b-a);}
+    }
+    static class PressingBehaviour {
+        static final int CYCLE=240;boolean running=true;int runningTicks=120,prevRunningTicks=120;
+        Specifics specifics=new Specifics();BlockEntity blockEntity=new BlockEntity();
+        List<ItemStack> particleItems=new ArrayList<>();
+        int getRunningTickSpeed() @@SPEED@@
+        float getRenderedHeadOffset(float partialTicks) @@HEAD@@
+    }
+    static ProcessingResult whenItemHeld(TransportedItemStack transported,TransportedItemStackHandlerBehaviour handler,PressingBehaviour behaviour) @@HELD@@
+    public static void main(String[] args){
+        var in=new Scanner(System.in);var out=new StringBuilder();
+        while(in.hasNext()){
+            String kind=in.next();var b=new PressingBehaviour();
+            switch(kind){
+                case "D"->{int n=in.nextInt();b.specifics.bulk=in.nextInt()!=0;var h=new TransportedItemStackHandlerBehaviour();whenItemHeld(new TransportedItemStack(n),h,b);
+                    int made=h.result.outputs.stream().mapToInt(v->v.stack.count).sum();
+                    out.append(made).append(' ').append(h.result.held==null?0:h.result.held.stack.count).append(' ').append(h.result.held==null?1:0);}
+                case "S"->{b.specifics.rpm=in.nextFloat();out.append(b.getRunningTickSpeed());}
+                case "H"->{float tick=in.nextFloat();b.prevRunningTicks=(int)Math.floor(tick);b.runningTicks=(int)Math.ceil(tick);out.append(b.getRenderedHeadOffset(tick-b.prevRunningTicks));}
+            }
+            out.append('\n');
+        }
+        System.out.print(out);
+    }
+}

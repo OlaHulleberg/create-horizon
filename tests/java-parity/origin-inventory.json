@@ -1,0 +1,535 @@
+{
+  "repository": "https://github.com/Delete228/create-horizon",
+  "revision": "b99cab50ffdccdcc827e54d547b39c81a53efe11",
+  "selection": "tools/*oracle*.py, *reference*.py, *java_checks.py and fan_entity_checks.py, excluding reference preparation/data infrastructure",
+  "entries": [
+    {
+      "path": "tools/actor_reference_checks.py",
+      "sha256": "01bdbafac67153edfe4715a871b7f2e390b8784ec1dce1e051f25942135073ec",
+      "description": "Compare actor direction tests and ordered tree plans with the original JAR.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/basin_fluid_java_checks.py",
+      "sha256": "816c97fbd642bd5ff8b1e88c6892ad490d7b9674970a692cdd5b2d3dc2c00bc0",
+      "description": "Original-Java half of the nine authored Basin bucket transitions.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/basin_fluid_level_oracle.py",
+      "sha256": "49641f1192f07386ec3dbda2884146512d2f935137e89b084ab3d0c29f2a9268",
+      "description": "Compare tank chase/interpolation bits with actual cached Catnip + MC classes.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Catnip/Minecraft-dependent client observation; no complete public engine observer for the same state."
+    },
+    {
+      "path": "tools/basin_fluid_oracle.py",
+      "sha256": "63c000d30c65812d4f946cc26ed93f9158213cbebf14a21b0fdd0afd86da1d2c",
+      "description": "Compare Basin capability math with unchanged pinned MIT CombinedTankWrapper.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Capability/filter/heat-cache contract is in game glue; public Basin functions do not expose this observation."
+    },
+    {
+      "path": "tools/basin_heat_oracle.py",
+      "sha256": "5b64b2cbbad37964d5462044a42c9d596e354146e300ea2470fd2bb6bb84a4ce",
+      "description": "Compare exact source heat predicates/cache methods in explicit state fixtures.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Capability/filter/heat-cache contract is in game glue; public Basin functions do not expose this observation."
+    },
+    {
+      "path": "tools/basin_oracle.py",
+      "sha256": "371d663ce0574d475f47c57d313671570db219ba8139acfc3e93b0d2699d2d4f",
+      "description": "Portable basin/mixer comparison with pinned, unchanged AST method bodies.",
+      "status": "partial observations",
+      "suite": "basin",
+      "reason": "See suite scope and measured results; a transferred matrix is not a claim that it passes."
+    },
+    {
+      "path": "tools/basin_recipe_filter_oracle.py",
+      "sha256": "1f65173da7ff087bd1b002f6a1437e0936aff36763bcd9bb04e83dec99dcff4a",
+      "description": "Compare the default compression predicate with pinned MIT Java method bodies.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Capability/filter/heat-cache contract is in game glue; public Basin functions do not expose this observation."
+    },
+    {
+      "path": "tools/basin_shape_oracle.py",
+      "sha256": "858e2d63121a66e95add4ca7fc3aef4bc352f6b7e8c9750912efe1d9f29a3288",
+      "description": "Check Basin/Mixer declarations against original source-expression geometry.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Shape/registry or resource-dependent comparison; needs an SDK geometry observer and a private reference classpath."
+    },
+    {
+      "path": "tools/basin_tooltip_reference.py",
+      "sha256": "8467b785b873278f48d4883d54309432d118a4179ef957cb8a2e6d7a218b443d",
+      "description": "Capture actual original Basin goggles rows and EN/RU layout for comparison.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/bearing_reference_checks.py",
+      "sha256": "3c622c526940f7aaafd05f98cb4471a0ee68ee7f957b556a005cabfeee7afb54",
+      "description": "Record three Mechanical Bearing scenes in the isolated Java Create client.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/belt_pressing_oracle.py",
+      "sha256": "f4d3ca9bbbd72f952b35ea69fcca224d1567ed91b4143baa267bcc61d7e4bcc2",
+      "description": "Unchanged Create belt-press callbacks versus portable Rust.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Combined recipe callbacks, queued transport metadata and RNG consumption need an integrated adapter; isolated timing tests are not a replacement."
+    },
+    {
+      "path": "tools/belt_render_oracle.py",
+      "sha256": "02485006ef231260c5e6e52d664d085e61ae91e51735f58a3cce50d20bf9171c",
+      "description": "Compare the pinned Create BeltVisual and scrolling shader with native draw().",
+      "status": "partial observations",
+      "suite": "belt-surface",
+      "reason": "See suite scope and measured results; a transferred matrix is not a claim that it passes."
+    },
+    {
+      "path": "tools/burner_backend_reference.py",
+      "sha256": "d32389ff0bd86cdae85065841fb8432646538b2280f66a38ddee08708d93864e",
+      "description": "Observe original burner cases09/10 in the already-running private bridge.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/burner_heat_java_checks.py",
+      "sha256": "8b15ef8e9caa2985941640d4e86d87f8116e3dbc455dbc6915a445755cc3ac04",
+      "description": "Actual original burner/Basin heat decisions on normal observed server ticks.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/burner_interactions_reference.py",
+      "sha256": "146b008479017de1425bb72940bff202dfc0e7ea08e17a8312f227b5cc966f48",
+      "description": "Exercise pinned original burner interactions through the isolated Java client.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/burner_java_checks.py",
+      "sha256": "4e069601aa5269b1418347192d04a59d5f1f9df2cbc0e2f5889906f79c9fe773",
+      "description": "Original Create6.0.10 actual single-click burner and frozen fuel lifecycle.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/burner_oracle.py",
+      "sha256": "33455897ceab4cc3a4d3015ed1fe1bcf5e47f34309bf783fa42eb4b8b9324968",
+      "description": "Compare server burner transitions to four unchanged pinned Java method bodies.",
+      "status": "partial observations",
+      "suite": "burner",
+      "reason": "See suite scope and measured results; a transferred matrix is not a claim that it passes."
+    },
+    {
+      "path": "tools/burner_placement_java_checks.py",
+      "sha256": "7d8f21c4b72ec0c6e9863c69a652bb792126332ea646fcb551003eaa7ef145d9",
+      "description": "Normal original-client placement of both burner item aliases, four yaws.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/burner_renderer_oracle.py",
+      "sha256": "6251620bd89230450f499b3a2f579547901960380db9bd95526520510f6ebd9b",
+      "description": "Unchanged MIT Create renderShared/getBlazeModel/draw, not Flywheel Visual.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Catnip/Minecraft-dependent client observation; no complete public engine observer for the same state."
+    },
+    {
+      "path": "tools/burner_visual_oracle.py",
+      "sha256": "24cfb96af35d1491924428607919e682bca546db0e4ec3f850ad76a2b03235e6",
+      "description": "Unchanged Create methods with actual player-supplied Catnip/Mth/RNG dependencies.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Catnip/Minecraft-dependent client observation; no complete public engine observer for the same state."
+    },
+    {
+      "path": "tools/cart_assembler_reference_checks.py",
+      "sha256": "c6cd9d481c4a5eaed9922ebf60e855a72024485125f883f918ff036d9b4167b0",
+      "description": "Exercise Cart Assembler rail actions in the isolated Java Create instance.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/chain_drive_oracle.py",
+      "sha256": "1648c4b1269e31aaff4ef876a96b938d1d093571a6a31fddd694e3621856efde",
+      "description": "Pinned MIT ChainDriveBlock/Generator method bodies versus portable Rust.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Partial public state rules exist, but the full placement/wrench/model contract and MC/Catnip fixture need a separate adapter."
+    },
+    {
+      "path": "tools/chassis_reference_checks.py",
+      "sha256": "230110c3ab59f123216f8e5d6a84273743f43ca1cbad9b6374bbc2b41cb931f6",
+      "description": "Check chassis grouping and payload capture in the pinned Java client.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/chute_reference_checks.py",
+      "sha256": "1086b062a350be8aff0935f02dac2cf36caad4a7ac44014b2d0a4eeb91930476",
+      "description": "Record dry vertical Chute timings in the pinned Java Create instance.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/chute_shape_oracle.py",
+      "sha256": "0d6bb15dcc72b1b301ec6a5844c642cdd4d104bb0aeca04a731056da690b0ffe",
+      "description": "Compare native Chute outline and collision with the pinned Java geometry.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Shape/registry or resource-dependent comparison; needs an SDK geometry observer and a private reference classpath."
+    },
+    {
+      "path": "tools/contraption_contact_oracle.py",
+      "sha256": "2c104d72d75db7ea79b474e1648f6494928f954010ca9ad2e3610a544a57c85c",
+      "description": "Compare axis-aligned separation with ContinuousOBBCollider in the pinned JAR.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Original-JAR collision classes; no equivalent public contact operation in this engine. Needs a paired game/collision adapter."
+    },
+    {
+      "path": "tools/contraption_contact_reference_checks.py",
+      "sha256": "a3df6eb707a024c9b6e1322bf431ca253bca07e8bb33abb3048a729cdb4161da",
+      "description": "Observe the pinned Java piston separating its local player from a wall.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/crafter_java_checks.py",
+      "sha256": "c8a0d3d0d866903607f8495a2b8e22e3dd3cec1ba48855e70b1911af3a85ce1d",
+      "description": "Compare the 5\u00d75 Crushing Wheel recipe through real front-slot interactions.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/deployer_reference_checks.py",
+      "sha256": "9541110ac2d33db355e8003be0ed8b04e8fd52e10bcd9915181807479b32ae63",
+      "description": "Observe the pinned Java Deployer planting a sapling on ordinary server ticks.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/deployer_stationary_cold_java_checks.py",
+      "sha256": "8c1abbc8936cd86bf878f1123356e87decd4d31da100306cb97d885f211b0e50",
+      "description": "Prove a real Java chunk reload resumes the paused Deployer stroke.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/deployer_stationary_reference_checks.py",
+      "sha256": "1a7f894895e955c25c7bde6ed836edc95a01d913d4c97a48e8df9f8a5c92ccb7",
+      "description": "Observe ordinary downward stationary Deployer use in pinned Create.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/drilling_oracle.py",
+      "sha256": "2bcc4d496c0d624b8ad653b956052e5936cbf1258c921b3bbc5414bce5c8046f",
+      "description": "Stationary drill parity against AST-exported pinned Create Java algorithms.",
+      "status": "partial observations",
+      "suite": "drilling",
+      "reason": "See suite scope and measured results; a transferred matrix is not a claim that it passes."
+    },
+    {
+      "path": "tools/fan_belt_oracle.py",
+      "sha256": "f0bf8e597887e848329093d89b1696072d7fd054e73a4df6498ec9625799d46f",
+      "description": "Unchanged Java fan processing, transported copies and handler queues.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Combined recipe callbacks, queued transport metadata and RNG consumption need an integrated adapter; isolated timing tests are not a replacement."
+    },
+    {
+      "path": "tools/fan_entity_checks.py",
+      "sha256": "0c8f02aaf678b667f57d3c9818698b18fba2cfc01d3faad69405576d0086cb28",
+      "description": "Source-method fan entity oracle and disposable native integration checks.",
+      "status": "partial observations",
+      "suite": "fan-entity",
+      "reason": "See suite scope and measured results; a transferred matrix is not a claim that it passes."
+    },
+    {
+      "path": "tools/fan_media_oracle.py",
+      "sha256": "d048003cff5a1a698058cd49d68c407e06088f2bf7dd532d852137050b12b792",
+      "description": "Check all four unmodified AllFanProcessingTypes.isValidAt methods.",
+      "status": "partial observations",
+      "suite": "fan-media",
+      "reason": "See suite scope and measured results; a transferred matrix is not a claim that it passes."
+    },
+    {
+      "path": "tools/fan_oracle.py",
+      "sha256": "ce50e80865547092fb9a1d0ed9d9996bb2ac413671ad9e06203fad6572570001",
+      "description": "Compare fan algorithms against unchanged AST-exported Create method bodies.",
+      "status": "matrix",
+      "suite": "fan",
+      "reason": "See suite scope and measured results; a transferred matrix is not a claim that it passes."
+    },
+    {
+      "path": "tools/fan_particle_java_checks.py",
+      "sha256": "4a69141f2ea4af7fa84fb77662841d5cb273329a613e0b4ca3d447fcf22b519e",
+      "description": "Observe original-JAR Fan airflow in real, separately seeded clients.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/fluid_pump_java_checks.py",
+      "sha256": "f9f5b70dce25790cd6034a3ec57e3bceae7a10ec007852ea734de5e7086d7ecb",
+      "description": "Measure straight, closed Fluid Pipe and Mechanical Pump lines in Create 6.0.10.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/fluid_valve_java_checks.py",
+      "sha256": "86a4ce1dc6bc2183138eec9347ef7e9d43c466283cedc44d6c023e5407d573f5",
+      "description": "Observe an inline Fluid Valve with an independently driven shaft in Java.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/flywheel_motion_oracle.py",
+      "sha256": "57bb2e253844dcbe5c18816df7341af27097b635b909c020a5f981c06362fe64",
+      "description": "Compare wheel angles against the actual Catnip chaser used by Create 6.0.10.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Catnip/Minecraft-dependent client observation; no complete public engine observer for the same state."
+    },
+    {
+      "path": "tools/gantry_reference_checks.py",
+      "sha256": "1e3919b53d67c83109d23687c90063186f8a36cb1ee4ad58d7b77e9ee7a01151",
+      "description": "Record the Gantry carriage in the pinned isolated Java Create instance.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/goggles_mixer_reference.py",
+      "sha256": "1f5eb9e3244e91362d1d0847a00519fade3bd8355e83a68378c2fedc382830de",
+      "description": "Capture eight bounded original Mixer HUD cases in the private reference.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/item_contact_java_checks.py",
+      "sha256": "0c42023fb4fcde9a2c99025228f7f12bd1a7f7cf6099cd116f95f13939b2780b",
+      "description": "Observe original Create intake through normal ItemEntity landing ticks.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/milling_oracle.py",
+      "sha256": "23244de8bdd21c10f9c16fee47e70f50a48986ecf84b4d99901660e2eeb2dc7c",
+      "description": "Compare milling tick, RPM, process and chance rolls to pinned Java method bodies.",
+      "status": "partial observations",
+      "suite": "milling",
+      "reason": "See suite scope and measured results; a transferred matrix is not a claim that it passes."
+    },
+    {
+      "path": "tools/mixer_deserialize_java_checks.py",
+      "sha256": "2fddc0c8c24170521d5de0bb1cbef3d230cabb9074867e661377cb694b31db47",
+      "description": "Observe real Create Basin inventory deserialization through /data.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/motor_reach_oracle.py",
+      "sha256": "35a23113f51b1690478638166fd085c6c418ab9942a94c88dddf6f177190afa0",
+      "description": "Source motor admission boundary against the cached original Minecraft AABB.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Client effects/ambient lifecycle and host observations need a test adapter for SDK glue."
+    },
+    {
+      "path": "tools/motor_shape_oracle.py",
+      "sha256": "a1c7e422375dd68c92a569123bd616757185588deaf181b52db052213f584997",
+      "description": "Compare six generated motor shapes with original Create/Ponder Java classes.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Shape/registry or resource-dependent comparison; needs an SDK geometry observer and a private reference classpath."
+    },
+    {
+      "path": "tools/oracle.py",
+      "sha256": "fbc5b1bc04ecd7513f80e97202d2e1737fee067761b76d737507e137f2267474",
+      "description": "Compare capacity/stress with the actual, unmodified Java KineticNetwork.",
+      "status": "matrix",
+      "suite": "network",
+      "reason": "See suite scope and measured results; a transferred matrix is not a claim that it passes."
+    },
+    {
+      "path": "tools/particle_oracle.py",
+      "sha256": "f6eee815ef852ff2177fac99a01f87a13b32f8c982ff8d41c82c85bb5bb5837c",
+      "description": "Compare Create particle controllers to unchanged pinned Java method bodies.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Client effects/ambient lifecycle and host observations need a test adapter for SDK glue."
+    },
+    {
+      "path": "tools/placement_oracle.py",
+      "sha256": "e5a432ff310b11420cb97c75ddbdc8039c21bb2af9dca8ad087beabc12a10399",
+      "description": "Compare placement decisions against actual Java method bodies from pinned Create.",
+      "status": "matrix",
+      "suite": "placement",
+      "reason": "See suite scope and measured results; a transferred matrix is not a claim that it passes."
+    },
+    {
+      "path": "tools/portable_storage_reference_checks.py",
+      "sha256": "eb181b1f16665453a78125c23396b8dc858a48b42ca2b2f13ce373ade7ab45b5",
+      "description": "Record the original portable item interface on a vertical bearing.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/press_basin_reference.py",
+      "sha256": "44edd2e29362de6d69c752f893beec163539bff13687f8281e72a7b368c3aa91",
+      "description": "Observe ordinary original Create press/Basin cycles in the private reference.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/press_client_oracle.py",
+      "sha256": "9ce41cb38373f1422edbe8cb74540cfe41f7b964f093e012ad37cb41d36e5942",
+      "description": "Compare PressingBehaviour client state, interpolation and effect requests.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Catnip/Minecraft-dependent client observation; no complete public engine observer for the same state."
+    },
+    {
+      "path": "tools/processing_oracle.py",
+      "sha256": "ecbcfd2aaab81d8732fd180a5737ba98e5080287f0ab38e29a6071b70157871a",
+      "description": "Compare default/bulk held-item routing, press RPM and head motion to Create.",
+      "status": "partial observations",
+      "suite": "processing",
+      "reason": "See suite scope and measured results; a transferred matrix is not a claim that it passes."
+    },
+    {
+      "path": "tools/pulley_reference_checks.py",
+      "sha256": "266f4967c55776d21686807b1840a3c2601116d5bfbeeb0f43beb66358a43eed",
+      "description": "Capture Rope Pulley pickup, stop and return in the isolated Java reference.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/rotary_contact_oracle.py",
+      "sha256": "b78b17c1fcb19688a6c4ec6b7eadd10bbfa08fff3ccc566c7fc87e3627755762",
+      "description": "Compare all single-axis rotary contact with ContinuousOBBCollider in the pinned JAR.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Original-JAR collision classes; no equivalent public contact operation in this engine. Needs a paired game/collision adapter."
+    },
+    {
+      "path": "tools/rotation_oracle.py",
+      "sha256": "b685b13f0a9a21b79361339f98a7d958aac086dba0481341dfe92375bcf1e622",
+      "description": "Compare implemented shaft/gear/gearbox/gearshift port equations to Create.",
+      "status": "matrix",
+      "suite": "rotation",
+      "reason": "See suite scope and measured results; a transferred matrix is not a claim that it passes."
+    },
+    {
+      "path": "tools/sail_reference_checks.py",
+      "sha256": "e274260847d34dce082be72b4b7efd63aa6bbc9a084d77541422508aaedd914d",
+      "description": "Check sail interactions and windmill capture in the pinned Java client.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/sandpaper_reference_checks.py",
+      "sha256": "a36b2d200747d59a150edf720e3f9defae8364bc45eb4554d8d26f0c0befecf5",
+      "description": "Observe original Sand Paper reservation, release, completion and item pickup.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/sound_oracle.py",
+      "sha256": "36885962b9815499f3cbb6cdd1ca4f414f0ed938ee64aac8bb85dc4968bdce99",
+      "description": "Source-method checks for ambient sound math and fan sound lifecycle.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Client effects/ambient lifecycle and host observations need a test adapter for SDK glue."
+    },
+    {
+      "path": "tools/speed_controller_java_checks.py",
+      "sha256": "6887dfabbd85efddf967640745ebd725fa9d1163b6f9fe7d3db4fb7eb7167671",
+      "description": "Record Create 6.0.10 speed controller ports, source order and live settings.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/super_glue_reference_checks.py",
+      "sha256": "8a5e66a92e51f270169d22cc432265567bf0540894105b2e4055041bbb6b79b2",
+      "description": "Observe the original Super Glue selection, removal and offhand placement.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    },
+    {
+      "path": "tools/transport_oracle.py",
+      "sha256": "87a37f86587f585b4b7a36805a5057218fb3b543f0faa60f1068c70ce1edea07",
+      "description": "Belt geometry/transport parity against unchanged AST-exported Create methods.",
+      "status": "partial observations",
+      "suite": "transport",
+      "reason": "See suite scope and measured results; a transferred matrix is not a claim that it passes."
+    },
+    {
+      "path": "tools/transport_processing_oracle.py",
+      "sha256": "c4c3cf491b379b9be7afa5f2154203e841c9163a99855b684ab4d91dce960500",
+      "description": "Selected unchanged Java transported-result methods versus portable Rust.",
+      "status": "partial observations",
+      "suite": "transport-processing",
+      "reason": "See suite scope and measured results; a transferred matrix is not a claim that it passes."
+    },
+    {
+      "path": "tools/visual_oracle.py",
+      "sha256": "8ebf5710f95b502a04235e26911dddb317d01e01de7c5bebd6a08c7b90e2ab16",
+      "description": "Compare actual Java bodies for phase, crank interpolation, gauge target and wheel RPM.",
+      "status": "partial observations",
+      "suite": "visual",
+      "reason": "See suite scope and measured results; a transferred matrix is not a claim that it passes."
+    },
+    {
+      "path": "tools/windmill_reference_checks.py",
+      "sha256": "5fb03365c8a0b763d1963fbea014a833a14b96c7dc0e62e8ee914f1e111f9e52",
+      "description": "Exercise the Windmill Bearing with real right clicks in the isolated Java reference.",
+      "status": "not ported",
+      "suite": null,
+      "reason": "Live Java-client scenario. Needs a fresh 6.0.11 trace and a paired SDK/world adapter; old native RPC/NBT assumptions are implementation-specific."
+    }
+  ]
+}

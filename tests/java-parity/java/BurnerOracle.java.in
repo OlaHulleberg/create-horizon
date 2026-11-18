@@ -1,0 +1,88 @@
+// Development-only contexts around unchanged pinned MIT Create method bodies.
+import java.util.*;
+import java.io.*;
+
+class BurnerBase { public void tick() {} }
+public class BurnerOracle extends BurnerBase {
+    enum FuelType { NONE, NORMAL, SPECIAL }
+    enum HeatLevel {
+        NONE, SMOULDERING, FADING, KINDLED, SEETHING;
+        public boolean isAtLeast(HeatLevel other) { return ordinal() >= other.ordinal(); }
+        public HeatLevel nextActiveLevel() { return values()[ordinal() % 4 + 1]; }
+    }
+    static final int MAX_HEAT_CAPACITY=10000, INSERTION_THRESHOLD=500;
+    static class BlazeBurnerFuel {
+        int time; BlazeBurnerFuel(int time) {this.time=time;} int burnTime() {return time;}
+    }
+    static class CreateDataMaps {
+        static final Object SUPERHEATED_BLAZE_BURNER_FUELS=new Object(), REGULAR_BLAZE_BURNER_FUELS=new Object();
+    }
+    static class Holder<T> {
+        BlazeBurnerFuel special, normal;
+        BlazeBurnerFuel getData(Object type) {return type == CreateDataMaps.SUPERHEATED_BLAZE_BURNER_FUELS ? special : normal;}
+    }
+    static class Item { Holder<Item> holder=new Holder<>(); Holder<Item> builtInRegistryHolder() {return holder;} }
+    static class ItemStack {
+        Item item=new Item(); int furnace; boolean special, normal;
+        Item getItem() {return item;} int getBurnTime(Object ignored) {return furnace;}
+    }
+    static class Tag {
+        boolean special; Tag(boolean special) {this.special=special;}
+        boolean matches(ItemStack stack) {return special ? stack.special : stack.normal;}
+    }
+    static class AllItemTags {
+        static final Tag BLAZE_BURNER_FUEL_SPECIAL=new Tag(true), BLAZE_BURNER_FUEL_REGULAR=new Tag(false);
+    }
+    static class SoundEvents {static final Object BLAZE_AMBIENT=new Object();}
+    static class SoundSource {static final Object BLOCKS=new Object();}
+    static class Level {
+        boolean isClientSide=false; Random random=new Random(1);
+        void playSound(Object player,Object pos,Object sound,Object category,float volume,float pitch) {}
+    }
+    Level level=new Level(); Object worldPosition=new Object();
+    FuelType activeFuel=FuelType.NONE; int remainingBurnTime=0; boolean isCreative=false;
+    HeatLevel blockHeat=HeatLevel.SMOULDERING;
+    List<Integer> changes=new ArrayList<>();
+    boolean shouldTickAnimation() {return false;} void tickAnimation() {} boolean isVirtual() {return false;}
+    void spawnParticles(HeatLevel heat, double count) {} void spawnParticleBurst(boolean special) {} void playSound() {}
+    HeatLevel getHeatLevelFromBlock() {return blockHeat;}
+    void setBlockHeat(HeatLevel heat) {if (heat != blockHeat) {blockHeat=heat;changes.add(heat.ordinal());}}
+    void updateBlockState() {setBlockHeat(getHeatLevel());}
+
+    protected HeatLevel getHeatLevel() @@HEAT@@
+    public void tick() @@TICK@@
+    protected boolean tryUpdateFuel(ItemStack itemStack, boolean forceOverflow, boolean simulate) @@INSERT@@
+    protected void applyCreativeFuel() @@CREATIVE@@
+
+    static ItemStack input(int special, int normal, int specialTag, int furnace, int normalTag) {
+        ItemStack stack=new ItemStack();
+        if (special != -1) stack.item.holder.special=new BlazeBurnerFuel(special);
+        if (normal != -1) stack.item.holder.normal=new BlazeBurnerFuel(normal);
+        stack.special=specialTag!=0;stack.normal=normalTag!=0;stack.furnace=furnace;
+        return stack;
+    }
+    public static void main(String[] ignored) throws Exception {
+        BufferedReader reader=new BufferedReader(new InputStreamReader(System.in));
+        for (String line;(line=reader.readLine()) != null;) {
+            String[] w=line.split(" "); int[] v=Arrays.stream(w).skip(1).mapToInt(Integer::parseInt).toArray();
+            BurnerOracle state=new BurnerOracle();
+            if (w[0].equals("R")) {
+                state.tryUpdateFuel(input(v[0],v[1],v[2],v[3],v[4]),false,false);
+                // NONE rejection leaves original0 timer, so retain the input's furnace time for the resolution observation.
+                System.out.println(state.activeFuel.ordinal()+" "+(state.activeFuel==FuelType.NONE?v[3]:state.remainingBurnTime));
+                continue;
+            }
+            state.activeFuel=FuelType.values()[v[0]];state.remainingBurnTime=v[1];state.isCreative=v[2]!=0;state.blockHeat=HeatLevel.values()[v[3]];
+            boolean accepted=false;
+            switch(w[0]) {
+                case "T" -> {for(int i=0;i<v[4];i++)state.tick();}
+                case "C" -> {state.applyCreativeFuel();accepted=true;}
+                case "I" -> {ItemStack stack=new ItemStack();if(v[4]==2)stack.item.holder.special=new BlazeBurnerFuel(v[5]);if(v[4]==1)stack.item.holder.normal=new BlazeBurnerFuel(v[5]);accepted=state.tryUpdateFuel(stack,v[6]!=0,v[7]!=0);}
+                default -> throw new IllegalArgumentException(line);
+            }
+            StringBuilder out=new StringBuilder().append(accepted?1:0).append(' ').append(state.activeFuel.ordinal()).append(' ').append(state.remainingBurnTime).append(' ').append(state.isCreative?1:0).append(' ').append(state.blockHeat.ordinal()).append(' ').append(state.changes.size());
+            for(int heat:state.changes)out.append(' ').append(heat);
+            System.out.println(out);
+        }
+    }
+}

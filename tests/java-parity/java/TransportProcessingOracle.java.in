@@ -1,0 +1,54 @@
+import java.util.*;
+import java.util.function.Function;
+public class TransportProcessingOracle {
+ static class ItemStack {
+  int key,count;ItemStack(int k,int n){key=k;count=n;}
+  ItemStack copy(){return new ItemStack(key,count);}
+  static boolean matches(ItemStack a,ItemStack b){return a.key==b.key&&a.count==b.count;}
+ }
+ static class TransportedItemStack {
+  ItemStack stack;float beltPosition;int angle,processingTime;
+  TransportedItemStack copy(){var t=new TransportedItemStack();t.stack=stack.copy();t.beltPosition=beltPosition;t.angle=angle;t.processingTime=processingTime;return t;}
+ }
+ static class TransportedResult {
+  List<TransportedItemStack> outputs;TransportedItemStack heldOutput;
+  TransportedResult(List<TransportedItemStack> o,TransportedItemStack h){outputs=o;heldOutput=h;}
+  boolean doesNothing() @@NOTHING@@
+  boolean hasHeldOutput() @@HELD@@
+  boolean didntChangeFrom(ItemStack stackBefore) @@UNCHANGED@@
+  List<TransportedItemStack> getOutputs(){return outputs;}
+  TransportedItemStack getHeldOutput(){return heldOutput;}
+ }
+ static class Belt {int updates;void notifyUpdate(){updates++;}}
+ static class Inventory {
+  Belt belt=new Belt();boolean beltMovementPositive;
+  List<TransportedItemStack> items=new ArrayList<>(),toInsert=new ArrayList<>(),toRemove=new ArrayList<>();
+  void applyToEachWithin(float position,float maxDistanceToPosition,Function<TransportedItemStack,TransportedResult> processFunction) @@APPLY@@
+ }
+ static TransportedResult callback(TransportedItemStack t,int mode){
+  t.processingTime--;
+  if(mode==0)return null;
+  if(mode==1)return new TransportedResult(null,null);
+  if(mode==2)return new TransportedResult(List.of(),null);
+  var copy=t.copy();copy.angle=271;copy.beltPosition+=1;
+  if(mode==3)return new TransportedResult(List.of(copy),null);
+  copy.stack.key+=100;
+  if(mode==4)return new TransportedResult(List.of(copy),null);
+  copy.stack.count=1;
+  var left=t.copy();left.stack.count--;
+  return new TransportedResult(mode==5?List.of(copy):List.of(),left);
+ }
+ static void print(List<TransportedItemStack> list){for(var t:list)System.out.print(" "+t.stack.key+":"+t.stack.count+":"+Float.floatToRawIntBits(t.beltPosition)+":"+t.angle+":"+t.processingTime);}
+ public static void main(String[] args){var s=new Scanner(System.in);while(s.hasNext()){
+  var inv=new Inventory();inv.beltMovementPositive=s.nextInt()!=0;
+  float position=s.nextFloat(),distance=s.nextFloat();int mode=s.nextInt(),rounds=s.nextInt(),n=s.nextInt();
+  for(int i=0;i<n;i++){var t=new TransportedItemStack();t.stack=new ItemStack(s.nextInt(),s.nextInt());t.beltPosition=s.nextFloat();t.angle=s.nextInt();t.processingTime=17;inv.items.add(t);if(s.nextInt()!=0)inv.toRemove.add(t);}
+  int[] calls={0};for(int i=0;i<rounds;i++)inv.applyToEachWithin(position,distance,t->{calls[0]++;return callback(t,mode);});
+  System.out.print(calls[0]+" "+inv.belt.updates);
+  // Observe effective persisted records, not implementation-specific queue storage.
+  var records=new ArrayList<String>();
+  var saved=new ArrayList<TransportedItemStack>();for(var item:inv.items)if(!inv.toRemove.contains(item))saved.add(item);saved.addAll(inv.toInsert);
+  for(var item:saved)records.add(item.stack.key+":"+item.stack.count+":"+Float.floatToRawIntBits(item.beltPosition)+":"+item.angle+":"+item.processingTime);
+  Collections.sort(records);for(var record:records)System.out.print(" "+record);System.out.println();
+ }}
+}

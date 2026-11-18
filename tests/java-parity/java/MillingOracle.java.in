@@ -1,0 +1,94 @@
+// Development-only Minecraft/NeoForge contexts for AST-exported Create methods.
+// This is source-algorithm parity, not execution inside a Minecraft Java game.
+import java.util.*;
+
+public class MillingOracle {
+    static class Mth { static int clamp(int n,int a,int b){return Math.max(a,Math.min(b,n));} }
+    static class RandomSource {
+        Random random; int draws;
+        RandomSource(long seed){random=new Random(seed);}
+        float nextFloat(){draws++;return random.nextFloat();}
+    }
+    static class ItemStack {
+        static final ItemStack EMPTY=new ItemStack(0);
+        int count; ItemStack(int n){count=n;}
+        boolean isEmpty(){return count<=0;}
+        int getCount(){return count;}
+        void shrink(int n){count-=n;}
+        ItemStack getCraftingRemainingItem(){return EMPTY;}
+    }
+    static class ItemStackHandler {
+        ItemStack[] stacks;
+        ItemStackHandler(int size){stacks=new ItemStack[size];Arrays.setAll(stacks,i->new ItemStack(0));}
+        int getSlots(){return stacks.length;}
+        // Authored fixture limit, distinct from the output item's 64-item limit.
+        // This models the external inventory contract, not a host implementation.
+        int getSlotLimit(int slot){return 99;}
+        ItemStack getStackInSlot(int slot){return stacks[slot];}
+        void setStackInSlot(int slot,ItemStack stack){stacks[slot]=stack;}
+    }
+    static class ItemHandlerHelper {
+        static void insertItemStacked(ItemStackHandler inventory,ItemStack stack,boolean simulate){
+            int remaining=stack.count;
+            // The probe's result item itself stacks to 64.
+            for(var s:inventory.stacks){int moved=Math.min(remaining,Math.max(0,64-s.count));s.count+=moved;remaining-=moved;}
+        }
+    }
+    static class RecipeWrapper {ItemStackHandler inventory;RecipeWrapper(ItemStackHandler i){inventory=i;}}
+    record RecipeHolder<T>(T value){}
+    static class MillingRecipe {
+        int duration;boolean valid;
+        MillingRecipe(int d,boolean v){duration=d;valid=v;}
+        boolean matches(RecipeWrapper input,Level level){return valid&&!input.inventory.getStackInSlot(0).isEmpty();}
+        int getProcessingDuration(){return duration;}
+        List<ItemStack> rollResults(RandomSource random){return List.of(new ItemStack(1));}
+    }
+    static class Level {boolean isClientSide;RandomSource random=new RandomSource(0);MillingRecipe recipe;}
+    static class AllRecipeTypes {
+        static final AllRecipeTypes MILLING=new AllRecipeTypes();
+        Optional<RecipeHolder<MillingRecipe>> find(RecipeWrapper inventory,Level level){
+            return level.recipe.matches(inventory,level)?Optional.of(new RecipeHolder<>(level.recipe)):Optional.empty();
+        }
+    }
+    static class AllAdvancements {static final int MILLSTONE=0;}
+    static class KineticBlockEntity {void tick(){} }
+    static class Millstone extends KineticBlockEntity {
+        ItemStackHandler inputInv=new ItemStackHandler(1),outputInv=new ItemStackHandler(9);
+        MillingRecipe lastRecipe;Level level=new Level();int timer,processed;float rpm;
+        float getSpeed(){return rpm;}
+        void sendData(){} void setChanged(){} void award(int advancement){processed++;} void spawnParticles(){}
+        public int getProcessingSpeed() @@SPEED@@
+        public void tick() @@TICK@@
+        private void process() @@PROCESS@@
+    }
+    static class Output {
+        int count;float chance;
+        Output(int n,float c){count=n;chance=c;}
+        ItemStack getStack(){return new ItemStack(count);}
+        ItemStack getStack(int n){return new ItemStack(n);}
+        ItemStack rollOutput(RandomSource randomSource) @@ROLL@@
+    }
+    public static void main(String[] args){
+        var in=new Scanner(System.in);var out=new StringBuilder();
+        while(in.hasNext()){
+            switch(in.next()){
+                case "S"->{var m=new Millstone();m.rpm=in.nextFloat();out.append(m.getProcessingSpeed());}
+                case "T"->{
+                    var m=new Millstone();m.rpm=in.nextFloat();m.timer=in.nextInt();
+                    m.inputInv.stacks[0].count=in.nextInt();boolean valid=in.nextInt()!=0;
+                    m.level.recipe=new MillingRecipe(in.nextInt(),valid);m.outputInv.stacks[0].count=in.nextInt();
+                    int ticks=in.nextInt(),removeAt=in.nextInt();
+                    for(int tick=0;tick<ticks;tick++){if(tick==removeAt)m.inputInv.stacks[0].count=0;m.tick();}
+                    int output=Arrays.stream(m.outputInv.stacks).mapToInt(s->s.count).sum();
+                    out.append(m.timer).append(' ').append(m.inputInv.stacks[0].count).append(' ').append(output).append(' ').append(m.processed);
+                }
+                case "R"->{
+                    var random=new RandomSource(in.nextLong());var output=new Output(in.nextInt(),in.nextFloat());
+                    out.append(output.rollOutput(random).count).append(' ').append(random.draws);
+                }
+            }
+            out.append('\n');
+        }
+        System.out.print(out);
+    }
+}

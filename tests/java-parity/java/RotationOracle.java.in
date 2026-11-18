@@ -1,0 +1,88 @@
+// Development-only contexts for AST-extracted Create RotationPropagator methods.
+import java.util.*;
+public class RotationOracle {
+    enum Axis {X,Y,Z;int choose(int x,int y,int z){return this==X?x:this==Y?y:z;} }
+    enum Direction {
+        DOWN(Axis.Y,-1,0,-1,0),UP(Axis.Y,1,0,1,0),NORTH(Axis.Z,-1,0,0,-1),SOUTH(Axis.Z,1,0,0,1),WEST(Axis.X,-1,-1,0,0),EAST(Axis.X,1,1,0,0);
+        final Axis axis;final int sign,x,y,z;
+        Direction(Axis a,int s,int x,int y,int z){axis=a;sign=s;this.x=x;this.y=y;this.z=z;}
+        Axis getAxis(){return axis;}int getAxisDirection(){return sign;}
+        Direction getOpposite(){return values()[ordinal()^1];}
+        static Direction getNearest(int x,int y,int z){Direction best=DOWN;int dot=Integer.MIN_VALUE;for(var d:values()){int v=x*d.x+y*d.y+z*d.z;if(v>dot){dot=v;best=d;}}return best;}
+    }
+    static class Property<T>{}
+    static final Property<Axis> AXIS=new Property<>();
+    static class BlockStateProperties {static final Property<Boolean> POWERED=new Property<>();}
+    record BlockPos(int x,int y,int z){
+        static final BlockPos ZERO=new BlockPos(0,0,0);
+        BlockPos subtract(BlockPos b){return new BlockPos(x-b.x,y-b.y,z-b.z);}
+        int getX(){return x;}int getY(){return y;}int getZ(){return z;}
+        int distManhattan(BlockPos b){return Math.abs(x-b.x)+Math.abs(y-b.y)+Math.abs(z-b.z);}
+    }
+    static class Level {}
+    interface IRotate {Axis getRotationAxis(BlockState s);boolean hasShaftTowards(Level l,BlockPos p,BlockState s,Direction d);}
+    static class Block implements IRotate {
+        final int kind;Block(int k){kind=k;}
+        public Axis getRotationAxis(BlockState s){return s.axis;}
+        public boolean hasShaftTowards(Level l,BlockPos p,BlockState s,Direction d){return kind==3?d==s.facing:kind==5?d.axis!=s.axis:d.axis==s.axis;}
+    }
+    static class ChainDriveBlock extends Block {
+        ChainDriveBlock(){super(8);}
+        static boolean areBlocksConnected(BlockState a,BlockState b,Direction d){return false;}
+        static float getRotationSpeedModifier(KineticBlockEntity a,KineticBlockEntity b){return 0;}
+    }
+    static class BlockState {
+        final Block block;final Axis axis;final Direction facing;final boolean powered;
+        BlockState(int kind,int a,int f,int p){block=new Block(kind);axis=Axis.values()[a];facing=Direction.values()[f];powered=p!=0;}
+        Block getBlock(){return block;}
+        @SuppressWarnings("unchecked") <T>T getValue(Property<T> property){return (T)(property==AXIS?axis:Boolean.valueOf(powered));}
+    }
+    static class ICogWheel {
+        static boolean isSmallCog(BlockState s){return s.block.kind==1;}
+        static boolean isLargeCog(BlockState s){return s.block.kind==2;}
+    }
+    static class KineticBlockEntity {
+        final BlockState state;final BlockPos pos;
+        KineticBlockEntity(BlockState s,BlockPos p){state=s;pos=p;}
+        BlockState getBlockState(){return state;}BlockPos getBlockPos(){return pos;}
+        Level getLevel(){return new Level();}
+        boolean hasSource(){return this instanceof DirectionalShaftHalvesBlockEntity;}
+        boolean isSource(){return state.block.kind==3;}
+        float propagateRotationTo(KineticBlockEntity to,BlockState a,BlockState b,BlockPos diff,boolean axis,boolean gears){return 0;}
+    }
+    static class DirectionalShaftHalvesBlockEntity extends KineticBlockEntity {
+        DirectionalShaftHalvesBlockEntity(BlockState s,BlockPos p){super(s,p);}
+        Direction getSourceFacing(){
+            Axis ref=state.block.kind==5?Arrays.stream(Axis.values()).filter(a->a!=state.axis).findFirst().orElseThrow():state.axis;
+            return Arrays.stream(Direction.values()).filter(d->d.axis==ref&&d.sign>0).findFirst().orElseThrow();
+        }
+    }
+    static class GearboxBlockEntity extends DirectionalShaftHalvesBlockEntity {GearboxBlockEntity(BlockState s,BlockPos p){super(s,p);}}
+    abstract static class SplitShaftBlockEntity extends DirectionalShaftHalvesBlockEntity {
+        SplitShaftBlockEntity(BlockState s,BlockPos p){super(s,p);}abstract float getRotationSpeedModifier(Direction face);
+    }
+    static class ClutchBlockEntity extends SplitShaftBlockEntity {
+        ClutchBlockEntity(BlockState s,BlockPos p){super(s,p);}
+        float getRotationSpeedModifier(Direction face) @@CLUTCH@@
+    }
+    static class GearshiftBlockEntity extends SplitShaftBlockEntity {
+        GearshiftBlockEntity(BlockState s,BlockPos p){super(s,p);}
+        float getRotationSpeedModifier(Direction face) @@GEARSHIFT@@
+    }
+    private static float getRotationSpeedModifier(KineticBlockEntity from,KineticBlockEntity to) @@MODIFIER@@
+    private static float getAxisModifier(KineticBlockEntity be,Direction direction) @@AXIS_MODIFIER@@
+    private static boolean isLargeToLargeGear(BlockState from,BlockState to,BlockPos diff) @@LARGE_LARGE@@
+    private static boolean isLargeToSmallCog(BlockState from,BlockState to,IRotate defTo,BlockPos diff) @@LARGE_SMALL@@
+    static KineticBlockEntity node(int kind,int a,int f,int p,BlockPos pos){
+        var state=new BlockState(kind,a,f,p);
+        return switch(kind){case 5->new GearboxBlockEntity(state,pos);case 6->new GearshiftBlockEntity(state,pos);case 7->new ClutchBlockEntity(state,pos);default->new KineticBlockEntity(state,pos);};
+    }
+    public static void main(String[] args){
+        var in=new Scanner(System.in);var out=new StringBuilder();
+        while(in.hasNextInt()){
+            int[] v=new int[11];for(int i=0;i<v.length;i++)v[i]=in.nextInt();
+            out.append(getRotationSpeedModifier(node(v[0],v[1],v[2],v[3],BlockPos.ZERO),node(v[4],v[5],v[6],v[7],new BlockPos(v[8],v[9],v[10])))).append('\n');
+        }
+        System.out.print(out);
+    }
+}

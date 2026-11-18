@@ -1,0 +1,106 @@
+// Development fixture only. @@...@@ is replaced with an original method body
+// obtained through javac's AST, without translating or editing its statements.
+import java.io.*;
+import java.util.*;
+
+public class PlacementOracle {
+    enum Axis {X,Y,Z}
+    enum Direction {
+        DOWN(Axis.Y),UP(Axis.Y),NORTH(Axis.Z),SOUTH(Axis.Z),WEST(Axis.X),EAST(Axis.X);
+        final Axis axis;
+        Direction(Axis a) {axis=a;}
+        Axis getAxis(){return axis;}
+        Direction getOpposite(){return values()[ordinal()^1];}
+    }
+    static class Iterate {static Direction[] directions=Direction.values();}
+    record BlockPos(int index) {
+        BlockPos relative(Direction d){return new BlockPos(d.ordinal());}
+        BlockPos below(){return relative(Direction.DOWN);}
+    }
+    interface IRotate {
+        boolean hasShaftTowards(Level l,BlockPos pos,BlockState s,Direction d);
+        Axis getRotationAxis(BlockState s);
+    }
+    static class Block {
+        BlockState defaultBlockState(){return new BlockState(this,Axis.Y,Direction.NORTH);}
+    }
+    static class Rotor extends Block implements IRotate {
+        final boolean port,small;
+        Rotor(boolean p,boolean s){port=p;small=s;}
+        public boolean hasShaftTowards(Level l,BlockPos p,BlockState s,Direction d){return port;}
+        public Axis getRotationAxis(BlockState s){return s.axis;}
+    }
+    static class BlockState {
+        final Block block;final Axis axis;final Direction facing;
+        BlockState(Block b,Axis a,Direction f){block=b;axis=a;facing=f;}
+        Block getBlock(){return block;}
+        Axis getValue(String key){return axis;}
+        BlockState setValue(String key,Axis a){return new BlockState(block,a,facing);}
+        BlockState setValue(String key,Direction f){return new BlockState(block,axis,f);}
+    }
+    static class Level {
+        BlockState[] neighbors=new BlockState[6];
+        BlockState getBlockState(BlockPos pos){return neighbors[pos.index];}
+    }
+    static class Player {
+        final boolean shift;
+        Player(boolean s){shift=s;}
+        boolean isShiftKeyDown(){return shift;}
+    }
+    static class BlockPlaceContext {
+        Level level;Player player;Direction look,face;
+        Level getLevel(){return level;}
+        Player getPlayer(){return player;}
+        BlockPos getClickedPos(){return new BlockPos(-1);}
+        Direction getClickedFace(){return face;}
+        Direction getNearestLookingDirection(){return look;}
+    }
+    static class ICogWheel {
+        static boolean isSmallCog(BlockState s){return s.block instanceof Rotor r && r.small;}
+    }
+    static class AllBlocks {
+        static Entry ROTATION_SPEED_CONTROLLER=new Entry();
+        static class Entry {boolean has(BlockState s){return false;}}
+    }
+    static class SpeedControllerBlock {static String HORIZONTAL_AXIS="axis";}
+    static class OriginalShaft extends Block {
+        static String AXIS="axis";
+        static Axis getPreferredAxis(BlockPlaceContext context) @@SHAFT_PREFERRED@@
+        BlockState getStateForPlacement(BlockPlaceContext context) @@SHAFT_STATE@@
+    }
+    static class OriginalCog extends OriginalShaft {
+        boolean isLargeCog(){return false;}
+        Axis getAxisForPlacement(BlockPlaceContext context) @@COG_AXIS@@
+    }
+    static class OriginalDirectional extends Block {
+        static String FACING="facing";
+        static Direction getPreferredFacing(BlockPlaceContext context) @@DIRECTION_PREFERRED@@
+        BlockState getStateForPlacement(BlockPlaceContext context) @@DIRECTION_STATE@@
+    }
+    static class OriginalMotor extends OriginalDirectional {
+        BlockState getStateForPlacement(BlockPlaceContext context) @@MOTOR_STATE@@
+    }
+    public static void main(String[] args) throws Exception {
+        var in=new BufferedReader(new InputStreamReader(System.in));
+        var out=new StringBuilder();String line;
+        while((line=in.readLine())!=null) {
+            var parts=line.split(" ");var v=Arrays.stream(parts).mapToInt(Integer::parseInt).toArray();
+            var context=new BlockPlaceContext();context.player=new Player(v[4]!=0);
+            context.face=Direction.values()[v[3]];context.look=Direction.values()[v[2]];
+            context.level=new Level();
+            for(int i=0;i<6;i++) {
+                boolean small=v[0]==2 && v[5]!=0 && i==context.face.getOpposite().ordinal();
+                var axis=small?Axis.values()[v[5]-1]:Direction.values()[i].axis;
+                context.level.neighbors[i]=new BlockState(new Rotor((v[1]&(1<<i))!=0,small),axis,Direction.NORTH);
+            }
+            var result=switch(v[0]) {
+                case 0->new OriginalShaft().getStateForPlacement(context).axis.name();
+                case 1->new OriginalMotor().getStateForPlacement(context).facing.name();
+                case 2->new OriginalCog().getAxisForPlacement(context).name();
+                default->throw new IllegalArgumentException();
+            };
+            out.append(result.toLowerCase(Locale.ROOT)).append('\n');
+        }
+        System.out.print(out);
+    }
+}

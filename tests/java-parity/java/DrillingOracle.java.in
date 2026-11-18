@@ -1,0 +1,67 @@
+// Development-only world contexts around original AST-exported Create methods.
+import java.util.*;
+public class DrillingOracle {
+    static class Mth {
+        static int clamp(int n,int a,int b){return Math.max(a,Math.min(b,n));}
+        static double clamp(double n,double a,double b){return Math.max(a,Math.min(b,n));}
+    }
+    static class AirBlock {}
+    static class BlockState {
+        float hardness; int flags;
+        BlockState(float h,int f){hardness=h;flags=f;}
+        float getDestroySpeed(Level level,BlockPos pos){return hardness;}
+        boolean liquid(){return (flags&1)!=0;}
+        Object getBlock(){return (flags&2)!=0?new AirBlock():this;}
+        SoundType getSoundType(){return new SoundType();}
+    }
+    static class AllBlockTags {
+        static final AllBlockTags NON_BREAKABLE=new AllBlockTags();
+        boolean matches(BlockState state){return (state.flags&4)!=0;}
+    }
+    static class SoundType {String getHitSound(){return "hit";}}
+    static class SoundSource {static final int BLOCKS=4;}
+    static class BlockPos {}
+    static class Level {
+        boolean isClientSide;BlockState state;int hits;
+        BlockState getBlockState(BlockPos pos){return state;}
+        void destroyBlockProgress(int breaker,BlockPos pos,int progress){}
+        void playSound(Object player,BlockPos pos,String sound,int category,float volume,int pitch){hits++;}
+    }
+    static class KineticBlockEntity {void tick(){}}
+    static class Drill extends KineticBlockEntity {
+        int ticksUntilNextProgress,destroyProgress,breakerId,broken;
+        float rpm;BlockPos breakingPos,worldPosition=new BlockPos();Level level=new Level();
+        float getSpeed(){return rpm;}boolean shouldRun(){return true;}
+        BlockPos getBreakingPos(){return worldPosition;}
+        void onBlockBroken(BlockState state){broken++;}
+        boolean canBreak(BlockState state,float hardness){return isBreakable(state,hardness);}
+        static boolean isBreakable(BlockState stateToBreak,float blockHardness) @@BREAKABLE@@
+        float getBreakSpeed() @@SPEED@@
+        void destroyNextTick() @@WAKE@@
+        void lazyTick(){if(ticksUntilNextProgress==-1)destroyNextTick();}
+        public void tick() @@TICK@@
+    }
+    static double getDamage(float speed) @@DAMAGE@@
+    public static void main(String[] args){
+        var input=new Scanner(System.in);var out=new StringBuilder();
+        while(input.hasNext()){
+            switch(input.next()){
+                case "S"->{var d=new Drill();d.rpm=input.nextFloat();out.append(d.getBreakSpeed());}
+                case "D"->{out.append(getDamage(input.nextFloat()));}
+                case "T"->{
+                    var d=new Drill();float rpm=input.nextFloat();d.level.state=new BlockState(input.nextFloat(),input.nextInt());
+                    d.destroyProgress=input.nextInt();d.ticksUntilNextProgress=input.nextInt();int ticks=input.nextInt(),wake=input.nextInt(),stop=input.nextInt(),resume=input.nextInt(),lazy=10;
+                    for(int tick=0;tick<ticks;tick++){
+                        if(tick==0||lazy==0)d.lazyTick();
+                        if(lazy==0)lazy=10;else lazy--;
+                        if(tick==wake)d.destroyNextTick();
+                        d.rpm=tick>=stop&&tick<resume?0:rpm;d.tick();
+                    }
+                    out.append(d.destroyProgress).append(' ').append(d.ticksUntilNextProgress).append(' ').append(d.broken).append(' ').append(d.level.hits);
+                }
+            }
+            out.append('\n');
+        }
+        System.out.print(out);
+    }
+}

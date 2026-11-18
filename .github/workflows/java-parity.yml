@@ -1,0 +1,93 @@
+name: Java behaviour comparisons
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'tests/java-parity/**'
+      - 'create/src/engine/**'
+      - '.github/workflows/java-parity.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tests/java-parity/**'
+      - 'create/src/engine/**'
+      - '.github/workflows/java-parity.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: java-parity-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    name: Harness checks and observational Java report
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      LC_ALL: C.UTF-8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Install Rust for the standalone test package
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+          rustup default 1.99.1
+      - name: Check the comparison harness
+        run: |
+          python3 -m unittest discover -s tests/java-parity -p 'test_*.py' -v
+          cargo fmt --manifest-path tests/java-parity/probe/Cargo.toml --check
+          cargo clippy --locked --manifest-path tests/java-parity/probe/Cargo.toml --target-dir target/java-parity/rust --all-targets -- -D warnings
+      - name: Check out the exact MIT Java reference (no game or assets needed)
+        uses: actions/checkout@v4
+        with:
+          repository: Creators-of-Create/Create
+          ref: 37ea4afcfe5bf85875d4b0749798a45330070a1f
+          path: target/java-parity/reference
+          persist-credentials: false
+          sparse-checkout: |
+            src/main/java
+            gradle.properties
+            LICENSE
+      # This step reports current differences and unsupported observations. Its
+      # success means the comparison ran, never that the entire port matches.
+      # Compilation, extraction and malformed-stream errors still fail the job.
+      - name: Write the complete observational report
+        run: python3 tests/java-parity/run.py --create-source target/java-parity/reference --report-only
+      - name: Gate the five fully supported regression suites
+        run: |
+          python3 - <<'PY'
+          import json
+          report = json.load(open('target/java-parity/report.json'))
+          required = {'network', 'placement', 'rotation', 'transport-processing', 'motion-primitives'}
+          suites = {s['name']: s for s in report['suites'] if s['name'] in required}
+          assert set(suites) == required, 'A gated suite was omitted'
+          for name, suite in suites.items():
+              assert not suite.get('error') and suite['cases'] > 0 and suite['passed'] == suite['cases'], (name, suite)
+          PY
+      - name: Publish the comparison summary
+        if: always()
+        run: |
+          if test -f target/java-parity/report.md; then
+            cat target/java-parity/report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: java-behaviour-report
+          path: |
+            target/java-parity/report.json
+            target/java-parity/report.md
+          if-no-files-found: warn
