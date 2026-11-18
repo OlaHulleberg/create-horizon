@@ -1214,11 +1214,11 @@ fn submit(
                 let world_pose = WorldPose::turned(pos, *axis, here);
                 if view.is_some() || held.is_some() {
                     // Actors and sequenced turns need a fresh pose every frame.
-                    let frame = view.as_ref().map(|view| {
+                    let frame = if let Some(view) = &view {
                         let axis = axis_enum(*axis);
                         let stopped = held.is_some_and(|h| h != turned);
                         shown.turned = Some((axis, here));
-                        Frame {
+                        Some(Frame {
                             anchor: pos,
                             view,
                             motion: Motion::Turn {
@@ -1230,8 +1230,10 @@ fn submit(
                             partial,
                             camera,
                             elevator: None,
-                        }
-                    });
+                        })
+                    } else {
+                        None
+                    };
                     draw.push();
                     draw.rotate_about(*axis, here, [0.5; 3]);
                     draw_bearing_top(draw, top);
