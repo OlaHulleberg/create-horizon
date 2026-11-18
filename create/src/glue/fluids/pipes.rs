@@ -182,10 +182,10 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
     };
     if changed || !pump.found {
         let cell = |p, d| pipe_cell_toward(lv, p, Some(d));
-        let pull = fluids::reach_toward(pos, facing.opposite(), speed, cell);
-        let push = fluids::reach_toward(pos, facing, speed, cell);
-        let ways_pull = fluids::ways_toward(pos, facing.opposite(), cell);
-        let ways_push = fluids::ways_toward(pos, facing, cell);
+        let pull = fluids::reach_toward(pos, facing.opposite(), speed, true, cell);
+        let push = fluids::reach_toward(pos, facing, speed, false, cell);
+        let ways_pull = fluids::ways_toward(pos, facing.opposite(), true, cell);
+        let ways_push = fluids::ways_toward(pos, facing, false, cell);
         // Pipes changed elsewhere leave this pump's network as it was.
         let same = pump.found
             && pull == pump.pull
@@ -206,20 +206,27 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
         }
         pump.found = true;
     }
-    // The first end behind it no closed valve shuts off.
-    let from = pump.pull.iter().find(|e| !e.blocked).copied();
+    // Only terminal sources participate in the current endpoint transfer model.
+    // A pump is a pressure target, but FlowSource.OtherPipe.isEndpoint is false.
+    // FluidNetwork's connection/flow traversal through it is still required.
+    let from = pump
+        .pull
+        .iter()
+        .find(|e| !e.blocked && e.kind != fluids::Endpoint::Pump)
+        .copied();
     let mut flowing = false;
     if let (Some(from), false) = (from, pump.push.is_empty()) {
         let amount = fluids::transfer_speed(from.pressure);
         // What the source can give this tick: a creative tank or a hose pulley's, else...
-        let special = if from.tank {
+        let special = if from.kind == fluids::Endpoint::Handler {
             plumbing::source(lv, from.pos, amount)
         } else {
             None
         };
-        let drained_from_drain = from.tank
+        let drained_from_drain = from.kind == fluids::Endpoint::Handler
             && with_world(|w| w.dims[dim].drains.contains_key(&from.pos)).unwrap_or(false);
-        let from_basin = from.tank && info_at(lv, from.pos).map(|(b, _)| b) == Some(Block::Basin);
+        let from_basin = from.kind == fluids::Endpoint::Handler
+            && info_at(lv, from.pos).map(|(b, _)| b) == Some(Block::Basin);
         let offer = if let Some(offer) = special {
             offer
         } else if from_basin {
@@ -234,7 +241,7 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
                     .and_then(|d| d.fluid.map(|(f, n)| (f, n.min(amount))))
             })
             .flatten()
-        } else if from.tank {
+        } else if from.kind == fluids::Endpoint::Handler {
             with_world(|w| {
                 // A boiler gives nothing (`BoilerFluidHandler.drain`).
                 if w.is_boiler(dim, from.pos) {
@@ -283,7 +290,9 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
             let push = std::mem::take(&mut pump.push);
             let pumped = pump.pumped;
             let reaches = |to: &&fluids::End| {
-                to.passes(fluid) && pumped >= fluids::arrival_ticks(&from, to, speed)
+                to.kind != fluids::Endpoint::Pump
+                    && to.passes(fluid)
+                    && pumped >= fluids::arrival_ticks(&from, to, speed)
             };
             let count = push.iter().filter(reaches).count();
             let moved = fluids::share(count, n, |k, give| {
@@ -306,7 +315,7 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
                             w.dims[dim].analog_checks.push(from.pos);
                         }
                     });
-                } else if from.tank {
+                } else if from.kind == fluids::Endpoint::Handler {
                     with_world(|w| w.drain_tank(dim, from.pos, moved));
                 } else {
                     with_open_end(lv, &from, |end, front| {
@@ -333,7 +342,7 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
 /// space (a source placed per bucket, `provideFluidToSpace`). How much it took.
 fn fill_end(lv: &mut ServerLevel<'_>, to: &fluids::End, fluid: Fluid, n: u32) -> u32 {
     let dim = lv.dim;
-    if to.tank {
+    if to.kind == fluids::Endpoint::Handler {
         if let Some(took) = plumbing::sink(lv, to.pos, fluid, n) {
             return took;
         }

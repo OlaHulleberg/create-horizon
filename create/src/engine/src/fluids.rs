@@ -115,13 +115,31 @@ pub fn straight_axis(sides: u8) -> Option<Axis> {
     })
 }
 
-/// An end of a pump's pipes: the block fluid comes from or goes to, and the pressure there.
+/// `PumpBlockEntity.hasReachedValidEndpoint`: pressure may terminate at another pump,
+/// although `FlowSource.OtherPipe` is not a fluid-transfer endpoint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Endpoint {
+    Handler,
+    Open,
+    Pump,
+}
+
+/// The aligned pump test in `PumpBlockEntity.hasReachedValidEndpoint`.
+/// `toward` points from the current pipe to the other pump; `pull` is the
+/// originating pump's `isPullingOnSide(isFront(side))`.
+pub fn pump_endpoint(facing: Dir, toward: Dir, pull: bool) -> bool {
+    facing.axis() == toward.axis() && (facing != toward.opposite()) != pull
+}
+
+/// A pressure target of a pump's pipes, and the pressure there.
+/// Handler and open targets are terminal fluid sources/sinks; a pump is another transport.
+/// `kind` distinguishes pressure targets from terminal fluid sources/sinks.
 /// `blocked`: a closed valve on the way lets nothing through; `only`: smart pipes on the way let
 /// only that fluid through.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct End {
     pub pos: [i32; 3],
-    pub tank: bool,
+    pub kind: Endpoint,
     pub pressure: f32,
     pub blocked: bool,
     pub only: Option<Fluid>,
@@ -173,11 +191,17 @@ fn step(p: [i32; 3], d: Dir) -> [i32; 3] {
 }
 
 /// `PumpBlockEntity.distributePressureTo`: the ends reached from the pump's `side` through pipes
-/// (breadth first, up to the pump range), the pressure (the pump's speed) shared among the ends
+/// (`pull` is `isPullingOnSide(isFront(side))`; breadth first, up to the pump range), the pressure (the pump's speed) shared among the ends
 /// at each distance (`parallelBranches`). Pressure goes through closed valves and filters
 /// (they have pipe behaviours); only the flow stops there (`End::passes`).
-pub fn reach(pump: [i32; 3], side: Dir, speed: f32, cell: impl Fn([i32; 3]) -> Cell) -> Vec<End> {
-    reach_toward(pump, side, speed, |p, _| cell(p))
+pub fn reach(
+    pump: [i32; 3],
+    side: Dir,
+    speed: f32,
+    pull: bool,
+    cell: impl Fn([i32; 3]) -> Cell,
+) -> Vec<End> {
+    reach_toward(pump, side, speed, pull, |p, _| cell(p))
 }
 
 /// [`reach`] with `cell` told the way it is entered by (from the pipe before it): whether open
@@ -187,12 +211,13 @@ pub fn reach_toward(
     pump: [i32; 3],
     side: Dir,
     speed: f32,
+    pull: bool,
     cell: impl Fn([i32; 3], Dir) -> Cell,
 ) -> Vec<End> {
     let mut ends: Vec<(End, i32)> = Vec::new();
-    let end = |pos: [i32; 3], tank: bool, pass: Pass, face: Dir| End {
+    let end = |pos: [i32; 3], kind: Endpoint, pass: Pass, face: Dir| End {
         pos,
-        tank,
+        kind,
         pressure: 0.0,
         blocked: pass.blocked,
         only: pass.only,
@@ -202,13 +227,16 @@ pub fn reach_toward(
     let first = step(pump, side);
     let first_cell = cell(first, side);
     match first_cell {
-        Cell::Tank => ends.push((end(first, true, Pass::default(), side), 0)),
+        Cell::Pump(f) if pump_endpoint(f, side, pull) => {
+            ends.push((end(first, Endpoint::Pump, Pass::default(), side), 0));
+        }
+        Cell::Tank => ends.push((end(first, Endpoint::Handler, Pass::default(), side), 0)),
         Cell::Port(s) if s == side.opposite() => {
-            ends.push((end(first, true, Pass::default(), side), 0))
+            ends.push((end(first, Endpoint::Handler, Pass::default(), side), 0))
         }
         // A pump right against water or air is an open end itself (`isOpenEnd` from the pump).
         Cell::Open | Cell::VanillaTarget => {
-            ends.push((end(first, false, Pass::default(), side), 0))
+            ends.push((end(first, Endpoint::Open, Pass::default(), side), 0))
         }
         Cell::Pipe(_) | Cell::Encased(_) | Cell::Axis(..) if connects(first_cell, side) => {
             let start = Pass::default().through(first_cell);
@@ -229,12 +257,15 @@ pub fn reach_toward(
                     }
                     let next_cell = cell(next, d);
                     match next_cell {
-                        Cell::Tank => ends.push((end(next, true, pass, d), distance)),
+                        Cell::Pump(f) if pump_endpoint(f, d, pull) => {
+                            ends.push((end(next, Endpoint::Pump, pass, d), distance));
+                        }
+                        Cell::Tank => ends.push((end(next, Endpoint::Handler, pass, d), distance)),
                         Cell::Port(s) if s == d.opposite() => {
-                            ends.push((end(next, true, pass, d), distance))
+                            ends.push((end(next, Endpoint::Handler, pass, d), distance))
                         }
                         Cell::Open | Cell::VanillaTarget => {
-                            ends.push((end(next, false, pass, d), distance))
+                            ends.push((end(next, Endpoint::Open, pass, d), distance))
                         }
                         Cell::Pipe(_) | Cell::Encased(_) | Cell::Axis(..)
                             if openings(next_cell) & d.opposite().bit() != 0 =>
@@ -281,15 +312,17 @@ pub struct Step {
 pub fn ways(
     pump: [i32; 3],
     side: Dir,
+    pull: bool,
     cell: impl Fn([i32; 3]) -> Cell,
 ) -> Vec<([i32; 3], Vec<Step>)> {
-    ways_toward(pump, side, |p, _| cell(p))
+    ways_toward(pump, side, pull, |p, _| cell(p))
 }
 
 /// [`ways`] with `cell` told the way it is entered by, as [`reach_toward`].
 pub fn ways_toward(
     pump: [i32; 3],
     side: Dir,
+    pull: bool,
     cell: impl Fn([i32; 3], Dir) -> Cell,
 ) -> Vec<([i32; 3], Vec<Step>)> {
     let first = step(pump, side);
@@ -321,6 +354,7 @@ pub fn ways_toward(
             }
             let next_cell = cell(next, d);
             match next_cell {
+                Cell::Pump(f) if pump_endpoint(f, d, pull) => ends.push((next, at, d)),
                 Cell::Tank | Cell::Open | Cell::VanillaTarget => ends.push((next, at, d)),
                 Cell::Port(s) if s == d.opposite() => ends.push((next, at, d)),
                 c if piped(c) && openings(c) & d.opposite().bit() != 0 => {
@@ -429,7 +463,7 @@ pub fn flows(
     // Behind: from the end toward the pump.
     let n = pull.len();
     for (i, s) in pull.iter().rev().enumerate() {
-        let open = i == 0 && !from.tank;
+        let open = i == 0 && from.kind == Endpoint::Open;
         add(
             &mut out,
             &mut t,
@@ -444,7 +478,13 @@ pub fn flows(
         );
     }
     let back = facing.opposite();
-    let pump_in = conn(pump, back, true, n == 0 && !from.tank, speed.abs());
+    let pump_in = conn(
+        pump,
+        back,
+        true,
+        n == 0 && from.kind == Endpoint::Open,
+        speed.abs(),
+    );
     add(&mut out, &mut t, &mut order, pump_in);
     let start = (t, order);
     for (to, way) in push {
@@ -453,7 +493,13 @@ pub fn flows(
             &mut out,
             &mut t,
             &mut order,
-            conn(pump, facing, false, way.is_empty() && !to.tank, speed.abs()),
+            conn(
+                pump,
+                facing,
+                false,
+                way.is_empty() && to.kind == Endpoint::Open,
+                speed.abs(),
+            ),
         );
         let last = way.len().saturating_sub(1);
         for (i, s) in way.iter().enumerate() {
@@ -471,7 +517,7 @@ pub fn flows(
                 &mut order,
                 conn(s.pos, s.back, true, false, to.pressure),
             );
-            let open = i == last && !to.tank;
+            let open = i == last && to.kind == Endpoint::Open;
             add(
                 &mut out,
                 &mut t,
@@ -960,6 +1006,57 @@ pub fn draws_casing(sides: u8) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn complementary_pump_sides_are_pressure_endpoints() {
+        for toward in Dir::ALL {
+            assert!(pump_endpoint(toward, toward, false));
+            assert!(pump_endpoint(toward.opposite(), toward, true));
+            assert!(!pump_endpoint(toward.opposite(), toward, false));
+            assert!(!pump_endpoint(toward, toward, true));
+            for facing in Dir::ALL {
+                if facing.axis() != toward.axis() {
+                    assert!(!pump_endpoint(facing, toward, false));
+                    assert!(!pump_endpoint(facing, toward, true));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn aligned_pumps_end_pressure_search_at_the_complementary_side() {
+        // Issue #62: east-facing pumps at x=2 and x=4, joined by one pipe.
+        // hasReachedValidEndpoint ends each search at the other pump; it never
+        // traverses that pump in distributePressureTo.
+        let cell = |p: [i32; 3], _: Dir| match p {
+            [2 | 4, 4, 0] => Cell::Pump(Dir::East),
+            [3, 4, 0] => Cell::Pipe(Dir::East.bit() | Dir::West.bit()),
+            _ => Cell::Solid,
+        };
+        for (at, side, pull, other) in [
+            ([2, 4, 0], Dir::East, false, [4, 4, 0]),
+            ([4, 4, 0], Dir::West, true, [2, 4, 0]),
+        ] {
+            let ends = reach_toward(at, side, 32.0, pull, cell);
+            assert_eq!(ends.len(), 1);
+            assert_eq!(ends[0].kind, Endpoint::Pump);
+            assert_eq!(ends[0].pos, other);
+            assert_eq!(ends[0].distance, 1);
+            assert_eq!(ends[0].pressure, 32.0);
+            assert_eq!(ways_toward(at, side, pull, cell)[0].0, other);
+            assert!(reach_toward(at, side, 32.0, !pull, cell).is_empty());
+        }
+    }
+
+    #[test]
+    fn adjacent_complementary_pump_is_a_pressure_endpoint() {
+        let ends = reach_toward([0, 0, 0], Dir::East, 32.0, false, |_, _| {
+            Cell::Pump(Dir::East)
+        });
+        assert_eq!(ends.len(), 1);
+        assert_eq!(ends[0].kind, Endpoint::Pump);
+        assert_eq!(ends[0].distance, 0);
+    }
+
     // Java issue #67 witness: empty cauldron west, player looking south.
     // FluidPipeBlock.updateBlockState opens west and its opposite (mask 48).
     #[test]
@@ -997,9 +1094,9 @@ mod tests {
 
     #[test]
     fn vanilla_target_is_an_open_transport_endpoint() {
-        let ends = reach([0, 0, 0], Dir::East, 32.0, |_| Cell::VanillaTarget);
+        let ends = reach([0, 0, 0], Dir::East, 32.0, false, |_| Cell::VanillaTarget);
         assert_eq!(ends.len(), 1);
-        assert!(!ends[0].tank);
+        assert!(ends[0].kind == Endpoint::Open);
         assert_eq!(ends[0].pressure, 32.0);
     }
 
@@ -1069,7 +1166,11 @@ mod tests {
     fn end(pos: [i32; 3], tank: bool, pressure: f32) -> End {
         End {
             pos,
-            tank,
+            kind: if tank {
+                Endpoint::Handler
+            } else {
+                Endpoint::Open
+            },
             pressure,
             blocked: false,
             only: None,
@@ -1149,7 +1250,7 @@ mod tests {
                 _ => Cell::Solid,
             }
         };
-        let pull = ways([0, 0, 0], Dir::West, cell(false));
+        let pull = ways([0, 0, 0], Dir::West, false, cell(false));
         assert_eq!(pull.len(), 1);
         assert_eq!(pull[0].0, [-2, 0, 0]);
         assert_eq!(
@@ -1161,15 +1262,15 @@ mod tests {
                 gate: Gate::Open
             }]
         );
-        let push = ways([0, 0, 0], Dir::East, cell(false));
+        let push = ways([0, 0, 0], Dir::East, false, cell(false));
         assert_eq!(push[0].0, [3, 0, 0]);
         assert_eq!(push[0].1.len(), 2);
         assert_eq!(
             (push[0].1[1].pos, push[0].1[1].back, push[0].1[1].on),
             ([2, 0, 0], Dir::West, Dir::East)
         );
-        let from = reach([0, 0, 0], Dir::West, 128.0, cell(false))[0];
-        let to = reach([0, 0, 0], Dir::East, 128.0, cell(false))[0];
+        let from = reach([0, 0, 0], Dir::West, 128.0, false, cell(false))[0];
+        let to = reach([0, 0, 0], Dir::East, 128.0, false, cell(false))[0];
         let push_ways = vec![(to, push[0].1.clone())];
         let f = flows(
             [0, 0, 0],
@@ -1197,7 +1298,7 @@ mod tests {
         assert_eq!((last.start, last.order), (7.0, 7));
         assert_eq!(last.progress(7.5), 0.5);
         // A closed valve holds the flow in the pipe before it.
-        let push = ways([0, 0, 0], Dir::East, cell(true));
+        let push = ways([0, 0, 0], Dir::East, false, cell(true));
         let push_ways = vec![(to, push[0].1.clone())];
         let f = flows(
             [0, 0, 0],
@@ -1224,7 +1325,7 @@ mod tests {
             [-2, 0, 0] => Cell::Open,
             _ => Cell::Solid,
         };
-        let front = reach([0, 0, 0], Dir::East, 16.0, cell);
+        let front = reach([0, 0, 0], Dir::East, 16.0, false, cell);
         assert_eq!(
             front,
             vec![End {
@@ -1232,7 +1333,7 @@ mod tests {
                 ..end([4, 0, 0], true, 16.0)
             }]
         );
-        let back = reach([0, 0, 0], Dir::West, 16.0, cell);
+        let back = reach([0, 0, 0], Dir::West, 16.0, false, cell);
         assert_eq!(
             back,
             vec![End {
@@ -1248,7 +1349,7 @@ mod tests {
             _ => Cell::Solid,
         };
         assert_eq!(
-            reach([0, 0, 0], Dir::West, 16.0, bare),
+            reach([0, 0, 0], Dir::West, 16.0, false, bare),
             vec![end([-1, 0, 0], false, 16.0)]
         );
         // Two ends at the same distance share the pressure.
@@ -1258,7 +1359,7 @@ mod tests {
             [0, 0, 0] => Cell::Pump(Dir::East),
             _ => Cell::Solid,
         };
-        let ends = reach([0, 0, 0], Dir::East, 16.0, fork);
+        let ends = reach([0, 0, 0], Dir::East, 16.0, false, fork);
         assert_eq!(ends.len(), 2);
         assert!(ends.iter().all(|e| e.pressure == 8.0));
     }
@@ -1278,7 +1379,7 @@ mod tests {
                 _ => Cell::Solid,
             }
         };
-        let open = reach([0, 0, 0], Dir::East, 32.0, line(Gate::Open));
+        let open = reach([0, 0, 0], Dir::East, 32.0, false, line(Gate::Open));
         assert_eq!(
             open,
             vec![End {
@@ -1287,17 +1388,23 @@ mod tests {
             }]
         );
         assert!(open[0].passes(Fluid::Lava));
-        let shut = reach([0, 0, 0], Dir::East, 32.0, line(Gate::Closed));
+        let shut = reach([0, 0, 0], Dir::East, 32.0, false, line(Gate::Closed));
         assert_eq!(shut.len(), 1);
         assert!(shut[0].blocked && !shut[0].passes(Fluid::Water));
-        let water_only = reach([0, 0, 0], Dir::East, 32.0, line(Gate::Only(Fluid::Water)));
+        let water_only = reach(
+            [0, 0, 0],
+            Dir::East,
+            32.0,
+            false,
+            line(Gate::Only(Fluid::Water)),
+        );
         assert!(water_only[0].passes(Fluid::Water) && !water_only[0].passes(Fluid::Lava));
         // A port facing away from the pipe is no end.
         let wrong_side = |p: [i32; 3]| match p {
             [1, 0, 0] => Cell::Port(Dir::East),
             _ => Cell::Solid,
         };
-        assert!(reach([0, 0, 0], Dir::East, 32.0, wrong_side).is_empty());
+        assert!(reach([0, 0, 0], Dir::East, 32.0, false, wrong_side).is_empty());
         // Two filters for different fluids on the way: nothing passes.
         let two = |p: [i32; 3]| match p {
             [1, 0, 0] => Cell::Axis(Axis::X, Gate::Only(Fluid::Water)),
@@ -1305,7 +1412,7 @@ mod tests {
             [3, 0, 0] => Cell::Tank,
             _ => Cell::Solid,
         };
-        assert!(reach([0, 0, 0], Dir::East, 32.0, two)[0].blocked);
+        assert!(reach([0, 0, 0], Dir::East, 32.0, false, two)[0].blocked);
     }
 
     #[test]
@@ -1400,7 +1507,7 @@ mod tests {
         assert!((flow_speed(16.0) - 0.152_343_75).abs() < 1e-6);
         let at = |distance: i32, pressure: f32| End {
             pos: [0; 3],
-            tank: true,
+            kind: Endpoint::Handler,
             pressure,
             blocked: false,
             only: None,
