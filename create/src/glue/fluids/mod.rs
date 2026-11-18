@@ -266,7 +266,8 @@ impl Subsystem for Fluids {
         r.item_part(tank, place::TankItem);
     }
 
-    fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
+    fn chunk_load(&self, lv: &mut ServerLevel<'_>, chunk: [i32; 2], data: &Compound) {
+        flows::forget_column(lv.dim, chunk);
         let tanks = tanks_from_nbt(data);
         let dim = lv.dim;
         with_world(|w| w.load_tanks(dim, tanks.into_iter()));
@@ -341,6 +342,7 @@ impl Subsystem for Fluids {
 
     /// The pipes beside a Create block that changed draw their pieces again (`rims`).
     fn block_changed(&self, dim: usize, pos: [i32; 3], _old: u32, new: u32) {
+        flows::forget(dim, pos);
         engine::changed(dim, pos, new);
         rims::changed(dim, pos);
     }

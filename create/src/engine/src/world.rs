@@ -4396,6 +4396,21 @@ impl CreateWorld {
         Some(b.data.fill(fluid == crate::tank::Fluid::Water, amount))
     }
 
+    /// BoilerFluidHandler.fill(SIMULATE) validates the same resource without
+    /// contributing to gatheredSupply.
+    pub fn simulate_fill_boiler(
+        &self,
+        dim: usize,
+        tank: [i32; 3],
+        fluid: crate::tank::Fluid,
+        amount: u32,
+    ) -> Option<u32> {
+        let d = &self.dims[dim];
+        let controller = d.tanks.controller(tank)?;
+        let mut data = d.boilers.get(&controller)?.data.clone();
+        Some(data.fill(fluid == crate::tank::Fluid::Water, amount))
+    }
+
     /// Whether the tank at `tank` is a boiler (its fluid handler is the boiler's: nothing can be
     /// drawn from it).
     pub fn is_boiler(&self, dim: usize, tank: [i32; 3]) -> bool {
@@ -6886,6 +6901,17 @@ mod tests {
         assert_eq!(w.dims[0].shaft_engine.get(&shaft), Some(&engine));
         // As a 2x2x2 tank, a seething burner and 20 mB a tick: level 2, full efficiency.
         w.dims[0].boilers.get_mut(&tank).unwrap().size = 8;
+        let supply_before = w.dims[0].boilers[&tank].data.gathered_supply;
+        assert_eq!(
+            w.simulate_fill_boiler(0, tank, crate::tank::Fluid::Water, 100),
+            Some(100)
+        );
+        assert_eq!(
+            w.simulate_fill_boiler(0, tank, crate::tank::Fluid::Lava, 100),
+            Some(0)
+        );
+        assert_eq!(w.dims[0].boilers[&tank].data.gathered_supply, supply_before);
+
         assert_eq!(
             w.fill_boiler(0, tank, crate::tank::Fluid::Water, 100),
             Some(100)

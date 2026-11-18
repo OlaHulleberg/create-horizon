@@ -207,6 +207,17 @@ impl Host for TransportHost<'_, '_> {
             .flatten()
             .unwrap_or(0.)
     }
+    fn tank_fluids(&self, face: Face) -> Vec<Fluid> {
+        if !self.0.is_loaded(face.connected()) {
+            return Vec::new();
+        }
+        super::fluid_handler_tanks(self.0, face.connected())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|slot| slot.amount > 0)
+            .filter_map(|slot| slot.fluid)
+            .collect()
+    }
     fn offer(
         &mut self,
         face: Face,
@@ -334,8 +345,11 @@ impl Host for TransportHost<'_, '_> {
             return create_engine::basin::fill(&mut t.input, fluid, n);
         }
         with_world(|w| {
-            if w.dims[dim].plumbing.creative.contains_key(&pos) || w.is_boiler(dim, pos) {
+            if w.dims[dim].plumbing.creative.contains_key(&pos) {
                 return n;
+            }
+            if let Some(took) = w.simulate_fill_boiler(dim, pos, fluid, n) {
+                return took;
             }
             if let Some(s) = w.dims[dim].spouts.get(&pos) {
                 return create_engine::spout::fill(&mut s.clone(), fluid, n);

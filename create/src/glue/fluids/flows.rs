@@ -26,16 +26,22 @@ pub const FLOW_FLUIDS: &str = "Flow_fluids";
 const PER_FLOW: usize = 7;
 
 type At = (usize, [i32; 3]);
-type Published = (
-    Vec<i32>,
-    Codes,
-    Vec<(Dir, create_engine::fluids::transport::SavedConnection)>,
-);
+type Published = Vec<(Dir, create_engine::fluids::transport::SavedConnection)>;
 thread_local! {
     static SHOWN: RefCell<HashMap<At,Published>> = RefCell::new(HashMap::new());
 }
 pub(super) fn reset() {
     SHOWN.with_borrow_mut(HashMap::clear);
+}
+pub(super) fn forget(dim: usize, pos: [i32; 3]) {
+    SHOWN.with_borrow_mut(|s| {
+        s.remove(&(dim, pos));
+    });
+}
+pub(super) fn forget_column(dim: usize, chunk: [i32; 2]) {
+    SHOWN.with_borrow_mut(|s| {
+        s.retain(|(d, p), _| *d != dim || (p[0] >> 4, p[2] >> 4) != (chunk[0], chunk[1]))
+    });
 }
 pub(super) fn has_flow(dim: usize, pos: [i32; 3]) -> bool {
     with_world(|w| {
@@ -72,6 +78,10 @@ pub(super) fn send(lv: &mut ServerLevel<'_>) {
     })
     .unwrap_or_default();
     for (pos, b) in records {
+        let saved = b.write();
+        if SHOWN.with_borrow(|s| s.get(&(dim, pos)).is_some_and(|old| *old == saved)) {
+            continue;
+        }
         let mut v = Vec::new();
         let mut codes = Codes::default();
         for (d, c) in &b.interfaces {
@@ -88,12 +98,6 @@ pub(super) fn send(lv: &mut ServerLevel<'_>) {
                 speed.to_bits() as i32,
                 i32::MAX,
             ]);
-        }
-        if SHOWN.with_borrow(|s| {
-            s.get(&(dim, pos))
-                .is_some_and(|old| old.0 == v && old.1 == codes && old.2 == b.write())
-        }) {
-            continue;
         }
         let Some(entity) = lv.host.block_entity(lv.level, pos) else {
             continue;
@@ -112,7 +116,7 @@ pub(super) fn send(lv: &mut ServerLevel<'_>) {
         );
         let _ = entity.merge_data(&mut *lv.host, data);
         SHOWN.with_borrow_mut(|s| {
-            s.insert((dim, pos), (v, codes, b.write()));
+            s.insert((dim, pos), saved);
         });
     }
 }

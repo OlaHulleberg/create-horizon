@@ -29,6 +29,36 @@ pub trait Host {
     }
     fn speed(&self, pos: Pos) -> f32;
     fn time(&self) -> i64;
+    fn tank_fluids(&self, face: Face) -> Vec<Fluid>;
+    /// FlowSource.provideFluid first probes a generic drain. A rejected probe
+    /// may only fall back to matching fluid actually exposed in the handler's tanks.
+    fn provide_fluid(&mut self, face: Face, source: &mut Source, gate: Gate) -> Option<Fluid> {
+        let accepts = |fluid: Option<Fluid>| match gate {
+            Gate::Open => true,
+            Gate::Closed => false,
+            Gate::Only(wanted) => fluid == Some(wanted),
+        };
+        let immediate = self.offer(face, source, 1, None).map(|(fluid, _)| fluid);
+        if accepts(immediate) {
+            return immediate;
+        }
+        let contained = match source {
+            Source::Open(open) => open
+                .state()
+                .tank
+                .filter(|(_, n)| *n > 0)
+                .map(|(f, _)| vec![f])
+                .unwrap_or_default(),
+            Source::Handler => self.tank_fluids(face),
+            _ => Vec::new(),
+        };
+        for fluid in contained {
+            if accepts(Some(fluid)) {
+                return self.offer(face, source, 1, Some(fluid)).map(|(f, _)| f);
+            }
+        }
+        None
+    }
     fn offer(
         &mut self,
         face: Face,
@@ -433,11 +463,11 @@ impl Transport {
                                 .connection(face.opposite())
                                 .and_then(|c| c.provided_fluid(false)),
                             Some(mut source @ (Source::Handler | Source::Open(_))) => {
-                                let only = match host.cell(pos, face.side) {
-                                    Cell::Axis(_, Gate::Only(f)) => Some(f),
-                                    _ => None,
+                                let gate = match host.cell(pos, face.side) {
+                                    Cell::Axis(_, gate) => gate,
+                                    _ => Gate::Open,
                                 };
-                                let fluid = host.offer(face, &mut source, 1, only).map(|(f, _)| f);
+                                let fluid = host.provide_fluid(face, &mut source, gate);
                                 self.connection_mut(face)?.source = Some(source);
                                 fluid
                             }
@@ -709,13 +739,28 @@ mod tests {
         fn speed(&self, _: Pos) -> f32 {
             32.
         }
+        fn tank_fluids(&self, face: Face) -> Vec<Fluid> {
+            self.tanks
+                .get(&face.connected())
+                .filter(|(_, n)| *n > 0)
+                .map(|(f, _)| vec![*f])
+                .unwrap_or_default()
+        }
         fn offer(
             &mut self,
             f: Face,
-            _: &mut Source,
+            source: &mut Source,
             n: u32,
             fluid: Option<Fluid>,
         ) -> Option<(Fluid, u32)> {
+            if let Source::Open(open) = source
+                && let Some((f, have)) = open
+                    .state()
+                    .tank
+                    .filter(|(f, _)| fluid.is_none_or(|wanted| wanted == *f))
+            {
+                return Some((f, have.min(n)));
+            }
             self.tanks
                 .get(&f.connected())
                 .copied()
@@ -747,6 +792,39 @@ mod tests {
         }
         transport
     }
+    #[test]
+    fn extraction_filter_does_not_bypass_an_open_ends_retained_fluid() {
+        let mut world = World::default();
+        world.cells.extend([
+            ([-1, 0, 0], Cell::Open),
+            (
+                [0, 0, 0],
+                Cell::Axis(crate::kinetics::Axis::X, Gate::Only(Fluid::Water)),
+            ),
+        ]);
+        world.tanks.insert([-1, 0, 0], (Fluid::Water, 1000));
+        let mut transport = register(&world);
+        let pipe = transport.pipes.get_mut(&[0, 0, 0]).unwrap();
+        pipe.phase = UpdatePhase::Idle;
+        let c = pipe.connection(Dir::West).unwrap();
+        c.add_pressure(true, 32.);
+        c.set_source(Source::open(crate::open_end::OpenEnd {
+            tank: Some((Fluid::Honey, 500)),
+            pulling: true,
+        }));
+        transport.tick_pipe(&mut world, [0, 0, 0]);
+        assert!(
+            transport
+                .connection(Face {
+                    pos: [0, 0, 0],
+                    side: Dir::West
+                })
+                .unwrap()
+                .flow
+                .is_none()
+        );
+    }
+
     #[test]
     fn a_lone_input_cannot_supply_its_own_outward_flow() {
         let mut host = World::default();
