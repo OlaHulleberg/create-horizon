@@ -54,7 +54,13 @@ pub fn extras(lv: &ServerLevel<'_>, car: u32, entity: &Compound) -> Vec<Extra> {
                         &mut r, block, &info, [0; 3],
                     );
                 }
-                crate::glue::logistics::client::draw_riding_items(&mut r, host, block, entity);
+                crate::glue::logistics::client::draw_riding_items(
+                    &mut r,
+                    host,
+                    &crate::glue::logistics::client::DisplayItemLayout,
+                    block,
+                    entity,
+                );
                 r.out
             }
             Block::Basin | Block::MechanicalCrafter => {
