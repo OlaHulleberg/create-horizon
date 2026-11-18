@@ -232,6 +232,16 @@ impl Host for TransportHost<'_, '_> {
             .flatten()
             .unwrap_or(0.)
     }
+    fn notifies_pipe_neighbours(&self, pos: [i32; 3]) -> bool {
+        create_engine::fluids::notifies_pipe_neighbours(
+            info_at(self.0, pos).map(|(b, _)| b),
+            self.0
+                .block_name(pos)
+                .and_then(|s| Fluid::of_id(&s))
+                .is_some_and(|f| f.placeable()),
+        )
+    }
+
     fn tank_fluids(&self, face: Face) -> Vec<Fluid> {
         if !self.0.is_loaded(face.connected()) {
             return Vec::new();
@@ -500,7 +510,10 @@ pub(super) fn chunk_load(dim: usize, data: &Compound) {
                         pulling: c[6] != 0,
                     }));
                 }
-                w.dims[dim].fluid_transport.changed.push(pos);
+                w.dims[dim]
+                    .fluid_transport
+                    .changed
+                    .push(create_engine::fluids::runtime::Change::Pipe(pos));
             });
         }
     }

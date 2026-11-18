@@ -30,6 +30,12 @@ pub trait Host {
     fn speed(&self, pos: Pos) -> f32;
     fn time(&self) -> i64;
     fn tank_fluids(&self, face: Face) -> Vec<Fluid>;
+    fn notifies_pipe_neighbours(&self, pos: Pos) -> bool {
+        !matches!(
+            self.cell(pos, Dir::Down),
+            Cell::Pipe(_) | Cell::Axis(..) | Cell::Pump(_)
+        )
+    }
     /// FlowSource.provideFluid first probes a generic drain. A rejected probe
     /// may only fall back to matching fluid actually exposed in the handler's tanks.
     fn provide_fluid(&mut self, face: Face, source: &mut Source, gate: Gate) -> Option<Fluid> {
@@ -86,13 +92,21 @@ pub struct Pump {
     pub speed: f32,
     pub pending: u8,
 }
+/// A behaviour callback directly propagates its pipe; a block change also
+/// runs the pipe neighbours' class-specific neighbourChanged admission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Change {
+    Pipe(Pos),
+    Block(Pos),
+}
+
 /// Owned per dimension; each pipe owns its side interfaces and each inbound
 /// endpoint connection owns its network. No endpoint paths or pump clocks.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Transport {
     pub pipes: HashMap<Pos, FluidTransportBehaviour>,
     pub pumps: HashMap<Pos, Pump>,
-    pub changed: Vec<Pos>,
+    pub changed: Vec<Change>,
 }
 pub fn sides(cell: Cell) -> u8 {
     match cell {
@@ -133,7 +147,7 @@ impl Transport {
     pub fn remove(&mut self, pos: Pos) {
         self.pipes.remove(&pos);
         self.pumps.remove(&pos);
-        self.changed.push(pos);
+        self.changed.push(Change::Block(pos));
     }
     pub fn connection(&self, face: Face) -> Option<&super::transport::PipeConnection> {
         self.pipes
@@ -201,12 +215,25 @@ impl Transport {
         self.pumps
             .retain(|p, _| matches!(host.cell(*p, Dir::Down), Cell::Pump(_)));
         let changed = std::mem::take(&mut self.changed);
-        for pos in changed {
+        for change in changed {
+            let pos = match change {
+                Change::Pipe(p) | Change::Block(p) => p,
+            };
             if self.pipes.contains_key(&pos) {
                 self.propagate_changed_pipe(host, pos);
-            } else {
+            }
+            if matches!(change, Change::Block(_)) && host.notifies_pipe_neighbours(pos) {
                 for side in Dir::ALL {
-                    self.propagate_changed_pipe(host, step(pos, side));
+                    let next = step(pos, side);
+                    let cell = host.cell(next, side);
+                    let straight = match cell {
+                        Cell::Pipe(mask) => super::straight_axis(mask).is_some(),
+                        Cell::Encased(_) | Cell::Axis(..) | Cell::Pump(_) => true,
+                        _ => false,
+                    };
+                    if straight && sides(cell) & side.opposite().bit() != 0 {
+                        self.propagate_changed_pipe(host, next);
+                    }
                 }
             }
         }
@@ -796,6 +823,36 @@ mod tests {
         transport
     }
     #[test]
+    fn a_valves_shaft_neighbour_does_not_invalidate_its_fluid_axis() {
+        let mut world = World::default();
+        world
+            .cells
+            .insert([0, 0, 0], Cell::Axis(crate::kinetics::Axis::X, Gate::Open));
+        let mut transport = register(&world);
+        transport.pipes.get_mut(&[0, 0, 0]).unwrap().phase = UpdatePhase::Idle;
+        transport
+            .connection_mut(Face {
+                pos: [0, 0, 0],
+                side: Dir::West,
+            })
+            .unwrap()
+            .add_pressure(true, 32.);
+        transport.changed.push(Change::Block([0, 1, 0]));
+        transport.prepare(&world);
+        assert_eq!(transport.pipes[&[0, 0, 0]].phase, UpdatePhase::Idle);
+        assert_eq!(
+            transport
+                .connection(Face {
+                    pos: [0, 0, 0],
+                    side: Dir::West
+                })
+                .unwrap()
+                .pressure(),
+            [32., 0.]
+        );
+    }
+
+    #[test]
     fn changing_one_pump_side_does_not_wipe_the_other_side() {
         let mut world = World::default();
         world.cells.extend([
@@ -812,7 +869,7 @@ mod tests {
         transport.pumps.get_mut(&[0, 0, 0]).unwrap().pending = 0;
         transport.distribute_pressure_to(&world, [0, 0, 0], Dir::West, true);
         transport.pipes.get_mut(&[-1, 0, 0]).unwrap().phase = UpdatePhase::Idle;
-        transport.changed.push([1, 0, 0]);
+        transport.changed.push(Change::Pipe([1, 0, 0]));
         transport.prepare(&world);
         assert_eq!(
             transport

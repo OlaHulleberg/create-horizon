@@ -14,6 +14,22 @@ use crate::tank::Fluid;
 /// `mechanicalPumpRange`.
 pub const PUMP_RANGE: i32 = 16;
 
+/// FluidPropagator.validateNeighbourChange ignores LiquidBlock and the pipe
+/// subclasses which schedule their own propagation. FluidValveBlock and
+/// EncasedPipeBlock implement pipe interfaces without extending AxisPipeBlock.
+pub fn notifies_pipe_neighbours(block: Option<crate::Block>, liquid: bool) -> bool {
+    !liquid
+        && !matches!(
+            block,
+            Some(
+                crate::Block::FluidPipe
+                    | crate::Block::GlassFluidPipe
+                    | crate::Block::SmartFluidPipe
+                    | crate::Block::MechanicalPump
+            )
+        )
+}
+
 /// What a block is to the pipes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cell {
@@ -381,11 +397,12 @@ impl Pointer {
     /// `tick`: the pointer moves (`tickChaser`); the block opens once it reached 1 and shuts
     /// once at 0 (the new `enabled`, when it differs from `open`).
     pub fn tick(&mut self, open: bool) -> Option<bool> {
-        if self.moving() {
+        // Catnip LerpedFloat.tickChaser tests equality before LINEAR.chase;
+        // a small residual produced by this step remains until the next tick.
+        if (self.value - self.target).abs() < 1.0e-6 {
+            self.value = self.target;
+        } else if self.moving() {
             self.value += (self.target - self.value).clamp(-self.speed, self.speed);
-            if (self.value - self.target).abs() < 1.0e-6 {
-                self.value = self.target;
-            }
         }
         if open && self.value == 0.0 {
             Some(false)
@@ -792,6 +809,38 @@ mod tests {
         assert_eq!(p.tick(true), Some(false));
         assert_eq!(pointer_offset(Axis::Y, Axis::Z), 90.0);
         assert_eq!(pointer_offset(Axis::Z, Axis::Y), 0.0);
+    }
+
+    #[test]
+    fn neighbour_notifications_follow_the_java_block_classes() {
+        use crate::Block;
+        for block in [
+            Block::FluidPipe,
+            Block::GlassFluidPipe,
+            Block::SmartFluidPipe,
+            Block::MechanicalPump,
+        ] {
+            assert!(!notifies_pipe_neighbours(Some(block), false));
+        }
+        for block in [Block::FluidValve, Block::EncasedFluidPipe] {
+            assert!(notifies_pipe_neighbours(Some(block), false));
+        }
+        assert!(!notifies_pipe_neighbours(None, true));
+        assert!(notifies_pipe_neighbours(None, false));
+    }
+
+    #[test]
+    fn a_valve_closes_after_the_linear_chaser_residual_tick() {
+        // Java at -64 RPM leaves a residual on subtraction five;
+        // Catnip tickChaser snaps it on the sixth turn.
+        let mut p = Pointer::at(true);
+        p.value = 1.;
+        p.speed_changed(-64.);
+        for _ in 0..5 {
+            assert_eq!(p.tick(true), None);
+        }
+        assert_eq!(p.value, 2.9802322e-8);
+        assert_eq!(p.tick(true), Some(false));
     }
 
     #[test]

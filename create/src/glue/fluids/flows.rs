@@ -13,10 +13,11 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-/// The key of a pipe's flows in its block entity's data: for each, its side (`Dir::ALL` index),
-/// fluid (`tank::Codes`, a potion's key kept beside it: `super::fluid_keys`), 1 when inbound and 2 when an open end, the game time its pump's flows
-/// started, when it starts after that and how far it grows a tick (`f32` bits), and the game time
-/// it goes (`i32::MAX`: not yet).
+/// Client flow samples: side (`Dir::ALL` index), fluid (`tank::Codes`, with
+/// potion keys in `FLOW_FLUIDS`), inbound/open-end flags, publication time,
+/// negative current progress divided by speed, speed bits, and an optional end
+/// time. Each sample comes from the live connection; the client interpolates
+/// its stored progress between publications.
 pub const FLOW: &str = "Flow";
 
 /// The key of the potions' keys beside `FLOW` (`super::fluid_keys`).

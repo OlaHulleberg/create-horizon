@@ -1385,6 +1385,23 @@ impl Kinetics {
         self.pending_events.extend(events);
     }
 
+    /// KineticBlockEntity.tick on a live subclass turn, including deferred
+    /// reattachment of earlier registered entities. Initialization-only callers
+    /// keep using tick_base_through; fluid behaviours need the full base turn.
+    pub fn tick_registered_base_through(&mut self, pos: [i32; 3]) {
+        if !self.at.contains_key(&pos) {
+            return;
+        }
+        let mut pending = self.order.walk_through(View::All, pos);
+        let mut events = Vec::new();
+        while let Some(pos) = pending.next(&self.order) {
+            for id in self.ordered_ports(pos).into_iter().filter(|&id| id != NONE) {
+                self.tick_base(id, self.now + 1, &mut events);
+            }
+        }
+        self.pending_events.extend(events);
+    }
+
     fn tick_base(&mut self, id: u32, tick: u64, events: &mut Vec<Event>) {
         if !self.nodes[id as usize].live
             || self.nodes[id as usize]
@@ -1599,6 +1616,24 @@ fn controls(controller: &Part, cog: &Part) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fluid_subclass_turn_attaches_live_earlier_kinetic_entities() {
+        let mut k = Kinetics::new();
+        let drive = [1, 0, 0];
+        let pump = [2, 0, 0];
+        k.set([0, 0, 0], 0, motor(Dir::East, 64.));
+        k.set(drive, 0, Part::shaft(Axis::X));
+        k.set(pump, 0, Part::shaft(Axis::X));
+        solve(&mut k);
+        k.advance();
+        // onPlace on a retained entity defers attachKinetics until its turn.
+        k.change_block_state(drive, 0, Part::shaft(Axis::X), false);
+        assert_eq!(k.speed(drive, 0), Some(0.));
+        k.tick_registered_base_through(pump);
+        assert_eq!(k.speed(drive, 0), Some(64.));
+        assert_eq!(k.speed(pump, 0), Some(64.));
+    }
 
     #[test]
     fn source_changed_after_base_callback_waits_for_next_pass() {

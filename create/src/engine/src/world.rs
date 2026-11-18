@@ -1379,7 +1379,10 @@ impl CreateWorld {
                 .is_some_and(|(block, _)| is_fluid_block(block))
         });
         if affects_fluid {
-            self.dims[dim].fluid_transport.changed.push(pos);
+            self.dims[dim]
+                .fluid_transport
+                .changed
+                .push(crate::fluids::runtime::Change::Block(pos));
         }
 
         if self
@@ -1706,7 +1709,9 @@ impl CreateWorld {
             if let Some((b, _)) = self.table.get(old)
                 && is_fluid_block(b)
             {
-                d.fluid_transport.changed.push(pos);
+                d.fluid_transport
+                    .changed
+                    .push(crate::fluids::runtime::Change::Block(pos));
                 for dir in crate::kinetics::Dir::ALL {
                     let o = dir.offset();
                     d.pipe_checks
@@ -2045,9 +2050,13 @@ impl CreateWorld {
                 .retain(|(p, _)| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.chain_checks
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.fluid_transport
-                .changed
-                .extend(d.fluid_transport.pipes.keys().copied());
+            d.fluid_transport.changed.extend(
+                d.fluid_transport
+                    .pipes
+                    .keys()
+                    .copied()
+                    .map(crate::fluids::runtime::Change::Pipe),
+            );
             d.plumbing.column_unloaded(cx, cz);
             d.mixing.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.mixer_checks
@@ -4825,7 +4834,7 @@ impl CreateWorld {
 
     /// KineticBlockEntity.tick precedes its FluidTransportBehaviour tick.
     pub fn fluid_transport_base_tick(&mut self, dim: usize, pos: [i32; 3]) {
-        self.dims[dim].kinetics.tick_base_through(pos);
+        self.dims[dim].kinetics.tick_registered_base_through(pos);
     }
 
     /// Pipe behaviours tick in Level.blockEntityTickers registration order.
