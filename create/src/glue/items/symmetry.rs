@@ -265,6 +265,9 @@ pub(super) fn placed(host: &mut dyn ServerHost, event: &EntityPlaceEvent) -> Opt
                     continue;
                 }
             }
+            let Ok(to) = lv.level.update_from_neighbour_shapes(lv.host, p, to) else {
+                continue;
+            };
             lv.set_state(p, to, update_all());
         }
     }
