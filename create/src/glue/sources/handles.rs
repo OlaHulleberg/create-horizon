@@ -193,29 +193,22 @@ pub(super) fn level_tick(lv: &mut ServerLevel<'_>) {
             continue;
         };
         let o = facing.opposite().offset();
-        let behind = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]].map(f64::from);
-        // The block behind's collision shape: any box within it.
-        const IN: f64 = 1.0 / 64.0;
-        let aabb = [
-            behind[0] + IN,
-            behind[1] + IN,
-            behind[2] + IN,
-            behind[0] + 1.0 - IN,
-            behind[1] + 1.0 - IN,
-            behind[2] + 1.0 - IN,
-        ];
+        let behind = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+        // HandCrankBlock.canSurvive reads this cell's shape, not neighbouring collisions.
         let empty = lv
-            .level
-            .collision_boxes(&*lv.host, aabb)
-            .is_some_and(|b| b.is_empty());
+            .block_state(behind)
+            .and_then(|state| {
+                lv.level
+                    .block_shape(&*lv.host, state, behind, mod_api::BlockShapeKind::Collision)
+            })
+            .is_some_and(|boxes| boxes.is_empty());
         if empty {
             lv.destroy_block(pos, true);
         }
     }
 }
 
-/// `HandCrankBlock.canSurvive` as one is placed: not against air or a fluid. (A level read here
-/// has no collision shapes; the neighbour check above has.)
+/// `HandCrankBlock.canSurvive`, inherited by ValveHandleBlock: any collision shape behind it.
 struct Supported;
 
 #[mod_api::sunrise_part]
@@ -225,18 +218,7 @@ impl BlockPart for Supported {
         let facing = with_world(|w| w.table.get(id).and_then(|(_, i)| i.facing)).flatten()?;
         let o = facing.opposite().offset();
         let p = [event.pos.x + o[0], event.pos.y + o[1], event.pos.z + o[2]];
-        let behind = level.block_state(p)?;
-        let name = level.state_block(behind)?;
-        let holds = !matches!(
-            name,
-            "minecraft:air"
-                | "minecraft:cave_air"
-                | "minecraft:void_air"
-                | "minecraft:water"
-                | "minecraft:lava"
-                | "minecraft:bubble_column"
-        );
-        (!holds).then_some(false)
+        level.collision_shape(p).map(|boxes| !boxes.is_empty())
     }
 }
 
