@@ -1199,6 +1199,7 @@ impl GripRender {
         self.pose = (0.0, false);
         if shows_grip {
             self.swing.observe(self.main_swing);
+            // `hold` uses tick-held stacks, not the old stack still shown as the hand lowers.
             self.pose = (self.swing.at(partial), !main && self.hold);
         }
     }
