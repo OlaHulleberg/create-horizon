@@ -62,26 +62,12 @@ pub fn filling(item: &str, fluid: Fluid, recipes: &[Filling]) -> Option<(u32, St
     fluid.bucket().map(|b| (BUCKET, b.to_owned()))
 }
 
-/// `whenItemHeld` and `tick` for a held `item`: what it became when it is filled now.
-pub fn step(s: &mut Spout, item: Option<&str>, recipes: &[Filling]) -> Option<String> {
+/// SpoutBlockEntity.tick advances its timer on the spout's own registration turn.
+/// Item callbacks run separately on the depot or belt controller's turn.
+pub fn tick(s: &mut Spout) {
     if s.processing >= 0 {
         s.processing -= 1;
     }
-    let item = item?;
-    if s.processing != -1 && s.processing != 5 {
-        return None;
-    }
-    let (fluid, have) = s.fluid?;
-    let (need, result) = filling(item, fluid, recipes)?;
-    if need > have {
-        return None;
-    }
-    if s.processing == -1 {
-        s.processing = FILLING_TIME;
-        return None;
-    }
-    s.fluid = (have > need).then_some((fluid, have - need));
-    Some(result)
 }
 
 /// `FillingBySpout.canItemBeFilled`: a filling recipe takes the item (with any fluid), or it is
@@ -102,7 +88,7 @@ pub enum OnBelt {
 
 /// The spout's belt callbacks, `onItemReceived` (not `locked`) and `whenItemHeld`: it holds a
 /// stack it can fill, starts its cycle when it has enough fluid, and fills one at the cycle's
-/// 5th-last tick (the cycle runs down in `step`).
+/// 5th-last tick (the cycle runs down in `tick`).
 pub fn on_belt(s: &mut Spout, item: &str, recipes: &[Filling], locked: bool) -> OnBelt {
     if locked && s.processing != -1 && s.processing != 5 {
         return OnBelt::Hold;
@@ -127,6 +113,19 @@ pub fn on_belt(s: &mut Spout, item: &str, recipes: &[Filling], locked: bool) -> 
     OnBelt::Fill(result)
 }
 
+/// DepotBehaviour.tick dispatches on the previous lock, then applies HOLD to the
+/// transported stack, including the replacement produced by convertToAndLeaveHeld.
+pub fn on_depot(
+    s: &mut Spout,
+    held: &mut crate::depot::Held,
+    item: &str,
+    recipes: &[Filling],
+) -> OnBelt {
+    let result = on_belt(s, item, recipes, held.locked);
+    held.locked = result != OnBelt::Pass;
+    result
+}
+
 /// Fluid put into the spout's tank: what it took.
 pub fn fill(s: &mut Spout, fluid: Fluid, amount: u32) -> u32 {
     if s.fluid.is_some_and(|f| f.0 != fluid) {
@@ -143,6 +142,46 @@ pub fn fill(s: &mut Spout, fluid: Fluid, amount: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn step(s: &mut Spout, item: Option<&str>, recipes: &[Filling]) -> Option<String> {
+        tick(s);
+        match on_belt(s, item?, recipes, true) {
+            OnBelt::Fill(out) => Some(out),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn depot_receives_before_starting_and_keeps_the_filled_item_locked() {
+        let mut s = Spout::default();
+        fill(&mut s, Fluid::Water, 1000);
+        let mut held = crate::depot::Held::new(0, false);
+        assert_eq!(
+            on_depot(&mut s, &mut held, "minecraft:bucket", &[]),
+            OnBelt::Hold
+        );
+        assert!(held.locked);
+        assert_eq!(s.processing, -1);
+        assert_eq!(
+            on_depot(&mut s, &mut held, "minecraft:bucket", &[]),
+            OnBelt::Hold
+        );
+        assert_eq!(s.processing, 20);
+        for _ in 0..15 {
+            step(&mut s, None, &[]);
+        }
+        assert_eq!(
+            on_depot(&mut s, &mut held, "minecraft:bucket", &[]),
+            OnBelt::Fill("minecraft:water_bucket".into())
+        );
+        assert!(held.locked);
+        step(&mut s, None, &[]);
+        assert_eq!(
+            on_depot(&mut s, &mut held, "minecraft:water_bucket", &[]),
+            OnBelt::Hold
+        );
+        assert!(held.locked);
+    }
 
     #[test]
     fn a_bucket_is_filled_after_the_cycle() {

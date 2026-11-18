@@ -452,6 +452,16 @@ pub struct Item {
 }
 
 impl Item {
+    /// TransportedItemStack.copy/getSimilar preserves the transported stack's motion
+    /// and processing data, but starts a new stack without transient locks.
+    pub fn processing_copy(&self) -> Self {
+        let mut copy = self.clone();
+        copy.locked = false;
+        copy.at_funnel = false;
+        copy.stalled = false;
+        copy
+    }
+
     /// `new TransportedItemStack(stack)`.
     pub fn new(item: &str, count: u8, angle: i32, upright: bool) -> Item {
         let angle = if upright { 180 } else { angle };
@@ -1143,6 +1153,8 @@ impl Inventory {
                         Step::Removed => return false,
                         Step::Replaced => return false,
                         Step::Held => {
+                            let still = current == item.position;
+                            set_stalled(&mut item, still, &mut out);
                             return true;
                         }
                         Step::Free => {}
@@ -1524,6 +1536,17 @@ pub fn decode(mut d: &[u8]) -> Vec<Contents> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn processing_copy_clears_the_source_stack_lock() {
+        let mut item = Item::new("minecraft:bucket", 1, 0, false);
+        item.locked = true;
+        item.position = 2.5019531;
+        let copy = item.processing_copy();
+        assert!(!copy.locked);
+        assert_eq!(copy.position, item.position);
+        assert!(item.locked);
+    }
 
     #[test]
     fn a_belt_carries_what_stands_on_top_of_it_its_way() {

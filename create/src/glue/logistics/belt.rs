@@ -728,11 +728,28 @@ pub fn tick_transport(lv: &mut ServerLevel<'_>) {
     for (c, seg, length, item) in drops {
         eject_item(lv, c, &seg, length, 0.0, &item);
     }
+    let pipes_changed = crate::glue::fluids::pipes::tick_pipes(lv);
     let Some(mut phase) = with_world(|w| w.transport_ticks(dim)) else {
         return;
     };
     while let Some(turn) = with_world(|w| phase.next(w)).flatten() {
         let c = match turn {
+            create_engine::world::TransportTick::Spout(p) => {
+                with_world(|w| {
+                    if let Some(s) = w.dims[dim].spouts.get_mut(&p) {
+                        create_engine::spout::tick(s);
+                    }
+                });
+                continue;
+            }
+            create_engine::world::TransportTick::Drain(p) => {
+                crate::glue::fluids::machines::tick_drain(lv, p);
+                continue;
+            }
+            create_engine::world::TransportTick::Pump(p) => {
+                crate::glue::fluids::pipes::tick_pump(lv, p, pipes_changed);
+                continue;
+            }
             create_engine::world::TransportTick::Depot(p) => {
                 super::depot::tick_depot(lv, p);
                 continue;
@@ -843,6 +860,7 @@ pub fn tick_transport(lv: &mut ServerLevel<'_>) {
             }
         }
     }
+    crate::glue::fluids::pipes::finish_ticks(lv);
 }
 
 thread_local! {

@@ -52,95 +52,103 @@ fn step_filling(item: &str, a: &sequenced::Assembly, fluid: Fluid, amount: u32) 
 /// held item is filled after the 20-tick cycle (at its 5th-last tick); a sequenced assembly's
 /// filling step first, when the spout holds that step's fluid, the step done as processing does
 /// it on a depot.
-pub(super) fn tick_spouts(lv: &mut ServerLevel<'_>) {
+pub(crate) fn spout_on_depot(lv: &mut ServerLevel<'_>, depot: [i32; 3]) {
     let dim = lv.dim;
-    let spouts: Vec<([i32; 3], spout::Spout)> = with_world(|w| {
-        w.dims[dim]
-            .spouts
-            .iter()
-            .filter(|(_, s)| s.fluid.is_some() || s.processing >= 0)
-            .map(|(p, s)| (*p, *s))
-            .collect()
-    })
-    .unwrap_or_default();
-    if spouts.is_empty() || !recipes::ready() {
+    let pos = [depot[0], depot[1] + 2, depot[2]];
+    let Some(mut s) = with_world(|w| w.dims[dim].spouts.get(&pos).copied()).flatten() else {
+        return;
+    };
+    let Some(mut held_state) =
+        with_world(|w| w.dims[dim].depots.get(&depot).copied().flatten()).flatten()
+    else {
+        return;
+    };
+    // DepotBehaviour.tick tests arrival before dispatching received/held callbacks.
+    if !recipes::ready() || (!held_state.locked && lv.blocked([depot[0], depot[1] + 1, depot[2]])) {
         return;
     }
-    for (pos, mut s) in spouts {
-        let before = s.fluid;
-        let depot = [pos[0], pos[1] - 2, pos[2]];
-        let on_depot = with_world(|w| w.dims[dim].depots.contains_key(&depot)).unwrap_or(false);
-        let entity = on_depot
-            .then(|| lv.host.block_entity(lv.level, depot))
-            .flatten();
-        // The depot's held stack (slot 0).
-        let held = entity
-            .and_then(|e| e.item_slot(&*lv.host, 0).ok().flatten())
-            .map(|stack| (item_name(&*lv.host, &stack), stack.count()));
-        let sequenced = held
-            .as_ref()
-            .and_then(|_| processing::sequenced_on_depot(lv, depot, "create:filling", None))
-            .and_then(|(a, progress, step)| {
-                let (fluid, amount) = step.fluid?;
-                let fluid = Fluid::of_id(&fluid)?;
-                (s.fluid.map(|f| f.0) == Some(fluid)).then_some((a, progress, fluid, amount))
-            });
-        let filled = recipes::with(|r| {
-            let item = held.as_ref().map(|h| h.0.as_str());
-            match &sequenced {
-                Some((a, _, fluid, amount)) => {
-                    let step = step_filling(item?, a, *fluid, *amount);
-                    spout::step(&mut s, item, &step)
-                }
-                None => spout::step(&mut s, item, &r.filling),
+    let before = s.fluid;
+    let was_locked = held_state.locked;
+    let entity = lv.host.block_entity(lv.level, depot);
+    // The depot's held stack (slot 0).
+    let held = entity
+        .and_then(|e| e.item_slot(&*lv.host, 0).ok().flatten())
+        .map(|stack| (item_name(&*lv.host, &stack), stack.count()));
+    let sequenced = held
+        .as_ref()
+        .and_then(|_| processing::sequenced_on_depot(lv, depot, "create:filling", None))
+        .and_then(|(a, progress, step)| {
+            let (fluid, amount) = step.fluid?;
+            let fluid = Fluid::of_id(&fluid)?;
+            (s.fluid.map(|f| f.0) == Some(fluid)).then_some((a, progress, fluid, amount))
+        });
+    let filled = recipes::with(|r| {
+        let item = held.as_ref().map(|h| h.0.as_str());
+        match &sequenced {
+            Some((a, _, fluid, amount)) => {
+                let step = step_filling(item?, a, *fluid, *amount);
+                item.map(|item| spout::on_depot(&mut s, &mut held_state, item, &step))
             }
-        })
-        .flatten();
-        if let (Some(out), Some(_)) = (&filled, &held) {
-            crate::glue::advancements::spouted(lv, pos, out);
+            None => item.map(|item| spout::on_depot(&mut s, &mut held_state, item, &r.filling)),
         }
-        match (filled, &sequenced, held, entity) {
-            (Some(_), Some((a, progress, _, _)), Some((_, count)), _) => {
-                let state =
-                    with_world(|w| w.dims[dim].depots.get(&depot).copied().flatten()).flatten();
-                if let Some(state) = state {
-                    let count = count.min(255) as u8;
-                    let next = processing::sequenced_step_on_depot(
-                        lv,
-                        depot,
-                        count,
-                        state,
-                        a,
-                        progress.as_ref(),
-                    );
-                    with_world(|w| {
-                        if let Some(h) = w.dims[dim].depots.get_mut(&depot) {
-                            *h = Some(next);
-                        }
-                    });
-                }
+    })
+    .flatten();
+    let locked = held_state.locked;
+    let filled = match filled {
+        Some(spout::OnBelt::Fill(out)) => Some(out),
+        _ => None,
+    };
+    if let (Some(out), Some(_)) = (&filled, &held) {
+        crate::glue::advancements::spouted(lv, pos, out);
+    }
+    match (filled, &sequenced, held, entity) {
+        (Some(_), Some((a, progress, _, _)), Some((_, count)), _) => {
+            let state = with_world(|w| w.dims[dim].depots.get(&depot).copied().flatten()).flatten();
+            if let Some(state) = state {
+                let count = count.min(255) as u8;
+                let next = processing::sequenced_step_on_depot(
+                    lv,
+                    depot,
+                    count,
+                    state,
+                    a,
+                    progress.as_ref(),
+                );
+                with_world(|w| {
+                    if let Some(h) = w.dims[dim].depots.get_mut(&depot) {
+                        *h = Some(next);
+                    }
+                });
             }
-            (Some(out), None, Some((item, count)), Some(entity)) => {
-                if let Some(over) = fill_held(lv.host, entity, &item, count, &out) {
-                    // `applyToAllItems`: what the outputs can't take is dropped on the depot.
-                    let c = depot.map(f64::from);
-                    let _ = lv.level.spawn_item(
-                        &mut *lv.host,
-                        c[0] + 0.5,
-                        c[1] + 1.0,
-                        c[2] + 0.5,
-                        over,
-                        10,
-                    );
-                }
-                with_world(|w| w.depot_changed(dim, depot));
+        }
+        (Some(out), None, Some((item, count)), Some(entity)) => {
+            if let Some(over) = fill_held(lv.host, entity, &item, count, &out) {
+                // `applyToAllItems`: what the outputs can't take is dropped on the depot.
+                let c = depot.map(f64::from);
+                let _ = lv.level.spawn_item(
+                    &mut *lv.host,
+                    c[0] + 0.5,
+                    c[1] + 1.0,
+                    c[2] + 0.5,
+                    over,
+                    10,
+                );
             }
-            _ => {}
+            with_world(|w| w.depot_changed(dim, depot));
         }
-        with_world(|w| w.dims[dim].spouts.insert(pos, s));
-        if s.fluid != before {
-            analog_touched(dim, pos);
+        _ => {}
+    }
+    with_world(|w| {
+        if let Some(Some(h)) = w.dims[dim].depots.get_mut(&depot) {
+            h.locked = locked;
         }
+        if locked != was_locked {
+            w.depot_changed(dim, depot);
+        }
+    });
+    with_world(|w| w.dims[dim].spouts.insert(pos, s));
+    if s.fluid != before {
+        analog_touched(dim, pos);
     }
 }
 
@@ -185,17 +193,15 @@ pub(super) fn spout_on_belt(
                     processing::sequenced_on_belt(lv, at, item, a)
                 }
                 None => {
-                    let mut o = item.clone();
+                    let mut o = item.processing_copy();
                     o.item = out;
                     o.count = 1;
                     o.progress = None;
                     vec![o]
                 }
             };
-            Process::Convert {
-                held: processing::belt_left(item),
-                outputs,
-            }
+            let held = processing::belt_left(item).map(|h| h.processing_copy());
+            Process::Convert { held, outputs }
         }
     })
 }
@@ -261,104 +267,39 @@ fn fill_held(
 /// Item drains holding a stack (`ItemDrainBlockEntity.tick`): it moves across, is emptied in
 /// the middle, and at the far side is handed on to a belt, depot or drain there
 /// (`DirectBeltInputBehaviour`), or thrown off when nothing solid is in its way; else it waits.
-pub(super) fn tick_drains(lv: &mut ServerLevel<'_>) {
+pub(crate) fn tick_drain(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     use create_engine::drain::Tick;
     let dim = lv.dim;
-    let drains: Vec<[i32; 3]> = with_world(|w| {
-        w.dims[dim]
-            .drains
-            .iter()
-            .filter(|(_, d)| d.held.is_some())
-            .map(|(p, _)| *p)
-            .collect()
-    })
-    .unwrap_or_default();
-    if drains.is_empty() {
-        return;
-    }
     let emptying = recipes::with(|r| r.emptying.clone()).unwrap_or_default();
-    for pos in drains {
-        let Some(t) = with_world(|w| {
-            let d = w.dims[dim].drains.get_mut(&pos)?;
-            let t = create_engine::drain::tick(d, &emptying);
-            if t == Tick::Emptied {
-                w.dims[dim].analog_checks.push(pos);
-                w.mark_unsaved(dim, pos);
-            }
-            Some(t)
-        })
-        .flatten() else {
-            continue;
-        };
+    let Some(t) = with_world(|w| {
+        let d = w.dims[dim].drains.get_mut(&pos)?;
+        let t = create_engine::drain::tick(d, &emptying);
         if t == Tick::Emptied {
-            crate::glue::advancements::award_placer(lv, pos, "drain");
+            w.dims[dim].analog_checks.push(pos);
+            w.mark_unsaved(dim, pos);
         }
-        let Tick::Out(side) = t else {
-            continue;
-        };
-        let Some(held) =
-            with_world(|w| w.dims[dim].drains.get(&pos).and_then(|d| d.held.clone())).flatten()
-        else {
-            continue;
-        };
-        // `tryExportingToBeltFunnel`: a pulling belt funnel on top facing against the item's way
-        // takes it first; one that takes none of it holds it.
-        if let Some(stack) = stack_of(&*lv.host, &held.item, u32::from(held.count))
-            && let Some(left) = crate::glue::logistics::export_up(lv, pos, side.opposite(), &stack)
-        {
-            let left = left.min(u32::from(held.count)) as u8;
-            if left != held.count {
-                with_world(|w| {
-                    if let Some(d) = w.dims[dim].drains.get_mut(&pos) {
-                        match d.held.as_mut() {
-                            Some(h) if left > 0 => h.count = left,
-                            _ => d.held = None,
-                        }
-                    }
-                    w.mark_unsaved(dim, pos);
-                });
-            }
-            continue;
-        }
-        let next = super::offset(pos, side);
-        let left = match insert_into_drain(lv, next, side, &held.item, held.count) {
-            Some(left) => {
-                if left == 0 {
-                    crate::glue::advancements::award_placer(lv, pos, "chained_drain");
-                }
-                Some(left)
-            }
-            None => {
-                let item = create_engine::belt::Item::new(&held.item, held.count, 0, false);
-                crate::glue::logistics::insert_into_from(lv, next, side, &item, false)
-            }
-        };
-        let left = match left {
-            Some(left) => left,
-            // No input there: thrown off over an open side, else it waits.
-            None if !crate::glue::logistics::has_collision(lv, next) => {
-                if let Some(stack) = stack_of(&*lv.host, &held.item, u32::from(held.count)) {
-                    let o = side.offset().map(f64::from);
-                    let at = [
-                        f64::from(pos[0]) + 0.5 + o[0] * 0.75,
-                        f64::from(pos[1]) + 0.5 + o[1] * 0.75 + 6.0 / 16.0,
-                        f64::from(pos[2]) + 0.5 + o[2] * 0.75,
-                    ];
-                    let motion = [o[0] / 8.0, o[1] / 8.0 + 1.0 / 8.0, o[2] / 8.0];
-                    let _ = lv.level.spawn_item_with_motion(
-                        &mut *lv.host,
-                        at[0],
-                        at[1],
-                        at[2],
-                        stack,
-                        motion,
-                        10,
-                    );
-                }
-                0
-            }
-            None => continue,
-        };
+        Some(t)
+    })
+    .flatten() else {
+        return;
+    };
+    if t == Tick::Emptied {
+        crate::glue::advancements::award_placer(lv, pos, "drain");
+    }
+    let Tick::Out(side) = t else {
+        return;
+    };
+    let Some(held) =
+        with_world(|w| w.dims[dim].drains.get(&pos).and_then(|d| d.held.clone())).flatten()
+    else {
+        return;
+    };
+    // `tryExportingToBeltFunnel`: a pulling belt funnel on top facing against the item's way
+    // takes it first; one that takes none of it holds it.
+    if let Some(stack) = stack_of(&*lv.host, &held.item, u32::from(held.count))
+        && let Some(left) = crate::glue::logistics::export_up(lv, pos, side.opposite(), &stack)
+    {
+        let left = left.min(u32::from(held.count)) as u8;
         if left != held.count {
             with_world(|w| {
                 if let Some(d) = w.dims[dim].drains.get_mut(&pos) {
@@ -370,6 +311,57 @@ pub(super) fn tick_drains(lv: &mut ServerLevel<'_>) {
                 w.mark_unsaved(dim, pos);
             });
         }
+        return;
+    }
+    let next = super::offset(pos, side);
+    let left = match insert_into_drain(lv, next, side, &held.item, held.count) {
+        Some(left) => {
+            if left == 0 {
+                crate::glue::advancements::award_placer(lv, pos, "chained_drain");
+            }
+            Some(left)
+        }
+        None => {
+            let item = create_engine::belt::Item::new(&held.item, held.count, 0, false);
+            crate::glue::logistics::insert_into_from(lv, next, side, &item, false)
+        }
+    };
+    let left = match left {
+        Some(left) => left,
+        // No input there: thrown off over an open side, else it waits.
+        None if !crate::glue::logistics::has_collision(lv, next) => {
+            if let Some(stack) = stack_of(&*lv.host, &held.item, u32::from(held.count)) {
+                let o = side.offset().map(f64::from);
+                let at = [
+                    f64::from(pos[0]) + 0.5 + o[0] * 0.75,
+                    f64::from(pos[1]) + 0.5 + o[1] * 0.75 + 6.0 / 16.0,
+                    f64::from(pos[2]) + 0.5 + o[2] * 0.75,
+                ];
+                let motion = [o[0] / 8.0, o[1] / 8.0 + 1.0 / 8.0, o[2] / 8.0];
+                let _ = lv.level.spawn_item_with_motion(
+                    &mut *lv.host,
+                    at[0],
+                    at[1],
+                    at[2],
+                    stack,
+                    motion,
+                    10,
+                );
+            }
+            0
+        }
+        None => return,
+    };
+    if left != held.count {
+        with_world(|w| {
+            if let Some(d) = w.dims[dim].drains.get_mut(&pos) {
+                match d.held.as_mut() {
+                    Some(h) if left > 0 => h.count = left,
+                    _ => d.held = None,
+                }
+            }
+            w.mark_unsaved(dim, pos);
+        });
     }
 }
 

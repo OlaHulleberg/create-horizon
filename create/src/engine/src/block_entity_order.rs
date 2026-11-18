@@ -9,6 +9,7 @@ type Pos = [i32; 3];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum View {
     All,
+    /// Belts, depots, spouts, item drains and pumps share their transfer turns.
     Transport,
     Fluid,
 }

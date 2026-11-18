@@ -11,7 +11,9 @@ use std::collections::{HashMap, HashSet};
 
 fn entity_view(block: Block) -> Option<View> {
     match block {
-        Block::Depot | Block::Belt => Some(View::Transport),
+        Block::Depot | Block::Belt | Block::Spout | Block::ItemDrain | Block::MechanicalPump => {
+            Some(View::Transport)
+        }
         Block::FluidValve | Block::FluidTank | Block::CreativeFluidTank => Some(View::Fluid),
         _ => None,
     }
@@ -767,6 +769,9 @@ pub struct Belt {
 /// Work at a level block entity's turn, rather than a subsystem phase.
 #[derive(Debug, PartialEq)]
 pub enum TransportTick {
+    Spout([i32; 3]),
+    Drain([i32; 3]),
+    Pump([i32; 3]),
     Depot([i32; 3]),
     Belt([i32; 3]),
 }
@@ -794,6 +799,12 @@ impl TransportTicks {
     }
     pub fn next(&mut self, world: &mut CreateWorld) -> Option<TransportTick> {
         while let Some(p) = self.entities.next(&world.dims[self.dim].block_entities) {
+            match world.block_at(self.dim, p) {
+                Some(Block::Spout) => return Some(TransportTick::Spout(p)),
+                Some(Block::ItemDrain) => return Some(TransportTick::Drain(p)),
+                Some(Block::MechanicalPump) => return Some(TransportTick::Pump(p)),
+                _ => {}
+            }
             if world.block_at(self.dim, p) == Some(Block::Depot) {
                 return Some(TransportTick::Depot(p));
             }
@@ -4524,8 +4535,9 @@ impl CreateWorld {
         self.dims[dim].unsaved.push((pos[0] >> 4, pos[2] >> 4));
     }
 
-    /// Level block-entity registration order shared by DepotBehaviour.tick and
-    /// BeltBlockEntity.tick. Call next only after applying the previous entity's transfers.
+    /// Level block-entity registration order shared by DepotBehaviour.tick,
+    /// BeltBlockEntity.tick, SpoutBlockEntity.tick, ItemDrainBlockEntity.tick and
+    /// PumpBlockEntity.tick. Call next only after applying the previous entity's transfers.
     pub fn transport_ticks(&mut self, dim: usize) -> TransportTicks {
         TransportTicks {
             dim,
@@ -4534,20 +4546,20 @@ impl CreateWorld {
     }
 
     /// One DepotBehaviour.tick, including a stack inserted by an earlier belt this tick.
-    pub fn tick_depot(&mut self, dim: usize, pos: [i32; 3], upright: bool) {
+    /// Returns its arrival test, before movement, so received/held callbacks run on this turn.
+    pub fn tick_depot(&mut self, dim: usize, pos: [i32; 3], upright: bool) -> bool {
         let d = &mut self.dims[dim];
-        if !d.sliding.contains(&pos) {
-            return;
-        }
         let Some(Some(h)) = d.depots.get_mut(&pos) else {
-            return;
+            return false;
         };
-        if h.slide(upright) && !d.depot_work.contains(&pos) {
+        let arrived = h.slide(upright);
+        if arrived && !d.depot_work.contains(&pos) {
             d.depot_work.push(pos);
         }
         if !h.sliding() {
             d.sliding.retain(|p| *p != pos);
         }
+        arrived
     }
 
     /// Belts currently holding items, for observation only. Use `transport_ticks` to tick.
@@ -5037,6 +5049,139 @@ mod tests {
     }
 
     #[test]
+    fn drain_tests_room_at_its_registration_turn() {
+        // ItemDrainBlockEntity.continueProcessing keeps 20 while the tank cannot
+        // accept a bucket; once a pump makes room an admitted turn advances to 19.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for pump_first in [false, true] {
+            states::set_range(10, 2);
+            let mut w = CreateWorld::new(StateTable::new(
+                10,
+                [
+                    ("create:item_drain", std::iter::empty()),
+                    ("create:mechanical_pump", std::iter::empty()),
+                ]
+                .into_iter(),
+            ));
+            let (drain, pump) = ([0, 4, 0], [2, 4, 0]);
+            for (p, state) in if pump_first {
+                [(pump, 11), (drain, 10)]
+            } else {
+                [(drain, 10), (pump, 11)]
+            } {
+                w.block_changed(0, p, 0, state);
+            }
+            let d = w.dims[0].drains.get_mut(&drain).unwrap();
+            crate::drain::insert(
+                d,
+                "minecraft:water_bucket",
+                1,
+                crate::kinetics::Dir::North,
+                &[],
+            );
+            d.processing = 20;
+            d.fluid = Some((crate::tank::Fluid::Water, 1000));
+            let mut turns = w.transport_ticks(0);
+            while let Some(turn) = turns.next(&mut w) {
+                let d = w.dims[0].drains.get_mut(&drain).unwrap();
+                match turn {
+                    TransportTick::Drain(_) => {
+                        crate::drain::tick(d, &[]);
+                    }
+                    TransportTick::Pump(_) => d.fluid = None,
+                    _ => panic!("unexpected turn"),
+                }
+            }
+            assert_eq!(
+                w.dims[0].drains[&drain].processing,
+                if pump_first { 19 } else { 20 }
+            );
+        }
+    }
+
+    #[test]
+    fn spout_timer_advances_after_an_earlier_depot_callback() {
+        // Java #66: an earlier transported-item callback starts at 20, then the
+        // later SpoutBlockEntity.tick decrements to 19 on that same level tick.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for spout_first in [true, false] {
+            states::set_range(10, 2);
+            let mut w = CreateWorld::new(StateTable::new(
+                10,
+                [
+                    ("create:spout", std::iter::empty()),
+                    ("create:depot", std::iter::empty()),
+                ]
+                .into_iter(),
+            ));
+            let (spout, depot) = ([0, 6, 0], [0, 4, 0]);
+            for (p, state) in if spout_first {
+                [(spout, 10), (depot, 11)]
+            } else {
+                [(depot, 11), (spout, 10)]
+            } {
+                w.block_changed(0, p, 0, state);
+            }
+            let mut held = crate::depot::Held::new(0, false);
+            held.locked = true;
+            w.depot_put(0, depot, Some(held));
+            crate::spout::fill(
+                w.dims[0].spouts.get_mut(&spout).unwrap(),
+                crate::tank::Fluid::Water,
+                1000,
+            );
+            let mut turns = w.transport_ticks(0);
+            while let Some(turn) = turns.next(&mut w) {
+                match turn {
+                    TransportTick::Spout(p) => {
+                        crate::spout::tick(w.dims[0].spouts.get_mut(&p).unwrap())
+                    }
+                    TransportTick::Depot(p) => {
+                        assert!(w.tick_depot(0, p, false));
+                        let d = &mut w.dims[0];
+                        crate::spout::on_depot(
+                            d.spouts.get_mut(&spout).unwrap(),
+                            d.depots.get_mut(&p).unwrap().as_mut().unwrap(),
+                            "minecraft:bucket",
+                            &[],
+                        );
+                    }
+                    _ => panic!("unexpected turn"),
+                }
+            }
+            assert_eq!(
+                w.dims[0].spouts[&spout].processing,
+                if spout_first { 20 } else { 19 }
+            );
+        }
+    }
+
+    #[test]
+    fn fluid_machines_share_transport_registration_order() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names = [
+            "create:spout",
+            "create:item_drain",
+            "create:mechanical_pump",
+            "create:depot",
+        ];
+        states::set_range(10, 4);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|n| (*n, std::iter::empty())),
+        ));
+        for n in 0..4 {
+            w.block_changed(0, [n, 8, 0], 0, 10 + n as u32);
+        }
+        let mut turns = w.transport_ticks(0);
+        assert_eq!(turns.next(&mut w), Some(TransportTick::Spout([0, 8, 0])));
+        assert_eq!(turns.next(&mut w), Some(TransportTick::Drain([1, 8, 0])));
+        assert_eq!(turns.next(&mut w), Some(TransportTick::Pump([2, 8, 0])));
+        assert_eq!(turns.next(&mut w), Some(TransportTick::Depot([3, 8, 0])));
+        assert_eq!(turns.next(&mut w), None);
+    }
+
+    #[test]
     fn depot_slides_at_its_registration_turn() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for depot_first in [false, true] {
@@ -5089,7 +5234,10 @@ mod tests {
                         h.position = 0.0;
                         w.depot_put(0, p, Some(h));
                     }
-                    TransportTick::Depot(p) => w.tick_depot(0, p, false),
+                    TransportTick::Depot(p) => {
+                        w.tick_depot(0, p, false);
+                    }
+                    _ => panic!("unexpected machine"),
                 }
             }
             assert_eq!(

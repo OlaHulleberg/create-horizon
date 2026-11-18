@@ -135,7 +135,7 @@ pub(super) fn connect_pipe(lv: &mut ServerLevel<'_>, pos: [i32; 3], preferred: O
 /// Pipes and pumps: pipes that changed connect again; turning pumps find their ends when pipes
 /// changed (`distributePressureTo`) and carry fluid from the first end behind them to the
 /// first end in front that takes it, `max(1, pressure / 2)` mB a tick (`FluidNetwork`).
-pub(super) fn tick_pipes(lv: &mut ServerLevel<'_>) {
+pub(crate) fn tick_pipes(lv: &mut ServerLevel<'_>) -> bool {
     let dim = lv.dim;
     let mut checks =
         with_world(|w| std::mem::take(&mut w.dims[dim].pipe_checks)).unwrap_or_default();
@@ -144,15 +144,16 @@ pub(super) fn tick_pipes(lv: &mut ServerLevel<'_>) {
     for pos in checks {
         connect_pipe(lv, pos, None);
     }
-    let changed =
-        with_world(|w| std::mem::replace(&mut w.dims[dim].pipes_changed, false)).unwrap_or(false);
-    let pumps = with_world(|w| w.dims[dim].pumping.clone()).unwrap_or_default();
-    for &pos in &pumps {
-        pump(lv, pos, changed);
-    }
-    // A pump that stopped loses its flows (`wipePressure`).
-    super::flows::keep_only(dim, &pumps);
+    with_world(|w| std::mem::replace(&mut w.dims[dim].pipes_changed, false)).unwrap_or(false)
+}
+
+/// Publish flows after all pumps have had their registration turn.
+pub(crate) fn finish_ticks(lv: &mut ServerLevel<'_>) {
+    let pumps = with_world(|w| w.dims[lv.dim].pumping.clone()).unwrap_or_default();
+    super::flows::keep_only(lv.dim, &pumps);
     collide(lv);
+    super::flows::send(lv);
+    super::drawn::send(lv);
 }
 
 /// `FluidReactions.handlePipeFlowCollision`: a pipe where flows of two fluids come in breaks
@@ -168,6 +169,12 @@ fn collide(lv: &mut ServerLevel<'_>) {
         {
             lv.set_state(pos, state, all());
         }
+    }
+}
+
+pub(crate) fn tick_pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
+    if with_world(|w| w.dims[lv.dim].pumping.contains(&pos)) == Some(true) {
+        pump(lv, pos, changed);
     }
 }
 

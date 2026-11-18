@@ -51,10 +51,10 @@ pub(crate) use engine::engine_sourced;
 mod flows;
 mod goggles;
 mod lava;
-mod machines;
+pub(crate) mod machines;
 mod open_end;
 pub(crate) use open_end::drink_potion;
-mod pipes;
+pub(crate) mod pipes;
 mod place;
 mod plumbing;
 mod rims;
@@ -311,22 +311,16 @@ impl Subsystem for Fluids {
         pipes::chunk_data_save(dim, chunk, data);
     }
 
-    /// Before the solve, in this order: pipes and pumps, boilers, valves, hoses and
-    /// whistles, tank block states, spouts and drains. What clients must see again is `Tanks`',
-    /// later.
+    /// Prepare pipes, boilers, valves and tanks before the shared transport walk.
+    /// Pumps, drains and spouts run on their registration turn in that walk.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         lava::tick(lv);
         open_end::tick(lv);
         place::tick_layers(lv);
-        pipes::tick_pipes(lv);
         pipes::tick_boilers(lv);
         plumbing::tick(lv);
         pipes::tick_tank_states(lv);
-        machines::tick_spouts(lv);
-        machines::tick_drains(lv);
         rims::tick(lv);
-        flows::send(lv);
-        drawn::send(lv);
         engine::tick(lv);
     }
 

@@ -151,13 +151,12 @@ pub fn player_yaw(lv: &ServerLevel<'_>, p: PlayerRef) -> Option<f32> {
 
 /// One depot's block-entity turn in the shared transport walk.
 pub(super) fn tick_depot(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
-    if with_world(|w| w.dims[lv.dim].sliding.contains(&pos)) != Some(true) {
-        return;
-    }
     let standing = depot_items(lv, pos)
         .first()
         .is_some_and(|(slot, item, _)| *slot == 0 && upright(&*lv.host, item));
-    with_world(|w| w.tick_depot(lv.dim, pos, standing));
+    if with_world(|w| w.tick_depot(lv.dim, pos, standing)) == Some(true) {
+        crate::glue::fluids::machines::spout_on_depot(lv, pos);
+    }
 }
 
 /// Publish client notifications after the shared block-entity walk.
