@@ -1691,7 +1691,11 @@ fn draw_arm_shown(
             head: -lower,
         };
     }
-    let held = s.held.as_ref().map(|i| block_item(host, i));
+    // ArmRenderer/ArmVisual require both BlockItem and a 3D resolved model.
+    let held = s
+        .held
+        .as_ref()
+        .map(|i| super::items::is_block_item(host, i) && block_item(host, i));
     let p = arm::poses(&now, s.ceiling, held);
     let sign = if s.ceiling { -1.0 } else { 1.0 };
     draw.push();
