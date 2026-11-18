@@ -141,8 +141,8 @@ pub(super) fn replace_pipe_state(lv: &mut ServerLevel<'_>, pos: [i32; 3], state:
     }
 }
 
-/// Initialize geometry and process scheduled pressure invalidations before the shared walk.
-pub(crate) fn tick_pipes(lv: &mut ServerLevel<'_>) {
+/// Apply queued updateShape notifications from committed world changes.
+pub(crate) fn tick_pipe_shapes(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let mut checks =
         with_world(|w| std::mem::take(&mut w.dims[dim].pipe_checks)).unwrap_or_default();
@@ -151,6 +151,12 @@ pub(crate) fn tick_pipes(lv: &mut ServerLevel<'_>) {
     for p in checks {
         connect_pipe(lv, p, None);
     }
+}
+
+/// Initialize behaviours and process due invalidations before the shared walk.
+pub(crate) fn tick_pipes(lv: &mut ServerLevel<'_>) {
+    tick_pipe_shapes(lv);
+    let dim = lv.dim;
     let positions = with_world(|w| w.fluid_transport_positions(dim)).unwrap_or_default();
     let mut transport =
         with_world(|w| std::mem::take(&mut w.dims[dim].fluid_transport)).unwrap_or_default();

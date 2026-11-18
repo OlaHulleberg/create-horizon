@@ -157,9 +157,11 @@ impl Hooks for Create {
         let Some(dimension) = event.level.dimension().id(&*host) else {
             return;
         };
-        if let Some(dim) = world::level_index(&dimension) {
-            world::with_world(|w| w.dims[dim].fluid_transport.begin_tick());
-        }
+        let Some(mut lv) = ServerLevel::new(host, &dimension) else {
+            return;
+        };
+        glue::fluids::tick_pipe_shapes(&mut lv);
+        world::with_world(|w| w.dims[lv.dim].fluid_transport.begin_tick());
     }
 
     fn level_tick_post(&self, host: HostSide, event: &mut LevelTickPostEvent) {

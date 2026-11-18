@@ -814,3 +814,8 @@ fn flag(b: bool) -> &'static str {
 fn all() -> BlockUpdateFlags {
     super::server::update_all()
 }
+
+/// Deliver committed shape updates before the level starts scheduled ticks.
+pub(crate) fn tick_pipe_shapes(lv: &mut ServerLevel<'_>) {
+    pipes::tick_pipe_shapes(lv);
+}
