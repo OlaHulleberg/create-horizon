@@ -1640,10 +1640,13 @@ impl CreateWorld {
             if is_block.and_then(diode_kind).is_none() && was_block.and_then(diode_kind).is_some() {
                 self.diode_removed(dim, pos);
             }
-            if self.table.get(new).is_some_and(|(b, _)| follows_power(b))
-                && self.table.get(old).map(|(b, _)| b) != self.table.get(new).map(|(b, _)| b)
+            if self.table.get(new).is_some_and(|(b, _)| {
+                follows_power(b) && !matches!(b, Block::Clutch | Block::Gearshift)
+            }) && self.table.get(old).map(|(b, _)| b) != self.table.get(new).map(|(b, _)| b)
             {
-                // ClutchBlock.getStateForPlacement: powered as placed.
+                // Other power-following blocks still initialize on placement.
+                // GearshiftBlock (also ClutchBlock) reads power only in
+                // getStateForPlacement and neighborChanged, never on state insertion.
                 self.dims[dim].redstone.push(pos);
             }
             if self.table.get(new).is_some_and(|(b, _)| is_chain_drive(b))
@@ -5951,35 +5954,33 @@ mod tests {
     }
 
     #[test]
-    fn split_shafts_are_checked_for_power_when_placed_or_their_neighbour_changes() {
+    fn split_shafts_keep_injected_power_until_their_neighbour_changes() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
-            ("create:clutch", vec![("axis", "x"), ("powered", "false")]),
-            ("create:clutch", vec![("axis", "x"), ("powered", "true")]),
-            ("create:shaft", vec![("axis", "x")]),
-        ];
-        states::set_range(10, 3);
-        let mut w = CreateWorld::new(StateTable::new(
-            10,
-            names.iter().map(|(n, p)| (*n, p.iter().copied())),
-        ));
-        w.block_changed(0, [0, 0, 0], 0, 10);
-        assert_eq!(w.take_redstone(0), [[0, 0, 0]], "placed: checked once");
-        w.block_changed(0, [0, 0, 0], 10, 11);
-        assert!(
-            w.take_redstone(0).is_empty(),
-            "its own power change is no new check"
-        );
-        w.neighbor_changed(0, [0, 0, 0], 11);
-        w.neighbor_changed(0, [1, 0, 0], 12);
-        w.neighbor_changed(0, [2, 0, 0], 3);
-        assert_eq!(
-            w.take_redstone(0),
-            [[0, 0, 0]],
-            "shafts and vanilla blocks are not"
-        );
-        assert_eq!(w.powered(11), Some(true));
-        assert_eq!(w.powered(12), None);
+        // Java /setblock observes powered=true after tick 1, and false after
+        // neighborChanged reads no signal. Player placement chooses power earlier.
+        for name in ["create:clutch", "create:gearshift"] {
+            let names = [
+                (name, vec![("axis", "x"), ("powered", "false")]),
+                (name, vec![("axis", "x"), ("powered", "true")]),
+            ];
+            states::set_range(10, 2);
+            let mut w = CreateWorld::new(StateTable::new(
+                10,
+                names.iter().map(|(n, p)| (*n, p.iter().copied())),
+            ));
+            for state in [10, 11] {
+                w.block_changed(0, [0, 0, 0], 0, state);
+                w.tick(0, &mut Vec::new());
+                assert!(
+                    w.take_redstone(0).is_empty(),
+                    "{name}: insertion preserves power"
+                );
+                assert_eq!(w.powered(state), Some(state == 11));
+                w.neighbor_changed(0, [0, 0, 0], state);
+                assert_eq!(w.take_redstone(0), [[0, 0, 0]]);
+                w.block_changed(0, [0, 0, 0], state, 0);
+            }
+        }
         states::clear_range();
     }
 

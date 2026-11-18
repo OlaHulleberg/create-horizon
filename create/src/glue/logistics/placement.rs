@@ -229,6 +229,21 @@ impl BlockPart for Placement {
             }
             _ => {}
         }
+        // `GearshiftBlock.getStateForPlacement` (inherited by ClutchBlock):
+        // choose power here, not when an arbitrary state is inserted into the world.
+        let default = if matches!(block, Block::Clutch | Block::Gearshift) {
+            set(
+                default,
+                "powered",
+                if level.has_neighbor_signal(pos)? {
+                    "true"
+                } else {
+                    "false"
+                },
+            )
+        } else {
+            default
+        };
         placed_state(block, default, water, (dim, pos), ctx, &set, &|p| {
             level.block_state(p).and_then(states::id).and_then(table)
         })
