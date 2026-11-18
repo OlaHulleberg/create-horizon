@@ -18,8 +18,8 @@ use create_engine::kinetics::{Axis, Dir};
 use create_engine::waterwheel::{DEFAULT_WOOD, wood_of_planks};
 use mod_api::{
     BlockEntityPart, BlockEntitySubmitEvent, BlockPart, BlockState, CanSurviveEvent, ClientHost,
-    Compound, Flow, Hand, HostBlockStates, InteractionResult, LevelHost, ParticleOptions,
-    Registrar, RightClickBlockEvent, ServerHost, SoundSource, Tag, UseItemOnEvent,
+    Compound, Flow, Hand, HostBlockStates, InteractionResult, LevelHost, Registrar,
+    RightClickBlockEvent, ServerHost, Tag, UseItemOnEvent,
 };
 
 /// The key of a wheel's material in its block entity data (`WaterWheelBlockEntity.write`).
@@ -215,7 +215,7 @@ impl BlockPart for Wheel {
         // `level.levelEvent(PARTICLES_DESTROY_BLOCK, pos, Block.getId(material))`: the planks'
         // break particles and sound (the game's state ids are not the API's, so the event is
         // played as its parts).
-        break_effect(&mut lv, master, &name, wood);
+        break_effect(&mut lv, master, &name);
         Some(InteractionResult::Success)
     }
 }
@@ -223,39 +223,14 @@ impl BlockPart for Wheel {
 /// The planks' break particles over the wheel and their break sound (`LevelRenderer
 /// .levelEvent` 2001: `addDestroyBlockEffect`, the sound type's break sound at
 /// `(volume + 1) / 2` and `pitch * 0.8`).
-fn break_effect(lv: &mut ServerLevel<'_>, pos: [i32; 3], planks: &str, wood: &str) {
-    let center = pos.map(|v| f64::from(v) + 0.5);
-    let state = lv
+fn break_effect(lv: &mut ServerLevel<'_>, pos: [i32; 3], planks: &str) {
+    if let Some(state) = lv
         .host
         .block_key(planks)
-        .and_then(|k| BlockState::of(&lv.host.block_states(), k, &[]).ok());
-    if let (Some(&key), Some(state)) = (BLOCK_PARTICLE.get(), state) {
-        let options = ParticleOptions::simple(key);
-        let _ = lv.level.send_particles(
-            &mut *lv.host,
-            &options,
-            Some(state),
-            center,
-            [0.25; 3],
-            0.0,
-            64,
-        );
+        .and_then(|k| BlockState::of(&lv.host.block_states(), k, &[]).ok())
+    {
+        lv.destroy_effect(pos, state);
     }
-    let sound = match wood {
-        "bamboo" => "minecraft:block.bamboo_wood.break",
-        "cherry" => "minecraft:block.cherry_wood.break",
-        "crimson" | "warped" => "minecraft:block.nether_wood.break",
-        _ => "minecraft:block.wood.break",
-    };
-    lv.level.play_sound(
-        &mut *lv.host,
-        sound,
-        center,
-        SoundSource::Blocks,
-        1.0,
-        0.8,
-        None,
-    );
 }
 
 /// The partial of a wheel in `wood`: the small wheel, or the large one (its extension when it

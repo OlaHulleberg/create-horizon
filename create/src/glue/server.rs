@@ -32,34 +32,9 @@ pub fn update_all() -> BlockUpdateFlags {
 }
 
 impl<'a> ServerLevel<'a> {
-    /// `levelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, pos, Block.getId(state))`, rebuilt from
-    /// parts (the API takes no state id for it): `state`'s break particles over the block (64,
-    /// in its box) and its sound type's break sound at `(volume + 1) / 2` and `pitch * 0.8`.
+    /// `BlockHelper.destroyBlockAs`: the state's destroy-block level event.
     pub fn destroy_effect(&mut self, pos: [i32; 3], state: BlockState) {
-        let centre = pos.map(|v| f64::from(v) + 0.5);
-        if let Some(&key) = BLOCK_PARTICLE.get() {
-            let options = mod_api::ParticleOptions::simple(key);
-            let _ = self.level.send_particles(
-                &mut *self.host,
-                &options,
-                Some(state),
-                centre,
-                [0.25; 3],
-                0.0,
-                64,
-            );
-        }
-        if let Some(sound) = self.host.block_states().sound(state) {
-            let _ = self.level.play_sound(
-                &mut *self.host,
-                &sound.break_sound,
-                centre,
-                mod_api::SoundSource::Blocks,
-                (sound.volume + 1.0) / 2.0,
-                sound.pitch * 0.8,
-                None,
-            );
-        }
+        self.level.block_break_effect(self.host, pos, state);
     }
 
     /// The level `dimension` names, when it is open and Create's world is.
