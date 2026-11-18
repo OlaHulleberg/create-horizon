@@ -208,72 +208,6 @@ fn blocks_tags(
     );
 }
 
-/// How a structure's blocks are lit as they are drawn (`ContraptionMatrices.getLight`: the world's
-/// light where each block is now).
-#[derive(Clone, Copy)]
-enum Lighting {
-    /// Drawn spinning (`spin`): the game lights each quad where it turns to.
-    Host,
-    /// Drawn where `WorldPose` puts it this frame: each block reads the light at its cell.
-    Sampled(WorldPose),
-}
-
-/// Where a structure's blocks are this frame: the anchor, and a transform from block-local to
-/// anchor-relative coordinates (relative, so `f32` keeps its precision far from the origin).
-#[derive(Clone, Copy)]
-struct WorldPose {
-    anchor: [i32; 3],
-    local: create_engine::math::Mat4,
-}
-
-impl WorldPose {
-    fn translated(anchor: [i32; 3], shift: [f32; 3]) -> Self {
-        use create_engine::math::{Mat4, Vec3};
-        Self {
-            anchor,
-            local: Mat4::from_translation(Vec3::new(shift[0], shift[1], shift[2])),
-        }
-    }
-
-    fn turned(anchor: [i32; 3], axis: [f32; 3], degrees: f32) -> Self {
-        use create_engine::math::{Mat4, Vec3};
-        let centre = Vec3::splat(0.5);
-        let turn = match axis_enum(axis) {
-            Axis::X => Mat4::from_rotation_x(degrees.to_radians()),
-            Axis::Y => Mat4::from_rotation_y(degrees.to_radians()),
-            Axis::Z => Mat4::from_rotation_z(degrees.to_radians()),
-        };
-        Self {
-            anchor,
-            local: Mat4::from_translation(centre) * turn * Mat4::from_translation(-centre),
-        }
-    }
-
-    /// The world cell the block at `local` (its corner, in blocks from the anchor) has its
-    /// centre in.
-    fn cell(self, local: [f32; 3]) -> [i32; 3] {
-        use create_engine::math::Vec3;
-        let at = self
-            .local
-            .transform_point3(Vec3::new(local[0], local[1], local[2]) + Vec3::splat(0.5))
-            .to_array();
-        [0, 1, 2].map(|i| self.anchor[i] + at[i].floor() as i32)
-    }
-
-    /// The packed light at the block at `local`'s cell (16 times sky light in bits 0..8, 16 times
-    /// block light in bits 8..16, as the draw context takes it), the cell found as
-    /// `BlockEntityRenderHelper.getLightPos` does. A cell the client holds no chunk for reads as
-    /// the game's light query does there: full sky, no block light.
-    fn light(self, host: &dyn ClientHost, level: Option<&LevelRef>, local: [f32; 3]) -> u32 {
-        let at = self.cell(local);
-        let read = |layer, unloaded: i32| {
-            let v = level.and_then(|l| l.brightness(host, layer, at));
-            v.unwrap_or(unloaded).clamp(0, 15) as u32 * 16
-        };
-        read(mod_api::LightLayer::Sky, 15) | read(mod_api::LightLayer::Block, 0) << 8
-    }
-}
-
 fn float(v: f32) -> Tag {
     Tag::Float(v.to_bits())
 }
@@ -661,6 +595,72 @@ fn parse(host: &dyn Host, c: &Compound) -> Option<Shape> {
 
 // ---------------------------------------------------------------------------------------------
 // Client
+
+/// How a structure's blocks are lit as they are drawn (`ContraptionMatrices.getLight`: the world's
+/// light where each block is now).
+#[derive(Clone, Copy)]
+enum Lighting {
+    /// Drawn spinning (`spin`): the game lights each quad where it turns to.
+    Host,
+    /// Drawn where `WorldPose` puts it this frame: each block reads the light at its cell.
+    Sampled(WorldPose),
+}
+
+/// Where a structure's blocks are this frame: the anchor, and a transform from block-local to
+/// anchor-relative coordinates (relative, so `f32` keeps its precision far from the origin).
+#[derive(Clone, Copy)]
+struct WorldPose {
+    anchor: [i32; 3],
+    local: create_engine::math::Mat4,
+}
+
+impl WorldPose {
+    fn translated(anchor: [i32; 3], shift: [f32; 3]) -> Self {
+        use create_engine::math::{Mat4, Vec3};
+        Self {
+            anchor,
+            local: Mat4::from_translation(Vec3::new(shift[0], shift[1], shift[2])),
+        }
+    }
+
+    fn turned(anchor: [i32; 3], axis: [f32; 3], degrees: f32) -> Self {
+        use create_engine::math::{Mat4, Vec3};
+        let centre = Vec3::splat(0.5);
+        let turn = match axis_enum(axis) {
+            Axis::X => Mat4::from_rotation_x(degrees.to_radians()),
+            Axis::Y => Mat4::from_rotation_y(degrees.to_radians()),
+            Axis::Z => Mat4::from_rotation_z(degrees.to_radians()),
+        };
+        Self {
+            anchor,
+            local: Mat4::from_translation(centre) * turn * Mat4::from_translation(-centre),
+        }
+    }
+
+    /// The world cell the block at `local` (its corner, in blocks from the anchor) has its
+    /// centre in.
+    fn cell(self, local: [f32; 3]) -> [i32; 3] {
+        use create_engine::math::Vec3;
+        let at = self
+            .local
+            .transform_point3(Vec3::new(local[0], local[1], local[2]) + Vec3::splat(0.5))
+            .to_array();
+        [0, 1, 2].map(|i| self.anchor[i] + at[i].floor() as i32)
+    }
+
+    /// The packed light at the block at `local`'s cell (16 times sky light in bits 0..8, 16 times
+    /// block light in bits 8..16, as the draw context takes it), the cell found as
+    /// `BlockEntityRenderHelper.getLightPos` does. A cell the client holds no chunk for reads as
+    /// the game's light query does there: full sky, no block light.
+    fn light(self, host: &dyn ClientHost, level: Option<&LevelRef>, local: [f32; 3]) -> u32 {
+        let at = self.cell(local);
+        let read = |layer, unloaded: i32| {
+            let v = level.and_then(|l| l.brightness(host, layer, at));
+            v.unwrap_or(unloaded).clamp(0, 15) as u32 * 16
+        };
+        read(mod_api::LightLayer::Sky, 15) | read(mod_api::LightLayer::Block, 0) << 8
+    }
+}
 
 struct Shown {
     rev: i32,
