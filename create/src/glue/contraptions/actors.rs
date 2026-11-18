@@ -1586,16 +1586,9 @@ const FALLING: [&str; 11] = [
 ];
 
 impl actors::Probe for Reader<'_, '_> {
-    /// `isRedstoneConductor`, read as a full collision cube (vanilla's default for it; the
-    /// blocks that override it are not known to the API, `API_GAPS.md`).
+    /// `RollerMovementBehaviour.visitNewPosition`: read conduction at the visited cell.
     fn conductor(&self, pos: [i32; 3]) -> bool {
-        let Some(state) = self.lv.block_state(pos) else {
-            return false;
-        };
-        self.lv
-            .level
-            .block_shape(&*self.lv.host, state, pos, BlockShapeKind::Collision)
-            .is_some_and(|b| b.len() == 1 && b[0] == [0.0, 0.0, 0.0, 1.0, 1.0, 1.0])
+        self.lv.level.is_redstone_conductor(&*self.lv.host, pos) == Some(true)
     }
     fn material(&self, filter: Option<&str>) -> u32 {
         STORAGE.with_borrow(|m| {

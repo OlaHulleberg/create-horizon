@@ -24,8 +24,6 @@
 //! - The hard coupling step moving a cart off its rail with collisions
 //!   (`Entity.move(MoverType.SELF)`): such a cart only has its motion
 //!   damped. Needs `EntityRef::move_by` (API_GAPS.md).
-//! - A redstone conductor beside an assembler turning an accelerated cart
-//!   (`BlockState.isRedstoneConductor`): no API reads it, so none is seen. Needs a state fact.
 //!
 //! A contraption's actors (drills, saws, harvesters, ploughs, rollers, deployers) work as it
 //! rides (`tick_cart_actors`), dropping into its storage blocks and then into a chest
@@ -985,10 +983,20 @@ fn tick_stations(lv: &mut ServerLevel<'_>) {
             f64::from(pos[1]) + 0.5 - nc.pos[1],
             f64::from(pos[2]) + 0.5 - nc.pos[2],
         ];
-        // No API reads a redstone conductor (see the module's doc).
-        if let Some(motion) =
-            cart::cart_motion(action, axis, info.backwards, v, facing, |_| false, centre)
-        {
+        // `CartAssemblerBlockEntity.tryAssemble`: conductors beside the rail turn the cart.
+        if let Some(motion) = cart::cart_motion(
+            action,
+            axis,
+            info.backwards,
+            v,
+            facing,
+            |d| {
+                let offset = d.offset();
+                let at = [0, 1, 2].map(|i| pos[i] + offset[i]);
+                lv.level.is_redstone_conductor(&*lv.host, at) == Some(true)
+            },
+            centre,
+        ) {
             nc.entity.set_velocity(lv.host, motion);
         }
     }
