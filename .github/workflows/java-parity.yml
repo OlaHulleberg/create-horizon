@@ -59,9 +59,9 @@ jobs:
           persist-credentials: false
           sparse-checkout-cone-mode: false
           sparse-checkout: |
-            src/main/java
-            gradle.properties
-            LICENSE
+            /src/main/java/
+            /gradle.properties
+            /LICENSE.md
       # This step reports current differences and unsupported observations. Its
       # success means the comparison ran, never that the entire port matches.
       # Compilation, extraction and malformed-stream errors still fail the job.
