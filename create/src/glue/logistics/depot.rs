@@ -191,7 +191,7 @@ pub fn send_changed_depots(lv: &mut ServerLevel<'_>) {
     // Ejectors are drawn every frame; a depot's kept drawing is redrawn.
     for &pos in &changed {
         if super::info_at(lv, pos).is_some_and(|(b, _)| b == create_engine::Block::Depot) {
-            super::touch_shown(lv, pos);
+            show_contents(lv, pos);
         }
     }
 }
@@ -215,25 +215,57 @@ pub(super) fn save_depots(lv: &mut ServerLevel<'_>) {
 
 /// The depots `depots` to `players`.
 pub fn send_depots(lv: &mut ServerLevel<'_>, players: &[PlayerRef], depots: &[[i32; 3]]) {
-    let dim = lv.dim;
-    let contents: Vec<depot::Contents> = depots
-        .iter()
-        .map(|&pos| {
-            let held = with_world(|w| w.dims[dim].depots.get(&pos).copied().flatten()).flatten();
-            let stacks = if with_world(|w| w.dims[dim].depots.contains_key(&pos)) == Some(true) {
-                depot_items(lv, pos)
-            } else {
-                Vec::new()
-            };
-            depot::Contents {
-                pos,
-                held: held.unwrap_or(depot::Held::new(0, false)),
-                stacks,
-            }
-        })
-        .collect();
+    let contents: Vec<_> = depots.iter().map(|&pos| contents(lv, pos)).collect();
     for m in depot::encode(&contents) {
         net::send_to_players(&mut *lv.host, players, depot::CHANNEL, &m);
+    }
+}
+
+/// The transport stack and output buffer sent by DepotBehaviour.write's client packet.
+fn contents(lv: &ServerLevel<'_>, pos: [i32; 3]) -> depot::Contents {
+    let held = with_world(|w| w.dims[lv.dim].depots.get(&pos).copied().flatten()).flatten();
+    let stacks = if with_world(|w| w.dims[lv.dim].depots.contains_key(&pos)) == Some(true) {
+        depot_items(lv, pos)
+    } else {
+        Vec::new()
+    };
+    depot::Contents {
+        pos,
+        held: held.unwrap_or(depot::Held::new(0, false)),
+        stacks,
+    }
+}
+
+/// DepotBehaviour.notifyUpdate sends its actual transport contents. Use those same
+/// contents as the kept drawing's revision, rather than an incrementing counter:
+/// the SDK also reports a block-entity data write as a contents notification.
+/// Repeating that notification must converge when the contents have not changed.
+fn render_update(
+    previous: Option<&mod_api::Tag>,
+    contents: &depot::Contents,
+) -> Option<mod_api::Tag> {
+    use mod_api::Tag;
+    let snapshot = Tag::List(
+        depot::encode(std::slice::from_ref(contents))
+            .into_iter()
+            .map(Tag::ByteArray)
+            .collect(),
+    );
+    (previous != Some(&snapshot)).then_some(snapshot)
+}
+
+fn show_contents(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+        return;
+    };
+    let Some(data) = entity.data(&*lv.host) else {
+        return;
+    };
+    if let Some(update) = render_update(data.get(&super::SHOWN.into()), &contents(lv, pos)) {
+        let _ = entity.merge_data(
+            &mut *lv.host,
+            mod_api::Compound::from([(super::SHOWN.into(), update)]),
+        );
     }
 }
 
@@ -336,6 +368,39 @@ pub(crate) fn saved_from_nbt(data: &mod_api::Compound) -> depot::SavedDepot {
 #[cfg(test)]
 mod persistence_tests {
     use super::*;
+
+    #[test]
+    fn settled_depot_contents_notifications_converge() {
+        use mod_api::Tag;
+        // t42's settled two-diamond depot, including the old counter on disk.
+        let mut contents = depot::Contents {
+            pos: [1, 56, 6],
+            held: depot::Held::new(172, false),
+            stacks: vec![(0, "minecraft:diamond".into(), 2)],
+        };
+        contents.held.position = 0.49812075;
+        contents.held.side_offset = -0.014814815;
+        contents.held.from = Some(depot::Side::North);
+        let mut shown = Tag::Int(9914);
+        let mut writes = 0;
+        for _ in 0..2000 {
+            if let Some(update) = render_update(Some(&shown), &contents) {
+                shown = update;
+                writes += 1;
+            }
+        }
+        assert_eq!(
+            writes, 1,
+            "a data-write notification must not perpetuate itself"
+        );
+        // Count changes, item replacements and removal still invalidate the drawing.
+        contents.stacks[0].2 = 3;
+        shown = render_update(Some(&shown), &contents).expect("count changed");
+        contents.stacks[0].1 = "minecraft:emerald".into();
+        shown = render_update(Some(&shown), &contents).expect("item changed");
+        contents.stacks.clear();
+        assert!(render_update(Some(&shown), &contents).is_some());
+    }
 
     #[test]
     fn depot_saved_transport_round_trips() {
