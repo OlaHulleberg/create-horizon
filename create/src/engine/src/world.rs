@@ -370,13 +370,8 @@ pub struct Dimension {
     pub press_basin: HashMap<[i32; 3], usize>,
     /// Pumps and what their pipes reach, the turning ones (the only ones that tick), pipes to
     /// connect again, and whether pipes, pumps or tanks changed since the ends were found.
-    pub pumps: HashMap<[i32; 3], Pump>,
-    pub pumping: Vec<[i32; 3]>,
-    /// The open ends of pipes and pumps, by the pipe (or pump) and the side it is open to, each
-    /// with its own tank (`PipeConnection.source`'s `OpenEndedPipe`).
-    pub open_ends: HashMap<([i32; 3], crate::kinetics::Dir), crate::open_end::OpenEnd>,
+    pub fluid_transport: crate::fluids::runtime::Transport,
     pub pipe_checks: Vec<[i32; 3]>,
-    pub pipes_changed: bool,
     /// Fluid valves, smart pipe filters, hose pulleys, creative fluid tanks, steam whistles.
     pub plumbing: crate::plumbing::Plumbing,
     /// Mechanical pistons: those asked to start or stop (`assembleNextTick`, after a speed
@@ -546,32 +541,6 @@ impl Moving {
             Some(l) => v.clamp(-l, l),
             None => v,
         }
-    }
-}
-
-/// A mechanical pump: the ends behind and in front of it, found when its pipes changed, and the
-/// fluid it carries between them (an open end's bucket being drawn or let out).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Pump {
-    pub pull: Vec<crate::fluids::End>,
-    pub push: Vec<crate::fluids::End>,
-    pub found: bool,
-    /// Ticks it has pumped since its pipes last changed (its flows' progress).
-    pub pumped: u32,
-    /// The pipes behind it and in front of it on the way to each end, by the end
-    /// (`fluids::ways`): its flows go along them (`fluids::flows`).
-    pub ways_pull: Vec<([i32; 3], Vec<crate::fluids::Step>)>,
-    pub ways_push: Vec<([i32; 3], Vec<crate::fluids::Step>)>,
-}
-
-impl Pump {
-    /// Age of the current flow at this turn, before advancing it. The creation
-    /// turn has age zero: PipeConnection.manageFlows returns after starting a
-    /// flow, and FluidNetwork.tick admits targets only after their flows complete.
-    pub fn advance_flow(&mut self) -> u32 {
-        let elapsed = self.pumped;
-        self.pumped = self.pumped.saturating_add(1);
-        elapsed
     }
 }
 
@@ -1110,7 +1079,7 @@ impl CreateWorld {
         if is_fluid_block(block) {
             // `FluidPropagator.propagateChangedPipe`: the pipe and its neighbours connect again,
             // pumps find their ends again.
-            d.pipes_changed = true;
+            d.fluid_transport.changed.push(pos);
             d.pipe_checks.push(pos);
             for dir in crate::kinetics::Dir::ALL {
                 let o = dir.offset();
@@ -1186,7 +1155,7 @@ impl CreateWorld {
             }
         }
         if block == Block::MechanicalPump {
-            d.pumps.entry(pos).or_default();
+            d.fluid_transport.changed.push(pos);
         }
         if block == Block::MechanicalMixer && !d.mixers.contains_key(&pos) {
             d.mixers.insert(pos, Default::default());
@@ -1387,6 +1356,7 @@ impl CreateWorld {
     #[inline]
     pub fn block_changed(&mut self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
         self.register_block_entity(dim, pos, old, new);
+        self.dims[dim].fluid_transport.changed.push(pos);
         if self
             .table
             .get(new)
@@ -1711,19 +1681,14 @@ impl CreateWorld {
             if let Some((b, _)) = self.table.get(old)
                 && is_fluid_block(b)
             {
-                d.pipes_changed = true;
+                d.fluid_transport.changed.push(pos);
                 for dir in crate::kinetics::Dir::ALL {
                     let o = dir.offset();
                     d.pipe_checks
                         .push([pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]);
                 }
             }
-            if d.pumps.remove(&pos).is_some() {
-                d.pumping.retain(|p| *p != pos);
-            }
-            if !d.open_ends.is_empty() {
-                d.open_ends.retain(|(p, _), _| *p != pos);
-            }
+            d.fluid_transport.remove(pos);
             d.chutes.remove(&pos);
             if d.sequencers.remove(&pos).is_some() {
                 d.sequencing.retain(|p| *p != pos);
@@ -2040,9 +2005,12 @@ impl CreateWorld {
             d.vaults.column_unloaded(cx, cz);
             d.drills.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.drilling.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.pumps.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.open_ends
-                .retain(|(p, _), _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.fluid_transport
+                .pipes
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.fluid_transport
+                .pumps
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.sequencers
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.sequencing.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -2052,8 +2020,9 @@ impl CreateWorld {
                 .retain(|(p, _)| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.chain_checks
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.pumping.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.pipes_changed = true;
+            d.fluid_transport
+                .changed
+                .extend(d.fluid_transport.pipes.keys().copied());
             d.plumbing.column_unloaded(cx, cz);
             d.mixing.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.mixer_checks
@@ -2301,15 +2270,6 @@ impl CreateWorld {
                 if speed != 0.0 {
                     d.drilling.push(pos);
                 }
-            }
-            if let Event::Speed { pos, speed, .. } = *e
-                && d.pumps.contains_key(&pos)
-            {
-                d.pumping.retain(|p| *p != pos);
-                if speed != 0.0 {
-                    d.pumping.push(pos);
-                }
-                d.pipes_changed = true;
             }
             // Hoses move when their speed changes.
             if let Event::Speed { pos, speed, .. } = *e
@@ -4823,6 +4783,34 @@ impl CreateWorld {
         out
     }
 
+    /// KineticBlockEntity.tick precedes its FluidTransportBehaviour tick.
+    pub fn fluid_transport_base_tick(&mut self, dim: usize, pos: [i32; 3]) {
+        self.dims[dim].kinetics.tick_base_through(pos);
+    }
+
+    /// Pipe behaviours tick in Level.blockEntityTickers registration order.
+    pub fn fluid_transport_positions(&self, dim: usize) -> Vec<[i32; 3]> {
+        let d = &self.dims[dim];
+        let mut walk = d.block_entities.walk(View::All);
+        let mut out = Vec::new();
+        while let Some(pos) = walk.next(&d.block_entities) {
+            if self.block_at(dim, pos).is_some_and(|b| {
+                matches!(
+                    b,
+                    Block::FluidPipe
+                        | Block::EncasedFluidPipe
+                        | Block::GlassFluidPipe
+                        | Block::SmartFluidPipe
+                        | Block::FluidValve
+                        | Block::MechanicalPump
+                )
+            }) {
+                out.push(pos);
+            }
+        }
+        out
+    }
+
     /// A valve, smart pipe, hose pulley, creative tank, whistle or extension placed, loaded or
     /// changed.
     fn plumbing_placed(&mut self, dim: usize, pos: [i32; 3], block: Block, info: &StateInfo) {
@@ -7091,7 +7079,10 @@ mod tests {
         ));
         let (valve, hose, tank) = ([0, 0, 0], [5, 0, 0], [9, 0, 0]);
         w.block_changed(0, valve, 0, 11);
-        assert!(w.dims[0].pipes_changed, "a valve is a pipe");
+        assert!(
+            !w.dims[0].fluid_transport.changed.is_empty(),
+            "a valve is a pipe"
+        );
         assert!(w.dims[0].plumbing.valves.contains_key(&valve));
         w.dims[0].plumbing.valve_speed(valve, 32.0);
         assert!(w.dims[0].plumbing.valves[&valve].moving());

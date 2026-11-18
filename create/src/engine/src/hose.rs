@@ -941,6 +941,21 @@ impl Hose {
         ultra_warm: bool,
         now: i64,
     ) -> u32 {
+        self.fill_action(level, pos, fluid, amount, ultra_warm, now, false)
+    }
+
+    /// HosePulleyFluidHandler.fill, including SIMULATE's separate return path.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fill_action(
+        &mut self,
+        level: &mut impl Level,
+        pos: [i32; 3],
+        fluid: Fluid,
+        amount: u32,
+        ultra_warm: bool,
+        now: i64,
+        simulate: bool,
+    ) -> u32 {
         if self.tank.fluid.is_some_and(|f| f != fluid) || amount == 0 || !fluid.placeable() {
             return 0;
         }
@@ -952,13 +967,23 @@ impl Hose {
             let root = self.root(pos);
             if self
                 .filler
-                .try_deposit(level, pos, fluid, root, false, ultra_warm, now)
+                .try_deposit(level, pos, fluid, root, simulate, ultra_warm, now)
             {
                 self.drainer.counterpart_acted();
                 remaining = remaining.saturating_sub(BUCKET);
                 diff -= i64::from(BUCKET);
                 deposited = true;
             }
+        }
+        if simulate {
+            return if diff <= 0 {
+                amount
+            } else {
+                {
+                    let mut simulated = self.tank;
+                    simulated.fill_amount(fluid, remaining, CAPACITY)
+                }
+            };
         }
         if diff <= 0 {
             self.tank.drain_amount((-diff) as u32);

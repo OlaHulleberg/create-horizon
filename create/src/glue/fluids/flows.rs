@@ -1,31 +1,16 @@
-//! The fluid flowing in pipes (`PipeConnection.Flow`): a turning pump's flows go connection by
-//! connection from the end it draws from to the ends it fills (`create_engine::fluids::flows`),
-//! each half of a pipe filling at its pressure's speed. They are gone at once when the pump's
-//! pipes change or it stops (`wipePressure`), and recede from the source, a connection a tick,
-//! when the source gives no more (`manageFlows`).
-//!
-//! Each pipe's block entity shows its clients its flows (`FLOW`), with when each starts, how fast
-//! it grows and when it goes, so clients draw them growing without a message a tick: glass pipes
-//! draw the stream (`TransparentStraightPipeRenderer`, `FluidRenderer.renderFluidStream`), and
-//! every pipe, valve and pump splashes on its rim as a flow arrives, drips now and then while it
-//! passes, and pours at an open end (`PipeConnection.spawnParticles`, `FluidFX`).
-//!
-//! Create's fluid particle (`FluidStackParticle`: the fluid's still sprite, its tint, the exact
-//! velocity) is drawn as the game's item particle with the still sprite (the same motion, gravity
-//! and size), or, for a tinted fluid (water, potions), as the block particle in the tint, whose
-//! constructor gives it a random velocity (`TerrainParticle`): the API's item particle takes no
-//! tint.
+//! Client rendering and publication of the engine-owned pipe connections.
 
 use super::super::server::ServerLevel;
-use create_engine::fluids::FlowAt;
+use super::super::world::with_world;
+use create_engine::fluids::transport::Source;
 use create_engine::kinetics::Dir;
 use create_engine::tank::{Codes, Fluid};
 use mod_api::{
-    BlockEntitySubmitEvent, ClientHost, Compound, ModBlockEntity, ParticleKey, ParticleOptions,
-    Registrar, Tag,
+    BlockEntitySubmitEvent, ClientHost, ModBlockEntity, ParticleKey, ParticleOptions, Registrar,
+    Tag,
 };
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 /// The key of a pipe's flows in its block entity's data: for each, its side (`Dir::ALL` index),
@@ -40,263 +25,96 @@ pub const FLOW_FLUIDS: &str = "Flow_fluids";
 /// Ints per flow in `FLOW`.
 const PER_FLOW: usize = 7;
 
-/// A turning pump's flows: their fluid, when they started, when the source stopped giving.
-struct Running {
-    fluid: Fluid,
-    start: i64,
-    stop: Option<i64>,
-    flows: Vec<FlowAt>,
-}
-
-/// A block by level and position.
 type At = (usize, [i32; 3]);
-
+type Published = (
+    Vec<i32>,
+    Codes,
+    Vec<(Dir, create_engine::fluids::transport::SavedConnection)>,
+);
 thread_local! {
-    /// The pumps with flows, by level and position.
-    static RUNNING: RefCell<HashMap<(usize, [i32; 3]), Running>> = RefCell::new(HashMap::new());
-    /// Pipes whose flows changed, by level.
-    static DIRTY: RefCell<HashSet<(usize, [i32; 3])>> = RefCell::new(HashSet::new());
-    /// Pipes that show their clients their flows even when none were shown: what a pipe's
-    /// block entity kept from before the world was loaded.
-    static FORCED: RefCell<HashSet<(usize, [i32; 3])>> = RefCell::new(HashSet::new());
-    /// What each pipe last showed its clients.
-    static SHOWN: RefCell<HashMap<At, (Vec<i32>, Codes)>> = RefCell::new(HashMap::new());
+    static SHOWN: RefCell<HashMap<At,Published>> = RefCell::new(HashMap::new());
 }
-
 pub(super) fn reset() {
-    RUNNING.with_borrow_mut(HashMap::clear);
-    DIRTY.with_borrow_mut(HashSet::clear);
-    FORCED.with_borrow_mut(HashSet::clear);
     SHOWN.with_borrow_mut(HashMap::clear);
 }
-
-fn touch(dim: usize, flows: &[FlowAt]) {
-    DIRTY.with_borrow_mut(|d| d.extend(flows.iter().map(|f| (dim, f.pos))));
-}
-
-/// A pump found its pipes `way` for the first time since the world loaded: they show their
-/// clients what flows in them now, in place of what their block entities kept.
-pub(super) fn found(dim: usize, way: impl Iterator<Item = [i32; 3]>) {
-    let way: Vec<_> = way.map(|p| (dim, p)).collect();
-    DIRTY.with_borrow_mut(|d| d.extend(way.iter().copied()));
-    FORCED.with_borrow_mut(|f| f.extend(way));
-}
-
-/// The fluid the pump at `pos` has flowing, unless it is receding.
-pub(super) fn running(dim: usize, pos: [i32; 3]) -> Option<Fluid> {
-    RUNNING.with_borrow(|r| {
-        r.get(&(dim, pos))
-            .filter(|r| r.stop.is_none())
-            .map(|r| r.fluid)
-    })
-}
-
-/// The pump at `pos` starts its flows of `fluid` at game time `now`, in place of any it had.
-pub(super) fn start(dim: usize, pos: [i32; 3], fluid: Fluid, flows: Vec<FlowAt>, now: i64) {
-    touch(dim, &flows);
-    let old = RUNNING.with_borrow_mut(|r| {
-        r.insert(
-            (dim, pos),
-            Running {
-                fluid,
-                start: now,
-                stop: None,
-                flows,
-            },
-        )
-    });
-    if let Some(old) = old {
-        touch(dim, &old.flows);
-    }
-}
-
-/// Whether a flow passes through the pipe at `pos` (`PipeConnection.hasFlow` on a side).
 pub(super) fn has_flow(dim: usize, pos: [i32; 3]) -> bool {
-    RUNNING.with_borrow(|r| {
-        r.iter()
-            .any(|((d, _), run)| *d == dim && run.flows.iter().any(|f| f.pos == pos))
+    with_world(|w| {
+        w.dims[dim]
+            .fluid_transport
+            .pipes
+            .get(&pos)
+            .is_some_and(|p| p.interfaces.iter().any(|(_, c)| c.flow.is_some()))
     })
+    .unwrap_or(false)
 }
-
-/// The pump at `pos` gets no more from its source: its flows recede from game time `now`.
-pub(super) fn stop(dim: usize, pos: [i32; 3], now: i64) {
-    RUNNING.with_borrow_mut(|r| {
-        if let Some(run) = r.get_mut(&(dim, pos))
-            && run.stop.is_none()
-        {
-            run.stop = Some(now);
-            touch(dim, &run.flows);
-        }
-    });
+pub(super) fn provided(dim: usize, pos: [i32; 3], _now: i64) -> Vec<(Dir, Fluid)> {
+    with_world(|w| {
+        w.dims[dim].fluid_transport.pipes.get(&pos).map(|p| {
+            p.interfaces
+                .iter()
+                .filter_map(|(d, c)| c.provided_fluid(true).map(|f| (*d, f)))
+                .collect()
+        })
+    })
+    .flatten()
+    .unwrap_or_default()
 }
-
-/// The pump at `pos` lost its pressure (stopped, or its pipes changed): its flows are gone.
-pub(super) fn clear(dim: usize, pos: [i32; 3]) {
-    if let Some(old) = RUNNING.with_borrow_mut(|r| r.remove(&(dim, pos))) {
-        touch(dim, &old.flows);
-    }
-}
-
-/// Pumps of level `dim` that are not in `turning` lose their flows.
-pub(super) fn keep_only(dim: usize, turning: &[[i32; 3]]) {
-    let gone: Vec<[i32; 3]> = RUNNING.with_borrow(|r| {
-        r.keys()
-            .filter(|(d, p)| *d == dim && !turning.contains(p))
-            .map(|(_, p)| *p)
-            .collect()
-    });
-    for p in gone {
-        clear(dim, p);
-    }
-}
-
-/// When flow `f` of `run` goes: a tick after the one before it, once the source stopped.
-fn ends_at(run: &Running, f: &FlowAt) -> Option<i64> {
-    run.stop.map(|s| s + i64::from(f.order))
-}
-
-/// Pipes whose flows changed show their clients; receded flows are forgotten.
 pub(super) fn send(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let now = lv.game_time();
-    let done: Vec<[i32; 3]> = RUNNING.with_borrow(|r| {
-        r.iter()
-            .filter(|((d, _), run)| {
-                *d == dim
-                    && run
-                        .flows
-                        .iter()
-                        .all(|f| ends_at(run, f).is_some_and(|e| e < now))
-            })
-            .map(|((_, p), _)| *p)
-            .collect()
-    });
-    for p in done {
-        clear(dim, p);
-    }
-    let dirty: Vec<[i32; 3]> = DIRTY.with_borrow_mut(|d| {
-        let mine: Vec<_> = d
+    let records = with_world(|w| {
+        w.dims[dim]
+            .fluid_transport
+            .pipes
             .iter()
-            .filter(|(x, _)| *x == dim)
-            .map(|(_, p)| *p)
-            .collect();
-        d.retain(|(x, _)| *x != dim);
-        mine
-    });
-    for pos in dirty {
-        let (v, codes) = shown_at(dim, pos);
-        let forced = FORCED.with_borrow_mut(|f| f.remove(&(dim, pos)));
-        let same = SHOWN.with_borrow(|s| {
-            s.get(&(dim, pos))
-                .map_or(v.is_empty(), |o| o.0 == v && o.1 == codes)
-        });
-        if same && !forced {
-            continue;
+            .map(|(p, b)| (*p, b.clone()))
+            .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
+    for (pos, b) in records {
+        let mut v = Vec::new();
+        let mut codes = Codes::default();
+        for (d, c) in &b.interfaces {
+            let Some(f) = c.flow else {
+                continue;
+            };
+            let speed = create_engine::fluids::flow_speed(c.pressure()[usize::from(!f.inbound)]);
+            v.extend([
+                Dir::ALL.iter().position(|x| *x == *d).unwrap() as i32,
+                codes.code(Some(f.fluid)),
+                i32::from(f.inbound) | (i32::from(matches!(c.source, Some(Source::Open(_)))) << 1),
+                now as i32,
+                (-f.progress / speed).to_bits() as i32,
+                speed.to_bits() as i32,
+                i32::MAX,
+            ]);
         }
-        if !lv.is_loaded(pos) {
+        if SHOWN.with_borrow(|s| {
+            s.get(&(dim, pos))
+                .is_some_and(|old| old.0 == v && old.1 == codes && old.2 == b.write())
+        }) {
             continue;
         }
         let Some(entity) = lv.host.block_entity(lv.level, pos) else {
             continue;
         };
-        let mut data = Compound::from([(FLOW.into(), Tag::IntArray(v.clone()))]);
-        // Always written, so a pipe that stopped carrying a potion drops its key.
-        let keys = codes.keys.iter().map(|k| Tag::String(k.as_str().into()));
-        data.insert(FLOW_FLUIDS.into(), Tag::List(keys.collect()));
+        let mut data = super::connections::encode(&b);
+        data.insert(FLOW.into(), Tag::IntArray(v.clone()));
+        data.insert(
+            FLOW_FLUIDS.into(),
+            Tag::List(
+                codes
+                    .keys
+                    .iter()
+                    .map(|k| Tag::String(k.as_str().into()))
+                    .collect(),
+            ),
+        );
         let _ = entity.merge_data(&mut *lv.host, data);
         SHOWN.with_borrow_mut(|s| {
-            if v.is_empty() {
-                s.remove(&(dim, pos));
-            } else {
-                s.insert((dim, pos), (v, codes));
-            }
+            s.insert((dim, pos), (v, codes, b.write()));
         });
     }
-}
-
-/// The flows at `pos` from every pump, one a side (the first pump's).
-fn shown_at(dim: usize, pos: [i32; 3]) -> (Vec<i32>, Codes) {
-    RUNNING.with_borrow(|r| {
-        let mut v = Vec::new();
-        let mut codes = Codes::default();
-        let mut sides = 0u8;
-        let mut runs: Vec<_> = r.iter().filter(|((d, _), _)| *d == dim).collect();
-        runs.sort_by_key(|((_, p), _)| *p);
-        for (_, run) in runs {
-            for f in run.flows.iter().filter(|f| f.pos == pos) {
-                if sides & f.side.bit() != 0 {
-                    continue;
-                }
-                sides |= f.side.bit();
-                let side = Dir::ALL.iter().position(|d| *d == f.side).unwrap_or(0);
-                v.extend([
-                    side as i32,
-                    codes.code(Some(run.fluid)),
-                    i32::from(f.inbound) | i32::from(f.open) << 1,
-                    run.start as i32,
-                    f.start.to_bits() as i32,
-                    f.speed.to_bits() as i32,
-                    ends_at(run, f).map_or(i32::MAX, |e| e as i32),
-                ]);
-            }
-        }
-        (v, codes)
-    })
-}
-
-/// The flows complete and coming in by each side of the pipe at `pos` at game time `now`
-/// (`PipeConnection.getProvidedFluid`: inbound and complete), one a side (the first pump's, as
-/// `shown_at` shows them).
-pub(super) fn provided(dim: usize, pos: [i32; 3], now: i64) -> Vec<(Dir, Fluid)> {
-    RUNNING.with_borrow(|r| {
-        let mut runs: Vec<_> = r.iter().filter(|((d, _), _)| *d == dim).collect();
-        runs.sort_by_key(|((_, p), _)| *p);
-        let mut sides = 0u8;
-        let mut out = Vec::new();
-        for (_, run) in runs {
-            for f in run.flows.iter().filter(|f| f.pos == pos) {
-                if sides & f.side.bit() != 0 {
-                    continue;
-                }
-                sides |= f.side.bit();
-                if f.inbound && complete(run, f, now) {
-                    out.push((f.side, run.fluid));
-                }
-            }
-        }
-        out
-    })
-}
-
-/// Whether flow `f` of `run` has filled its half of the pipe and not yet gone at `now`.
-fn complete(run: &Running, f: &FlowAt, now: i64) -> bool {
-    if ends_at(run, f).is_some_and(|e| now >= e) {
-        return false;
-    }
-    f.progress((now - run.start) as f32) >= 1.0
-}
-
-/// The pipes of level `dim` where flows of two fluids come in complete by two sides at `now`
-/// (`FluidTransportBehaviour.tick`'s `collidingFlow`): each pipe with the first fluid and the
-/// one that met it.
-pub(super) fn collisions(dim: usize, now: i64) -> Vec<([i32; 3], Fluid, Fluid)> {
-    let mut at: Vec<[i32; 3]> = RUNNING.with_borrow(|r| {
-        r.iter()
-            .filter(|((d, _), _)| *d == dim)
-            .flat_map(|(_, run)| run.flows.iter().filter(|f| f.inbound).map(|f| f.pos))
-            .collect()
-    });
-    at.sort_unstable();
-    at.dedup();
-    at.into_iter()
-        .filter_map(|pos| {
-            let mut sides = provided(dim, pos, now);
-            sides.sort_by_key(|(d, _)| Dir::ALL.iter().position(|x| x == d));
-            let first = sides.first()?.1;
-            let other = sides.iter().find(|(_, f)| *f != first)?.1;
-            Some((pos, first, other))
-        })
-        .collect()
 }
 
 /// A flow as a client reads it from its pipe's block entity.

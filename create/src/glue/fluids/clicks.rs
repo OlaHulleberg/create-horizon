@@ -353,7 +353,7 @@ fn use_smart_pipe(
             None => d.plumbing.filters.remove(&pos).is_some(),
         };
         if changed {
-            d.pipes_changed = true;
+            d.fluid_transport.changed.push(pos);
             d.plumbing.filter_changes.push(pos);
             d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
         }
@@ -397,7 +397,7 @@ pub(crate) fn set_smart_pipe_filter(lv: &mut ServerLevel<'_>, pos: [i32; 3], ite
             None => d.plumbing.filters.remove(&pos).is_some(),
         };
         if changed {
-            d.pipes_changed = true;
+            d.fluid_transport.changed.push(pos);
             d.plumbing.filter_changes.push(pos);
             d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
         }

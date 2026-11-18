@@ -118,6 +118,33 @@ pub(super) fn sink(
     Some(took)
 }
 
+/// Capability fill simulation for FluidNetwork's preflight pass.
+pub(super) fn simulate_sink(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    fluid: Fluid,
+    amount: u32,
+) -> Option<u32> {
+    if let Some(took) =
+        crate::glue::contraptions::actors::pfi_fill_action(lv, pos, fluid, amount, false)
+    {
+        return Some(took);
+    }
+    let dim = lv.dim;
+    if with_world(|w| w.dims[dim].plumbing.creative.contains_key(&pos)) == Some(true) {
+        return Some(amount);
+    }
+    let mut hose = with_world(|w| w.dims[dim].plumbing.hoses.remove(&pos)).flatten()?;
+    let hot = lv
+        .level
+        .dimension_type(&*lv.host)
+        .is_some_and(|t| t.water_evaporates);
+    let now = lv.game_time();
+    let took = hose.fill_action(&mut HoseLevel(lv), pos, fluid, amount, hot, now, true);
+    put_hose(dim, pos, hose);
+    Some(took)
+}
+
 /// A hose taken out to work on the world goes back, ticking if it has something to do.
 fn put_hose(dim: usize, pos: [i32; 3], hose: create_engine::hose::Hose) {
     with_world(|w| {

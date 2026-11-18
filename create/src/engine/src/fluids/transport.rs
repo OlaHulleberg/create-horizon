@@ -1,7 +1,6 @@
 //! Connection-owned transport state, following Create's `PipeConnection` and
 //! `FluidTransportBehaviour`. World source discovery and Layer III networks are
 //! supplied by the caller; they are not endpoint-path projections.
-//! This foundation is not yet wired into the world scheduler or glue persistence.
 
 use crate::kinetics::Dir;
 use crate::open_end::OpenEnd;
@@ -49,9 +48,23 @@ pub struct PipeConnection {
     pub flow: Option<Flow>,
     pub source: Option<Source>,
     previous_source: Option<Source>,
+    pub network: Option<super::runtime::FluidNetwork>,
 }
 
 impl PipeConnection {
+    /// Open-ended source retained across wipePressure for reuse. Observers must
+    /// count this tank even during WAIT_FOR_PUMPS, as Java's previousSource does.
+    pub fn open_end(&self) -> Option<OpenEnd> {
+        match self.source.or(self.previous_source) {
+            Some(Source::Open(e)) => Some(e),
+            _ => None,
+        }
+    }
+
+    pub fn set_pressure(&mut self, pressure: [f32; 2]) {
+        self.pressure = pressure;
+    }
+
     pub fn pressure(&self) -> [f32; 2] {
         self.pressure
     }
@@ -73,6 +86,9 @@ impl PipeConnection {
     /// the caller's responsibility; it must not discard an open end's tank.
     pub fn wipe_pressure(&mut self) {
         self.pressure = [0.0; 2];
+        if let Some(n) = &mut self.network {
+            n.reset();
+        }
         if self.source.is_some() {
             self.previous_source = self.source;
         }

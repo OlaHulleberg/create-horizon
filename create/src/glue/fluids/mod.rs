@@ -48,6 +48,7 @@ pub(crate) mod client;
 mod drawn;
 pub(crate) mod engine;
 pub(crate) use engine::engine_sourced;
+mod connections;
 mod flows;
 mod goggles;
 mod lava;

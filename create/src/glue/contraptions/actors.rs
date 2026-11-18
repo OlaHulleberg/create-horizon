@@ -2711,6 +2711,15 @@ pub fn pfi_offer(
     Some(offer.flatten())
 }
 
+/// FluidNetwork keeps a portable source engaged while its frontier is live.
+pub fn pfi_keep_flow(lv: &ServerLevel<'_>, pos: [i32; 3]) {
+    if lv.create_block(pos) == Some(Block::PortableFluidInterface)
+        && interface_connected(lv, pos, Block::PortableFluidInterface).is_some()
+    {
+        psi_transferred(lv.dim, pos);
+    }
+}
+
 /// What a pump drew from a portable fluid interface leaves the contraption's tanks
 /// (`InterfaceFluidHandler.drain`): `amount` of their first fluid, tank by tank.
 pub fn pfi_drain(lv: &ServerLevel<'_>, pos: [i32; 3], amount: u32) {
@@ -2743,6 +2752,16 @@ pub fn pfi_fill(
     fluid: create_engine::tank::Fluid,
     amount: u32,
 ) -> Option<u32> {
+    pfi_fill_action(lv, pos, fluid, amount, true)
+}
+
+pub fn pfi_fill_action(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+    fluid: create_engine::tank::Fluid,
+    amount: u32,
+    execute: bool,
+) -> Option<u32> {
     if lv.create_block(pos) != Some(Block::PortableFluidInterface) {
         return None;
     }
@@ -2756,12 +2775,16 @@ pub fn pfi_fill(
                 break;
             }
             let capacity = t.capacity();
-            left -= t.tank.fill_amount(fluid, left, capacity);
+            left -= if execute {
+                t.tank.fill_amount(fluid, left, capacity)
+            } else {
+                t.tank.clone().fill_amount(fluid, left, capacity)
+            };
         }
         amount - left
     })
     .unwrap_or(0);
-    if took > 0 {
+    if execute && took > 0 {
         psi_transferred(lv.dim, pos);
     }
     Some(took)
