@@ -1,163 +1,87 @@
 # API gaps
 
-What the mod SDK (Sunrise's mod API, also proposed for Horizon) can't do yet, at the build pinned in
-`create/horizon-mod.toml`. The mod leaves these behaviours out (or approximates them, as stated) and the
-module doc in `create/src/glue/` says so too. Re-check an entry against a newer SDK before acting on it
-(`cargo horizon-mod sdk diff <old> <new>`).
+What the mod SDK can't do yet, at the Sunrise pin in `create/horizon-mod.toml` (`b77574e`), checked against the
+latest nightly (`2d81263`, 2026-11-17). We only ask for what Create itself uses; better APIs wait until after parity.
+Links point to the Create 6.0.11 source (`b62e837`) that uses the missing feature.
 
-Each entry: what Create does → what's missing → the API that would close it.
+## Still missing (Create uses it)
 
-## World and blocks
+| Missing | Effect in the port | What Create uses |
+|---|---|---|
+| Block entity save callback | saves can miss live state | [`SmartBlockEntity.saveAdditional`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/blockEntity/SmartBlockEntity.java#L161) |
+| `isSolid` of declared shapes | signs and torches drop off | [`BlockState.isSolid()`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/girder/GirderBlock.java#L334) |
+| Weathering class/age; block class | copycat and copper rules guessed | [`WeatheringCopper`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/block/CopperBlockSet.java#L237), [`instanceof StairBlock`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/copycat/CopycatBlock.java#L180) |
+| Scaffolding collision for a declared block | metal scaffolding can't be climbed | [`extends ScaffoldingBlock`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/MetalScaffoldingBlock.java#L21) |
+| Server hook when a block entity loads data | `/data merge` ignored | [`loadAdditional` → `read`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/blockEntity/SmartBlockEntity.java#L123) |
+| Update flags in `block_changed` | known-shape updates handled by a workaround | [`UPDATE_KNOWN_SHAPE`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/chainDrive/ChainGearshiftBlock.java#L60) |
+| `state_for_placement` answering another block | powered shaft appears a tick late | [`pickCorrectShaftType`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/simpleRelays/ShaftBlock.java#L50) |
+| Per-slot insert rules on `ModContainer` | depots and chutes accept anything | [`insertItem`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/logistics/depot/DepotItemHandler.java#L28), [`isItemValid`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/toolbox/ToolboxInventory.java#L124) |
+| Block entity in non-player `BlockDropsEvent` | dropped items lose their data | [loot `BLOCK_ENTITY` source](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/AllBlocks.java#L2240) |
+| Access to the `schematics/` folder | uploaded schematics can't be deleted | [`Files.deleteIfExists`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/schematics/ServerSchematicLoader.java#L139) |
+| Creative tab contents on the server | filter attribute can't be checked | [`tab.contains`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/logistics/item/filter/attribute/attributes/InItemGroupAttribute.java#L44) |
+| Full tooltip lines (with mod callbacks) | filter screen tooltips incomplete | [`renderTooltip`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/logistics/filter/AttributeFilterScreen.java#L209) |
+| Server-side translation | display text stays as keys | [`Component.getString()`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/redstone/displayLink/source/BoilerDisplaySource.java#L80) |
+| General entity renderers; client `vehicle` | seats and packages | [`SeatEntity`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/actors/seat/SeatEntity.java#L35), [`PackageEntity`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/logistics/box/PackageEntity.java#L58) |
+| `move_by` for players | belts can't carry players | [`entity.move(SELF, …)`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/belt/transport/BeltMovementHandler.java#L176) |
+| Collision shape per entity | belt shape for riders | [`EntityCollisionContext.getEntity()`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/belt/BeltBlock.java#L389) |
+| `MinecartRef::set_carrying` | minecart contraptions | [`startRiding(cart)`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/mounted/MinecartContraptionItem.java#L194) |
+| Own projectile class | potato cannon | [`AbstractHurtingProjectile`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/potatoCannon/PotatoProjectileEntity.java#L47) |
+| Mod damage types | crush and similar damage | [`DamageTypeBuilder`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/AllDamageTypes.java#L29) |
+| Writable fire immunity | netherite diving gear | [`fireImmune()` mixin](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/mixin/EntityMixin.java#L28) |
+| Fluid / display-entity renderers | contraption drawing | [`ContraptionEntityRenderer`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/render/ContraptionEntityRenderer.java#L41) |
+| Client player writes (air, ground) | diving helmet and boots | [`LivingBreatheEvent`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/armor/DivingHelmetItem.java#L73), [`setOnGround`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/armor/DivingBootsItem.java#L55) |
+| Write a worn stack without the equip sound | backtank air | [`BACKTANK_AIR`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/armor/BacktankUtil.java#L79) |
+| Local swing state | extendo grip | [`getSwingProgress`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/extendoGrip/ExtendoGripRenderHandler.java#L73) |
+| Cancelling a key in `input_key` | linked controller | [`setDown(false)`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/actors/trainControls/ControlsHandler.java#L115) |
+| Partial block-entity redraw | bearings | [`BearingRenderer`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/bearing/BearingRenderer.java#L27) |
+| Tint over block-entity models | overstress flash | [`buffer.color`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/base/KineticBlockEntityRenderer.java#L109) |
+| Text in block-entity draws, with alpha | value labels | [`drawInBatch(SEE_THROUGH)`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/blockEntity/renderer/SmartBlockEntityRenderer.java#L56) |
+| Particle rotation and level access | soul and rotating particles | [`getCustomRotation`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/bell/CustomRotationParticle.java#L32), [`isDark`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/bell/SoulParticle.java#L76) |
+| Tinted item/fluid particles | fluid particles | [`FluidParticleData`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/fluids/particle/FluidParticleData.java#L35) |
+| Connected textures | casings and glass | [`ConnectedTextureBehaviour`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/block/connected/ConnectedTextureBehaviour.java#L16) |
+| Menus without a block | filter and schedule screens | [`player.openMenu`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/logistics/filter/FilterItem.java#L80) |
+| Drawing a `BlockState` with alpha | schematic preview | [`tesselateBlock`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/schematics/client/SchematicRenderer.java#L118) |
+| Items in world draws | filter value boxes | [`renderItemIntoValueBox`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/blockEntity/behaviour/filtering/FilteringRenderer.java#L155) |
+| 3D item rotation in screens | wand screen | [`GuiGameElement.rotate`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/symmetryWand/SymmetryWandScreen.java#L133) |
+| Game bug: `_head` blocks get a skull block entity | piston heads break | [no block entity](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/piston/MechanicalPistonHeadBlock.java#L34) |
 
-- **Live block entity serialization.** The SDK has no block entity save callback. The shared
-  `Subsystem::write_entities` phase publishes live records after all level subsystems finish.
-  Accepted value settings and handle interactions also publish entity journals and marked column
-  attachments immediately, before the host's pre-block-tick chunk snapshot. This covers interaction
-  changes without a save callback; mutations outside these publication paths would still need one.
-- **Shape from a block entity.** A factory gauge's outline follows its panels (`FactoryPanelBlock.getShape`); here it
-  is always the whole face → shapes are per state only → a block-part shape hook (outline and collision, with position).
-- **Scoreboard.** Scoreboard and death-counter display sources are left out → no typed scoreboard access → host calls
-  to list an objective's scores and to add a dummy objective / set a score.
-- **`isSolid` of a declared shape.** A declared block keeps its template's `isSolid`, so wall signs and torches drop off
-  some blocks (packagers, frogports and postboxes use solid templates to avoid it) → `calculateSolid` isn't run on
-  declared shapes → compute it from the collision shape, or a `solid` declaration field.
-- **Light emission and friction of a state.** Copycats can't glow or slide as their material → nothing reads another
-  state's light or friction → `HostBlockStates::light_emission(state)` and `friction(state)`.
-- **Other block-state facts.** `isRedstoneConductor`, `isSolidRender` (approximated by "full collision cube"),
-  `requiresCorrectToolForDrops` (deployers dig everything at harvest speed), the weathering-copper class and age, a
-  block's class (copycats guess from tags and ids) → `HostBlockStates` facts for each.
-- **A state's numeric id.** Break effects of wrenched copycats, casings, brackets and the belt slicer are rebuilt from
-  particles and the break sound, not the client's own burst → `BlockStates::state_id` (or `level_event(2001)` taking a
-  `BlockState`).
-- **Neighbour-shape update of a state placed by code.** The wand of symmetry's mirrored placements skip
-  `updateShape` → a placement call that runs it.
-- **Level in `OnBlockPlacedByEvent`.** Decor fix-ups after a placement with no placer are skipped → a level on the event.
-- **Scaffolding collision for a templated block.** Metal scaffolding can be stood on but not climbed through → the
-  game gives scaffolding's context shape only to `minecraft:scaffolding` → a declaration field for it.
-- **Fluid interactions in declarations.** Honey or chocolate meeting lava turns it a tick later, from `fluid_tick` →
-  no declaration for `registerFluidInteractions` → a content-declaration entry.
-- **Redstone in `state_for_placement`.** A clutch or gearshift placed beside power takes `powered` a tick later, and
-  one set with a `powered` value its neighbours disagree with (`/setblock`, structures) is corrected on placement, where
-  Create keeps it until a neighbour changes (#7) → `state_for_placement` gets a `&dyn LevelHost`, which has no
-  `has_neighbor_signal`; `LevelTicksHost` has it (`best_neighbor_signal`, `signal` too). Still so at Sunrise `bd21c4d`
-  and head (2026-11-17). Fix: pass a level with signal reads (`&dyn LevelTicksHost`) to `state_for_placement`.
-- **A block entity reading data it is given.** `/data merge block` on a Create block entity (a table cloth given a
-  `Price`, a motor a `KineticState`) changes its saved data, but the mod keeps its own state and never sees it; Create
-  runs the entity's `read` (`BlockDataAccessor.setData` → `loadWithComponents`) and takes it up at once → the server has
-  only `block_entity_on_load`, once per instance (`block_entity_data_received` is the client's). Still so at Sunrise
-  head 1f799a9 (2026-11-17). Fix: a server hook when a block entity loads data into an existing instance.
-- **A block change's update flags.** `block_changed` says the old and new state but not the `setBlock` flags, and
-  Create's kinetics depend on one: with `UPDATE_KNOWN_SHAPE` (an adjustable chain gearshift's power change)
-  `updateIndirectNeighbourShapes` doesn't run and the entity keeps its kinetic state → the glue calls
-  `CreateWorld::setting_known_shape` before the commit it makes itself. Fix: the flags in `block_changed`.
-- **A placement answering another block.** A shaft placed in front of a steam engine becomes a powered shaft a tick
-  later (`pickCorrectShaftType`) → `state_for_placement` can't read another block's state.
-- **Collision shapes in `can_survive`.** Hand cranks and valve handles are refused only against air or fluid →
-  `LevelHost` has no collision shapes.
-- **`setPlacedBy` from code without a player.** The schematicannon writes doors', tall plants' and beds' other halves
-  itself → `PlayerRef::place_block` needs an online player → a `LevelRef` placement that runs `setPlacedBy`.
-- **Hanging entities in a box.** Schematics saved by the mod hold no item frames or paintings → `LevelRef::entities_in`
-  leaves them out.
-- **Portal destination.** No portal tracks or `train_portal` → nothing finds or builds the exit portal →
-  `LevelRef::portal_destination(portal, axis)` (the railway would then need cross-level graphs).
+## Added in nightly `2d81263` (usable once the pin moves)
 
-## Containers, items and transactions
+| Added | What Create uses |
+|---|---|
+| `shapes_from_block_entity` + `set_shapes` | [`FactoryPanelBlock.getShape`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/logistics/factoryBoard/FactoryPanelBlock.java#L317) |
+| Scoreboard host calls | [`addObjective`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/redstone/displayLink/source/StatTrackingDisplaySource.java#L33) |
+| `light_emission` / `friction` of a state | [`getFriction`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/copycat/CopycatBlock.java#L296), [`getLightEmission`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/copycat/CopycatBlock.java#L306) |
+| `is_redstone_conductor`, `is_solid_render`, correct-tool queries | [`isRedstoneConductor`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/actors/roller/RollerMovementBehaviour.java#L125), [`canHarvestBlock`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/copycat/CopycatBlock.java#L315) |
+| `level_block_break_effect` | [`levelEvent(PARTICLES_DESTROY_BLOCK)`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/utility/BlockHelper.java#L219) |
+| `level_update_from_neighbour_shapes` | [`updateShape`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/symmetryWand/SymmetryWandItem.java#L208) |
+| `on_block_placed_by` v2 (level) | [`setPlacedBy`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/base/KineticBlock.java#L81) |
+| `FluidInteraction` declarations | [`addInteraction`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/AllFluids.java#L121) |
+| Signal reads on `LevelHost` (fixes #7) | [`hasNeighborSignal`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/transmission/GearshiftBlock.java#L41) |
+| `LevelHost::collision_shape` | [`getCollisionShape`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/crank/HandCrankBlock.java#L95) |
+| `level_place_block` without a player | [`setPlacedBy(…, null, …)`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/utility/BlockHelper.java#L400) |
+| `entities_in` returns frames and paintings | [`fillFromWorld`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/schematics/SchematicExport.java#L44) |
+| `level_portal_destination` | [`getPortalDestination`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/trains/track/AllPortalTracks.java#L133) |
+| `menu_quick_move` v3 (empty result) | [`quickMoveStack`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/schematics/cannon/SchematicannonMenu.java#L66) |
+| `set_collider`, `MoveCause::Carried` | [`collideEntities`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/ContraptionCollider.java#L77) |
+| `full_attack_charge` | [fake player attack](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/deployer/DeployerHandler.java#L217) |
+| `fall_on` v2 distance | [`fallOn`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/actors/seat/SeatBlock.java#L85) |
+| `set_sprinting` | [`setSprinting`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/tool/CardboardSwordItem.java#L115) |
+| Client-side `brightness` | [`getBrightness`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/trains/entity/CarriageContraptionEntityRenderer.java#L103) |
+| `client_pick` | [`mc.hitResult`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/extendoGrip/ExtendoGripItem.java#L171) |
+| `item_uses_block_light` | [`isGui3d`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/blockEntity/behaviour/ValueBoxRenderer.java#L31) |
+| `tick_rate_is_frozen` | [`isFrozen`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/base/KineticBlockEntity.java#L290) |
+| `play_sound` with `except` | [`CARDBOARD_SWORD.play`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/tool/CardboardSwordItem.java#L72) |
+| `SoundRef::move_to` / `set_pitch` | [`setLocation`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/trains/entity/CarriageSounds.java#L209), [`setPitch`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/fan/AirCurrent.java#L390) |
+| Fix: one bad recipe no longer empties its type | vanilla recipe loading |
 
-- **Rolling back mod state with a transaction.** Tanks offer no `FLUIDS`, belts and tunnels no `ITEMS`, upward saws
-  no inventory, and portable storage interfaces only serve Create's chutes and funnels → a handler can't learn its
-  transaction aborted → an abort callback on `Transaction`, or a journal for mod state.
-- **Notice of any container changing.** Chutes under vanilla containers and frogports above inventories re-check on a
-  timer → `contents_changed` reaches only the block's own parts.
-- **Empty stack from `menu_quick_move`.** The schematicannon can't move a whole stack into its gunpowder slot → the
-  hook can't return "empty" → `Option<ItemStack>`.
-- **Per-slot insert rules on `ModContainer`.** "Insert only while empty" (depot, ejector, crafter, chute) and the
-  toolbox's one kind per compartment for hoppers and funnels.
-- **Block entity in `BlockDropsEvent`.** A toolbox destroyed by the level (`/setblock .. destroy`) drops empty.
-- **Removing config files.** `ConfigFiles::remove` (oldest schematic upload) and access to the game's `schematics/`
-  folder.
-- **Slots over 99.** A toolbox compartment holds 256; only the deposit button and hoppers fill past one stack.
-- **Creative tabs.** The `in_item_group` filter attribute is refused → nothing reads a tab's contents.
-- **An item's tooltip lines.** Filter screens show a slot's name, not its tooltip.
-- **Translations on the server.** Display links use Create's en_us text.
+## Not used by Create (out of scope until after parity)
 
-## Entities and moving structures
+| Gap | Why |
+|---|---|
+| Rolling back mod state with a transaction | Create has no transactions |
+| Notice of any container changing | Create polls: [`BlockCapabilityCache`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/logistics/chute/ChuteBlockEntity.java#L513) |
+| Slots over 99 | toolbox slots are 64: [`ToolboxInventory`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/toolbox/ToolboxInventory.java#L32) |
+| Display entities loaded from a save | not needed (the nightly added it anyway) |
 
-- **Moving colliders.** Players can't stand on or be pushed by bearing and piston structures, trains or minecart
-  contraptions (trains still hurt and throw what they hit) → `LevelRef::set_moving_colliders`.
-- **Mod entity types that aren't template copies.** Seats are tagged item displays; riding seats on moving structures,
-  clicking their blocks and Create's package entity are left out; `EntityRef::vehicle` is server-only and
-  `entities_in` skips displays, so the shop overlay guesses who is seated.
-- **Display entities loaded from a save.** Not reported to `entity_join_level` nor listed by `entities_in`, so trains'
-  displays are cleaned up with a `kill` selector on a per-opening tag.
-- **`EntityRef::move_by`.** Belts carry mobs by setting motion and players by a client push (with step-up on slopes),
-  and coupled carts only have their motion damped → no extra move for an entity.
-- **Collision shape for a riding entity.** Every entity collides with a belt's cut shape → shapes select by entity
-  class only.
-- **`MinecartRef::set_carrying`.** A cart with a contraption doesn't move the ridden cart's step.
-  (`MinecartRef::is_on_rails` also reads false in a level tick; the mod reads the rail.)
-- **Mod projectile type.** Potato cannon shots are snowballs flown by the mod, hurting as `minecraft:thrown`, and lost
-  as plain snowballs over a save → a projectile class of its own, or persistent data on `EntityRef`.
-- **Damage types.** Create's damage types aren't registered, so crushing wheels use `cramming`, saws, drills, rollers
-  and run-over trains `generic`, fans `lava` and `in_fire` → register a native mod's `damage_type` files.
-- **Fake player attack strength.** A deployer's punch deals about a fifth of Create's damage → a
-  `PlayerActionSetup` field for full charge.
-- **`Block.fallOn` distance.** Seats halve a fall by recomputing the damage → a writable `distance` on `FallOnEvent`.
-- **Sprinting.** The cardboard sword doesn't stop the attacker's sprint → no `Entity.setSprinting`.
-- **Fire immunity.** A full netherite diving set still catches fire from lava for a tick → no `fireImmune` flag.
-- **Fluids and swapped sprites on display entities.** On trains and cart contraptions, tank, basin, spout and drain
-  fluids, dyed or cased belts and wall banners aren't drawn right → a fluid display, or an entity renderer with
-  `ClientHost` and `BlockEntityDrawContext`.
-
-## Client and rendering
-
-- **Client light.** Moving structures and steam jets use the server's light, and a filter in a smart chute is drawn
-  full bright → `LevelRef::brightness` is server-only.
-- **Local player state.** Air (diving helmet bubbles still drop), ground flag and swimming (diving boots), inventory
-  slots (symmetry mirrors come from the server), flight (`player_abilities` on the client reads the server's last
-  abilities packet, so the server tells the fans' client push whether its player flies) → client-side reads or
-  writes for each.
-- **Worn stack data in place.** A backtank's air update replays the equip sound → `ItemStack` change without
-  `setItemSlot`.
-- **The local player's swing.** The extendo grip's arms move only on a raw mouse click.
-- **The client's pick.** The extendo grip picks entities within its reach before blocks; Create lets blocks win →
-  a hook replacing `GameRenderer.pick`'s result.
-- **Consuming a key in `input_key`** (train driving).
-- **Whether an item model is 3D.** Belts, depots, placards and link slots approximate `isGui3d`.
-- **Frozen while stepping.** Under `/tick freeze` turning parts stand at their rest angle (`KineticBlockEntity.getSpeed`
-  is 0 while `isFrozen`), but during a `/tick step` they turn for the ticks stepped, where Create keeps them at rest →
-  `ServerTickStart` gives only `world_running`, false while frozen and true while stepping → a frozen flag
-  (`TickRateManager.isFrozen`) on the event or the host.
-- **Keeping only part of a block entity's drawing.** A block with one animated part redraws every frame; the clockwork
-  bearing can't hide its top for the hour hand.
-- **Colour over a block-entity model.** The overstress red/green flash is left out → `terrain_model` tint only reaches
-  tinted quads.
-- **Text in block-entity draws.** No alpha (display boards) and no see-through name-tag mode (frogport address).
-- **Sound for everyone but one player.** The cardboard sword's bonk also plays from the server to the clicker.
-- **Moving a playing sound.** Machine hum and cog clicks play at the listener; a train horn stays where it started →
-  `SoundRef::move_to(position)`.
-- **Changing a playing sound's pitch.** An air current's wind keeps the pitch it started with; Create's follows the
-  player's speed each tick (`AirCurrentSound.setPitch`) → `SoundRef::set_pitch(pitch)`.
-- **Particle rotation and level access.** Haunted-bell souls are billboards (Create turns them about the vertical)
-  and don't vanish in light → a rotation mode on `ModParticle` and a host in `ParticleProvider::tick`.
-- **Tinted fluid particles.** Pipes spray water and potions scattered, not at Create's velocity → a tint on
-  `ParticleOptions::item`.
-- **Connected textures.** Joins decided by block entity data or collision (vault and tank seams, crafters, brass
-  tunnel tops, copper roofs, casings next to encased blocks) are left out → a per-face sprite shift reading
-  neighbour states and block entity data.
-- **Menus without a block.** Filter and schedule screens are the mod's own and carry ghost copies → a `Screen` for a
-  menu type.
-- **A block state drawn without a block entity.** Schematic ghost blocks are outlined only → a `WorldDrawContext` call
-  drawing a `BlockState` with alpha.
-- **Translucent block models.** Placement-helper ghosts are drawn from quads `create-data prepare` bakes out of the
-  jar's models, one textured pipeline per sprite (`glue/interaction/ghost.rs`) → an overall alpha (a translucent
-  route) for `draw_model_instances`, so the mod draws the block model itself and drops the bake.
-- **Items and text in world draws.** Filter slot items and counts (`FilteringRenderer`) are left out.
-- **A turned item in a screen.** The wand of symmetry's screen draws it flat.
-
-## Game bugs found (Sunrise `b77574eb1b`)
-
-- **One bad recipe empties its type.** `recipes_of_type` fails the whole list when one result names an unknown item
-  (Create 6.0.10's `chain_from_zinc` names `minecraft:chain`). The mod renames the chain in its recipes. Fix: skip
-  recipes that fail conversion.
-- **`_head` blocks get a skull block entity.** `create:mechanical_piston_head` gets `minecraft:skull` because
-  `BlockEntity::for_block` matches any `_head`/`_skull`. Fix: check the `minecraft:` namespace.
+Re-check an entry against a newer SDK before acting on it (`cargo horizon-mod sdk diff <old> <new>`).
