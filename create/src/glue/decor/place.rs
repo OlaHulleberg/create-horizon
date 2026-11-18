@@ -17,6 +17,9 @@ use mod_api::{
 };
 
 pub(super) fn register(r: &mut dyn Registrar) {
+    for block in [Block::FactoryGauge, Block::Placard] {
+        r.block_part(states::key(block), LenientSupport);
+    }
     for block in [
         Block::DeskBell,
         Block::ItemHatch,
@@ -244,5 +247,26 @@ fn refuse(lv: &mut ServerLevel<'_>, pos: [i32; 3], placer: Option<PlayerRef>, st
         let mut one = stack.clone();
         let _ = one.set_count(1);
         let _ = player.give_stack(&mut *lv.host, one);
+    }
+}
+
+/// FactoryPanelBlock and PlacardBlock.canAttachLenient: any collision behind the face.
+struct LenientSupport;
+
+#[mod_api::sunrise_part]
+impl mod_api::BlockPart for LenientSupport {
+    fn can_survive(
+        &self,
+        level: &dyn LevelHost,
+        event: &mut mod_api::CanSurviveEvent,
+    ) -> Option<bool> {
+        let (_, info) = block_of(states::id(event.state)?)?;
+        let offset = create_engine::factory::connected_direction(info.face?, info.facing?)
+            .opposite()
+            .offset();
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        level
+            .collision_shape([0, 1, 2].map(|i| pos[i] + offset[i]))
+            .map(|boxes| !boxes.is_empty())
     }
 }
