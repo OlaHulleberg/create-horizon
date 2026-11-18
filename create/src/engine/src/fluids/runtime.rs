@@ -1116,6 +1116,58 @@ mod tests {
     }
 
     #[test]
+    fn unloading_an_earlier_column_does_not_redistribute_restored_pressure() {
+        let _guard = crate::states::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::states::set_range(10, 1);
+        // Issue #73: Java restores 128, not 256, between the two 128 RPM pumps.
+        // SmartBlockEntity.onChunkUnloaded suppresses remove(); it does not
+        // propagate a changed pipe into the columns still awaiting their unload.
+        let mut host = World {
+            rpm: Some(128.),
+            ..World::default()
+        };
+        host.cells.extend([
+            ([2, 4, 0], Cell::Pump(Dir::East)),
+            ([3, 4, 0], Cell::Pipe(Dir::East.bit() | Dir::West.bit())),
+            ([4, 4, 0], Cell::Pump(Dir::East)),
+        ]);
+        let mut transport = register(&host);
+        for pump in transport.pumps.values_mut() {
+            pump.speed = 128.;
+            pump.pending = 0;
+        }
+        transport.distribute_pressure_to(&host, [2, 4, 0], Dir::East, false);
+        let mut world = crate::world::CreateWorld::new(crate::world::StateTable::new(
+            10,
+            [("create:shaft", [("axis", "x")].into_iter())].into_iter(),
+        ));
+        world.ensure_dimension(0);
+        world.block_loaded(0, [2, 4, -1], 10);
+        world.dims[0].fluid_transport = transport;
+        world.column_unloaded(0, 0, -1);
+        crate::states::clear_range();
+        let mut transport = std::mem::take(&mut world.dims[0].fluid_transport);
+        transport.prepare(&host);
+        for pos in [[2, 4, 0], [3, 4, 0], [4, 4, 0]] {
+            transport.tick_pipe(&mut host, pos);
+        }
+        for (side, expected) in [(Dir::West, [128., 0.]), (Dir::East, [0., 128.])] {
+            assert_eq!(
+                transport
+                    .connection(Face {
+                        pos: [3, 4, 0],
+                        side
+                    })
+                    .unwrap()
+                    .pressure(),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn cold_load_keeps_the_saved_shared_pressure_without_redistributing_it() {
         let mut world = World::default();
         world.cells.extend([

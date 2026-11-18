@@ -2069,13 +2069,8 @@ impl CreateWorld {
                 .retain(|(p, _)| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.chain_checks
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.fluid_transport.changed.extend(
-                d.fluid_transport
-                    .pipes
-                    .keys()
-                    .copied()
-                    .map(crate::fluids::runtime::Change::Pipe),
-            );
+            // FluidTransportBehaviour.read restores pressure. Unloading a column
+            // does not call FluidPropagator.propagateChangedPipe on surviving pipes.
             d.plumbing.column_unloaded(cx, cz);
             d.mixing.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.mixer_checks
