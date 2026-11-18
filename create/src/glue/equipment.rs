@@ -12,8 +12,8 @@
 //! extendo grip is drawn by a special item model (`GripModel`) posed as Create's: an item model
 //! node of the glue's (`create:extendo_grip_pose`) picks, by where it is drawn and the game time,
 //! one of the poses `create-data prepare` lists (the cog turned to a tenth of its 45° repeat,
-//! the swing in eight steps, the hand pointing, punching or holding); the swing is started by
-//! a click in the world, as the client sees no swing progress.
+//! the swing in eight steps, the hand pointing, punching or holding). `render_hand` supplies
+//! the actual main-hand swing and identifies the hand showing the grip.
 //! Free when unused: a player's tick reads their armour and hands and looks each item up once
 //! (the gear each item is, cached by key), and only backtanks with something to do tick.
 //!
@@ -345,9 +345,25 @@ impl Subsystem for Equipment {
         }
     }
 
-    /// `ExtendoGripRenderHandler.tick`.
+    /// `ExtendoGripRenderHandler.tick`: retract the grip and refresh its block-holding pose.
     fn client_tick(&self, host: &mut dyn mod_api::ClientHost) {
-        grip_tick(host);
+        let hold = host.local_player().is_some_and(|p| {
+            let off = super::items::held(host, p, Hand::Off);
+            let main = super::items::held(host, p, Hand::Main);
+            off.is_some_and(|s| matches!(gear_of(host, &s), Gear::ExtendoGrip))
+                && main.is_some_and(|s| {
+                    host.item_block(s.item()).is_some()
+                        && host.item_uses_block_light(&s, mod_api::ItemDisplayContext::Gui)
+                })
+        });
+        let mut grip = GRIP_RENDER.get();
+        grip.swing.tick();
+        grip.hold = hold;
+        GRIP_RENDER.set(grip);
+    }
+
+    fn client_reset(&self) {
+        GRIP_RENDER.set(GripRender::default());
     }
 
     /// The start of the local player's tick on its client (`EntityTickEvent.Pre`): the diving
@@ -1141,46 +1157,52 @@ pub(crate) const GRIP_POSE: &str = "create:extendo_grip_pose";
 const GRIP_COG_STEPS: i64 = 10;
 const GRIP_SWING_STEPS: f32 = 8.0;
 
+#[derive(Clone, Copy, Default)]
+struct GripRender {
+    swing: eq::GripSwing,
+    hold: bool,
+    /// The main hand's swing this frame (zero if the main hand was not drawn).
+    main_swing: f32,
+    /// The interpolated extension and pose for the grip being resolved next.
+    pose: (f32, bool),
+}
+
 thread_local! {
-    /// `ExtendoGripRenderHandler.mainHandAnimation` and `pose`: the swing the local player's
-    /// first-person grip shows, and whether its hand holds (a block in the main hand, the grip
-    /// in the off hand) or punches.
-    static GRIP_SWING: std::cell::Cell<(f32, bool)> = const { std::cell::Cell::new((0.0, false)) };
+    static GRIP_RENDER: std::cell::Cell<GripRender> = std::cell::Cell::new(GripRender::default());
 }
 
-/// `onRenderPlayerHand`: a swing starting (a click in the world, no screen open) sets the
-/// grip's animation to 0.95 when it has fallen below it.
-pub(crate) fn grip_swing(
-    host: &mut dyn mod_api::ClientHost,
-    event: &mod_api::MouseButtonPostEvent,
-) {
-    if !event.pressed
-        || event.button > 1
-        || host.screen_title().is_some()
-        || host.mod_screen().is_some()
-    {
-        return;
+/// Some frames show only the off hand. Don't reuse an earlier frame's main-hand swing.
+pub(crate) fn grip_frame() {
+    let mut grip = GRIP_RENDER.get();
+    grip.main_swing = 0.0;
+    grip.pose = (0.0, false);
+    GRIP_RENDER.set(grip);
+}
+
+/// `onRenderPlayerHand`: a displayed grip follows the main-hand swing. When both hands
+/// draw, their hooks run in main/off order, each before that hand's item model is resolved.
+pub(crate) fn grip_hand(render: &mod_api::HandRender<'_>) {
+    let shows_grip = GRIP_ITEM
+        .get()
+        .is_some_and(|&item| render.stack.is_some_and(|stack| stack.item() == item));
+    let mut grip = GRIP_RENDER.get();
+    grip.for_hand(render.hand, render.swing, render.partial, shows_grip);
+    GRIP_RENDER.set(grip);
+}
+
+impl GripRender {
+    fn for_hand(&mut self, hand: Hand, swing: f32, partial: f32, shows_grip: bool) {
+        let main = hand == Hand::Main;
+        if main {
+            self.main_swing = swing;
+        }
+        self.pose = (0.0, false);
+        if shows_grip {
+            self.swing.observe(self.main_swing);
+            // `hold` uses tick-held stacks, not the old stack still shown as the hand lowers.
+            self.pose = (self.swing.at(partial), !main && self.hold);
+        }
     }
-    let (a, hold) = GRIP_SWING.get();
-    GRIP_SWING.set((a.max(0.95), hold));
-}
-
-/// `ExtendoGripRenderHandler.tick`: the animation falls off, and the hand pose follows the
-/// hands (`ExtendoGripRenderHandler` resolves the held model for `isGui3d`).
-pub(crate) fn grip_tick(host: &dyn mod_api::ClientHost) {
-    let (a, _) = GRIP_SWING.get();
-    let a = a * a.clamp(0.8, 0.99);
-    let hold = host.local_player().is_some_and(|p| {
-        let off = super::items::held(host, p, Hand::Off);
-        let main = super::items::held(host, p, Hand::Main);
-        off.is_some_and(|s| matches!(gear_of(host, &s), Gear::ExtendoGrip))
-            && main.is_some_and(|s| {
-                // ExtendoGripRenderHandler.tick: BlockItem, then model.isGui3d().
-                host.item_block(s.item()).is_some()
-                    && host.item_uses_block_light(&s, mod_api::ItemDisplayContext::Gui)
-            })
-    });
-    GRIP_SWING.set((a, hold));
 }
 
 /// `item_model_update` for the grip's node: in a first-person hand, the swing's pose and the
@@ -1198,7 +1220,7 @@ pub(crate) fn grip_pose(
         mod_api::ItemDisplayContext::FirstPersonLeftHand
             | mod_api::ItemDisplayContext::FirstPersonRightHand
     );
-    let (swing, hold) = GRIP_SWING.get();
+    let (swing, hold) = GRIP_RENDER.get().pose;
     let step = (swing * (GRIP_SWING_STEPS - 1.0)).round() as i64;
     let shown = step as f32 / (GRIP_SWING_STEPS - 1.0);
     let mut angle = time as f32 * -2.0;
@@ -1291,5 +1313,30 @@ impl mod_api::SpecialModelRenderer for GripModel {
             .translate([0.0, -1.0 / 16.0, 0.0]);
         parts.push(cog_pose.part(&item("cog")));
         Ok(parts)
+    }
+}
+
+#[cfg(test)]
+mod grip_render_tests {
+    use super::*;
+
+    #[test]
+    fn off_hand_grip_uses_only_the_main_hands_swing_in_this_frame() {
+        grip_frame();
+        let mut grip = GRIP_RENDER.get();
+        grip.for_hand(Hand::Main, 0.25, 0.5, false);
+        assert_eq!(grip.pose, (0.0, false));
+        grip.for_hand(Hand::Off, 0.0, 0.5, true);
+        assert_eq!(grip.pose, (0.475, false));
+
+        // An off-hand-only render must not trigger extension from a hidden main hand.
+        GRIP_RENDER.set(GripRender {
+            main_swing: 0.25,
+            ..GripRender::default()
+        });
+        grip_frame();
+        let mut grip = GRIP_RENDER.get();
+        grip.for_hand(Hand::Off, 0.25, 0.5, true);
+        assert_eq!(grip.pose, (0.0, false));
     }
 }

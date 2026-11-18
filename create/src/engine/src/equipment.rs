@@ -268,6 +268,33 @@ pub fn extendo_reach(main: bool, off: bool) -> (bool, bool) {
     ((main ^ off) && !dual, dual)
 }
 
+/// The first-person grip's extension (`ExtendoGripRenderHandler`).
+#[derive(Clone, Copy, Default)]
+pub struct GripSwing {
+    previous: f32,
+    current: f32,
+}
+
+impl GripSwing {
+    /// The main hand has swung while a grip is shown.
+    pub fn observe(&mut self, swing: f32) {
+        if swing > 0.0 && 1.0 - swing > self.current {
+            self.current = 0.95;
+        }
+    }
+
+    /// The extension retracts on client ticks, not on render frames.
+    pub fn tick(&mut self) {
+        self.previous = self.current;
+        self.current *= self.current.clamp(0.8, 0.99);
+    }
+
+    /// The extension before it is cubed for the grip's model pose.
+    pub fn at(self, partial: f32) -> f32 {
+        self.previous + partial * (self.current - self.previous)
+    }
+}
+
 /// Create's wearable and held equipment, by item id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Gear {
@@ -301,6 +328,22 @@ impl Gear {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grip_extends_on_a_swing_and_retracts_between_ticks() {
+        let mut grip = GripSwing::default();
+        grip.observe(0.0);
+        assert_eq!(grip.at(1.0), 0.0);
+        grip.observe(0.25);
+        assert_eq!(grip.at(0.5), 0.475);
+        grip.tick();
+        assert_eq!(grip.at(0.0), 0.95);
+        assert!((grip.at(1.0) - 0.9025).abs() < 1e-6);
+        grip.observe(0.5);
+        assert!((grip.at(1.0) - 0.9025).abs() < 1e-6);
+        grip.observe(0.08);
+        assert_eq!(grip.at(1.0), 0.95);
+    }
 
     fn fill_ticks(speed: f32) -> (u32, Vec<i32>) {
         let mut b = Backtank::default();
