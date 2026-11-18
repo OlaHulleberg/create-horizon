@@ -141,8 +141,8 @@ pub(super) fn replace_pipe_state(lv: &mut ServerLevel<'_>, pos: [i32; 3], state:
     }
 }
 
-/// Read geometry and capabilities, then tick the engine's connection-owned model.
-pub(super) fn tick_pipes(lv: &mut ServerLevel<'_>) {
+/// Initialize geometry and process scheduled pressure invalidations before the shared walk.
+pub(crate) fn tick_pipes(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let mut checks =
         with_world(|w| std::mem::take(&mut w.dims[dim].pipe_checks)).unwrap_or_default();
@@ -154,37 +154,62 @@ pub(super) fn tick_pipes(lv: &mut ServerLevel<'_>) {
     let positions = with_world(|w| w.fluid_transport_positions(dim)).unwrap_or_default();
     let mut transport =
         with_world(|w| std::mem::take(&mut w.dims[dim].fluid_transport)).unwrap_or_default();
-    for &p in &positions {
+    for p in positions {
         transport.register(
             p,
             pipe_cell(lv, p),
             with_world(|w| w.speed(dim, p)).flatten().unwrap_or(0.),
         );
     }
-    let mut host = TransportHost(lv);
-    transport.prepare(&host);
-    for p in positions {
-        with_world(|w| w.fluid_transport_base_tick(dim, p));
-        if let Some((a, b)) = transport.tick_pipe(&mut host, p) {
-            crate::glue::advancements::award_placer(host.0, p, "cross_streams");
-            host.0.destroy_block(p, true);
-            transport.remove(p);
-            if let Some(state) = create_engine::open_end::flow_collision(a, b)
-                .and_then(|n| state_with(host.0, n, &[]))
-            {
-                host.0.set_state(p, state, all());
-            }
+    transport.prepare(&TransportHost(lv));
+    put_transport(dim, transport);
+}
+
+/// FluidTransportBehaviour.tick on this block entity's registration turn.
+/// For valves this precedes the pointer's tick, as SmartBlockEntity.tick does.
+pub(crate) fn tick_transport_pipe(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    if with_world(|w| w.dims[dim].fluid_transport.pipes.contains_key(&pos)) != Some(true) {
+        return;
+    }
+    with_world(|w| w.fluid_transport_base_tick(dim, pos));
+    let mut transport =
+        with_world(|w| std::mem::take(&mut w.dims[dim].fluid_transport)).unwrap_or_default();
+    if let Some((a, b)) = transport.tick_pipe(&mut TransportHost(lv), pos) {
+        crate::glue::advancements::award_placer(lv, pos, "cross_streams");
+        lv.destroy_block(pos, true);
+        transport.remove(pos);
+        if let Some(state) =
+            create_engine::open_end::flow_collision(a, b).and_then(|name| state_with(lv, name, &[]))
+        {
+            lv.set_state(pos, state, all());
         }
     }
+    put_transport(dim, transport);
+}
+fn put_transport(dim: usize, mut transport: create_engine::fluids::runtime::Transport) {
     with_world(|w| {
         transport
             .changed
             .append(&mut w.dims[dim].fluid_transport.changed);
-        for &p in transport.pipes.keys() {
-            w.mark_unsaved(dim, p);
-        }
         w.dims[dim].fluid_transport = transport;
     });
+}
+pub(crate) fn finish_ticks(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    with_world(|w| {
+        let positions = w.dims[dim]
+            .fluid_transport
+            .pipes
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for p in positions {
+            w.mark_unsaved(dim, p);
+        }
+    });
+    super::flows::send(lv);
+    super::drawn::send(lv);
 }
 
 struct TransportHost<'a, 'b>(&'a mut ServerLevel<'b>);

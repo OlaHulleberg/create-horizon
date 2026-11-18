@@ -347,6 +347,10 @@ impl Subsystem for Fluids {
         rims::changed(dim, pos);
     }
 
+    fn write_entities(&self, lv: &mut ServerLevel<'_>) {
+        flows::send(lv);
+    }
+
     fn world_closed(&self) {
         lava::reset();
         open_end::reset();

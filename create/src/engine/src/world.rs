@@ -11,9 +11,15 @@ use std::collections::{HashMap, HashSet};
 
 fn entity_view(block: Block) -> Option<View> {
     match block {
-        Block::Depot | Block::Belt | Block::Spout | Block::ItemDrain | Block::MechanicalPump => {
-            Some(View::Transport)
-        }
+        Block::Depot
+        | Block::Belt
+        | Block::Spout
+        | Block::ItemDrain
+        | Block::MechanicalPump
+        | Block::FluidPipe
+        | Block::GlassFluidPipe
+        | Block::EncasedFluidPipe
+        | Block::SmartFluidPipe => Some(View::Transport),
         Block::FluidValve | Block::FluidTank | Block::CreativeFluidTank => Some(View::Transport),
         _ => None,
     }
@@ -753,6 +759,7 @@ pub enum TransportTick {
     Spout([i32; 3]),
     Drain([i32; 3]),
     Pump([i32; 3]),
+    Pipe([i32; 3]),
     Depot([i32; 3]),
     Belt([i32; 3]),
 }
@@ -787,6 +794,12 @@ impl TransportTicks {
                 Some(Block::Spout) => return Some(TransportTick::Spout(p)),
                 Some(Block::ItemDrain) => return Some(TransportTick::Drain(p)),
                 Some(Block::MechanicalPump) => return Some(TransportTick::Pump(p)),
+                Some(
+                    Block::FluidPipe
+                    | Block::GlassFluidPipe
+                    | Block::EncasedFluidPipe
+                    | Block::SmartFluidPipe,
+                ) => return Some(TransportTick::Pipe(p)),
                 _ => {}
             }
             if world.block_at(self.dim, p) == Some(Block::Depot) {

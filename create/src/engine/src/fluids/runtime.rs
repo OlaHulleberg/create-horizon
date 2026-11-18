@@ -202,9 +202,12 @@ impl Transport {
             .retain(|p, _| matches!(host.cell(*p, Dir::Down), Cell::Pump(_)));
         let changed = std::mem::take(&mut self.changed);
         for pos in changed {
-            self.propagate_changed_pipe(host, pos);
-            for side in Dir::ALL {
-                self.propagate_changed_pipe(host, step(pos, side));
+            if self.pipes.contains_key(&pos) {
+                self.propagate_changed_pipe(host, pos);
+            } else {
+                for side in Dir::ALL {
+                    self.propagate_changed_pipe(host, step(pos, side));
+                }
             }
         }
     }
@@ -792,6 +795,39 @@ mod tests {
         }
         transport
     }
+    #[test]
+    fn changing_one_pump_side_does_not_wipe_the_other_side() {
+        let mut world = World::default();
+        world.cells.extend([
+            ([-2, 0, 0], Cell::Tank),
+            ([-1, 0, 0], Cell::Pipe(Dir::East.bit() | Dir::West.bit())),
+            ([0, 0, 0], Cell::Pump(Dir::East)),
+            (
+                [1, 0, 0],
+                Cell::Axis(crate::kinetics::Axis::X, Gate::Only(Fluid::Water)),
+            ),
+            ([2, 0, 0], Cell::Tank),
+        ]);
+        let mut transport = register(&world);
+        transport.pumps.get_mut(&[0, 0, 0]).unwrap().pending = 0;
+        transport.distribute_pressure_to(&world, [0, 0, 0], Dir::West, true);
+        transport.pipes.get_mut(&[-1, 0, 0]).unwrap().phase = UpdatePhase::Idle;
+        transport.changed.push([1, 0, 0]);
+        transport.prepare(&world);
+        assert_eq!(
+            transport
+                .connection(Face {
+                    pos: [-1, 0, 0],
+                    side: Dir::West
+                })
+                .unwrap()
+                .pressure(),
+            [32., 0.]
+        );
+        assert_eq!(transport.pipes[&[-1, 0, 0]].phase, UpdatePhase::Idle);
+        assert_eq!(transport.pumps[&[0, 0, 0]].pending, 1);
+    }
+
     #[test]
     fn extraction_filter_does_not_bypass_an_open_ends_retained_fluid() {
         let mut world = World::default();

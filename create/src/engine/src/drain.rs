@@ -193,46 +193,121 @@ mod tests {
     fn drain_and_pump_turns_match_java_capacity_boundary() {
         // Native seed 147: the drain precedes the pump. First emptying is at 79;
         // first transfer at 101, capacity admission at 133, second emptying at 147.
-        let mut drain = Drain::default();
-        let mut pump = crate::world::Pump::default();
-        let end = crate::fluids::End {
-            pos: [0, 0, 0],
-            kind: crate::fluids::Endpoint::Handler,
-            pressure: 32.0,
-            blocked: false,
-            only: None,
-            distance: 1,
-            face: Dir::East,
+        use crate::fluids::{
+            Cell,
+            runtime::{Face, Host, Transport},
+            transport::Source,
         };
-        let arrival = crate::fluids::arrival_ticks(&end, &end, 32.0);
-        let mut tank = 0;
+        struct World {
+            drain: Drain,
+            tank: u32,
+            clock: i64,
+            kept: u32,
+        }
+        impl Host for World {
+            fn cell(&self, p: [i32; 3], _: Dir) -> Cell {
+                match p {
+                    [0, 0, 0] | [4, 0, 0] => Cell::Tank,
+                    [1, 0, 0] | [3, 0, 0] => Cell::Pipe(Dir::East.bit() | Dir::West.bit()),
+                    [2, 0, 0] => Cell::Pump(Dir::East),
+                    _ => Cell::Solid,
+                }
+            }
+            fn speed(&self, _: [i32; 3]) -> f32 {
+                32.
+            }
+            fn time(&self) -> i64 {
+                self.clock
+            }
+            fn tank_fluids(&self, f: Face) -> Vec<Fluid> {
+                if f.connected() == [0, 0, 0] {
+                    self.drain.fluid.map(|(f, _)| vec![f]).unwrap_or_default()
+                } else {
+                    Vec::new()
+                }
+            }
+            fn offer(
+                &mut self,
+                f: Face,
+                _: &mut Source,
+                n: u32,
+                only: Option<Fluid>,
+            ) -> Option<(Fluid, u32)> {
+                if f.connected() != [0, 0, 0] {
+                    return None;
+                }
+                self.drain
+                    .fluid
+                    .filter(|(f, _)| only.is_none_or(|wanted| wanted == *f))
+                    .map(|(f, k)| (f, k.min(n)))
+            }
+            fn drain(&mut self, f: Face, _: &mut Source, _: Fluid, n: u32) -> u32 {
+                if f.connected() == [0, 0, 0] {
+                    super::drain(&mut self.drain, n).map_or(0, |(_, n)| n)
+                } else {
+                    0
+                }
+            }
+            fn fill(&mut self, f: Face, _: &mut Source, _: Fluid, n: u32, execute: bool) -> u32 {
+                if f.connected() != [4, 0, 0] {
+                    return 0;
+                }
+                let n = n.min(8000 - self.tank);
+                if execute {
+                    self.tank += n;
+                }
+                n
+            }
+            fn keep_alive(&mut self, _: Face) {
+                self.kept += 1;
+            }
+        }
+        let mut world = World {
+            drain: Drain::default(),
+            tank: 0,
+            clock: 0,
+            kept: 0,
+        };
+        let mut transport = Transport::default();
+        for x in 1..=3 {
+            transport.register(
+                [x, 0, 0],
+                world.cell([x, 0, 0], Dir::Down),
+                world.speed([x, 0, 0]),
+            );
+        }
         for clock in 0..225 {
             if clock == 60 || clock == 110 {
                 assert_eq!(
-                    insert(&mut drain, "minecraft:water_bucket", 1, Dir::North, &[]),
+                    insert(
+                        &mut world.drain,
+                        "minecraft:water_bucket",
+                        1,
+                        Dir::North,
+                        &[]
+                    ),
                     1
                 );
             }
-            if let Tick::Out(_) = tick(&mut drain, &[]) {
-                drain.held = None;
+            if let Tick::Out(_) = tick(&mut world.drain, &[]) {
+                world.drain.held = None;
             }
-            if drain.fluid.is_some() {
-                if pump.advance_flow() >= arrival {
-                    tank += super::drain(&mut drain, 16).unwrap().1;
-                }
-            } else {
-                pump.pumped = 0;
+            world.clock = clock;
+            transport.prepare(&world);
+            for x in 1..=3 {
+                transport.tick_pipe(&mut world, [x, 0, 0]);
             }
-            let amount = drain.fluid.map_or(0, |(_, n)| n);
+            let tank = world.tank;
+            let amount = world.drain.fluid.map_or(0, |(_, n)| n);
             let completed = clock + 1;
             match completed {
                 79 | 100 => assert_eq!((amount, tank), (1000, 0)),
                 101 => assert_eq!((amount, tank), (984, 16)),
-                132 => assert_eq!((amount, tank, drain.processing), (488, 512, 20)),
-                133 => assert_eq!((amount, tank, drain.processing), (472, 528, 19)),
+                132 => assert_eq!((amount, tank, world.drain.processing), (488, 512, 20)),
+                133 => assert_eq!((amount, tank, world.drain.processing), (472, 528, 19)),
                 147 => {
-                    assert_eq!((amount, tank, drain.processing), (1248, 752, 5));
-                    assert_eq!(drain.held.as_ref().unwrap().item, "minecraft:bucket");
+                    assert_eq!((amount, tank, world.drain.processing), (1248, 752, 5));
+                    assert_eq!(world.drain.held.as_ref().unwrap().item, "minecraft:bucket");
                 }
                 _ => {}
             }
