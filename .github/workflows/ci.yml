@@ -26,7 +26,7 @@ jobs:
         working-directory: create
         run: cargo sunrise-mod check
       - working-directory: create
-        run: cargo fmt --all --check
+        run: cargo fmt --check
       - working-directory: create
         run: cargo clippy --all-targets -- -D warnings
       - working-directory: create
