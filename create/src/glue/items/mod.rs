@@ -291,6 +291,15 @@ impl Subsystem for Items {
 
     /// The worldshaper's pick (`leftClickingBlocksWithTheZapperSelectsTheBlock`) and a
     /// cardboard sword's bonk.
+    fn client_mining_predict(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ClientMiningPredictEvent,
+    ) -> Flow {
+        sword::client_mining(host, event);
+        Flow::Continue
+    }
+
     fn left_click_block(&self, host: &mut dyn ServerHost, event: &mut LeftClickBlockEvent) -> Flow {
         if worldshaper::left_click(host) {
             return Flow::Cancel;

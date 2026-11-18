@@ -35,7 +35,33 @@ pub(super) fn left_click(host: &mut dyn ServerHost, event: &LeftClickBlockEvent)
         SoundSource::Players,
         0.5,
         1.85,
-        None,
+        Some(player),
+    );
+}
+
+/// `cardboardSwordsMakeNoiseOnClick`: the starting click sounds locally immediately.
+pub(super) fn client_mining(
+    host: &dyn mod_api::ClientHost,
+    event: &mod_api::ClientMiningPredictEvent,
+) {
+    if !event.prediction.starting {
+        return;
+    }
+    let Some(player) = host.local_player() else {
+        return;
+    };
+    if !is(
+        held(host, player, Hand::Main).as_ref(),
+        Item::CardboardSword,
+    ) {
+        return;
+    }
+    let at = event.prediction.pos.map(|v| f64::from(v) + 0.5);
+    host.play_local_sound(
+        &mod_api::SoundPlay::at("create:cardboard_bonk", SoundSource::Players, at)
+            .with_volume(0.5)
+            .with_pitch(1.85),
+        0,
     );
 }
 

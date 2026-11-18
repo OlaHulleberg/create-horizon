@@ -444,6 +444,14 @@ impl Hooks for Create {
         until_cancel(|s| s.mouse_scrolling(host, event))
     }
 
+    fn client_mining_predict(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ClientMiningPredictEvent,
+    ) -> Flow {
+        until_cancel(|s| s.client_mining_predict(host, event))
+    }
+
     fn interaction_key_mapping_triggered(
         &self,
         host: &mut dyn ClientHost,
