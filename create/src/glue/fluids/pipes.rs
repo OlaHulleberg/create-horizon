@@ -33,7 +33,14 @@ pub(super) fn pipe_cell_toward(lv: &ServerLevel<'_>, p: [i32; 3], toward: Option
             b => plumbing::plumbing_cell(lv, b, &info, p).unwrap_or(Cell::Solid),
         };
     }
-    if open_end(lv, p, toward) {
+    if lv.block_state(p).is_some_and(|state| {
+        fluids::vanilla_target(
+            &state.block().id(&*lv.host),
+            super::property(lv, p, "honey_level").is_some(),
+        )
+    }) {
+        Cell::VanillaTarget
+    } else if open_end(lv, p, toward) {
         Cell::Open
     } else {
         Cell::Solid
@@ -49,12 +56,7 @@ fn open_end(lv: &ServerLevel<'_>, p: [i32; 3], toward: Option<Dir>) -> bool {
         return false;
     };
     let name = state.block().id(&*lv.host);
-    if super::property(lv, p, "honey_level").is_some()
-        || matches!(
-            name.as_str(),
-            "minecraft:cauldron" | "minecraft:lava_cauldron" | "minecraft:water_cauldron"
-        )
-    {
+    if fluids::vanilla_target(&name, super::property(lv, p, "honey_level").is_some()) {
         return true;
     }
     if let Some(d) = toward {

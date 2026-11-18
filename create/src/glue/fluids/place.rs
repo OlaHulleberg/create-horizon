@@ -54,7 +54,16 @@ fn sides(level: &dyn LevelHost, state: BlockState) -> u8 {
 /// (`pipes::pipe_cell`); anything a pipe doesn't join is solid here.
 fn cell(level: &dyn LevelHost, p: [i32; 3]) -> Cell {
     let Some((block, info, state)) = create_block(level, p) else {
-        return Cell::Solid;
+        let text = level
+            .block_state(p)
+            .and_then(|s| level.state_string(s))
+            .unwrap_or_default();
+        let (name, props) = states::split(&text);
+        return if fluids::vanilla_target(name, props.iter().any(|(k, _)| *k == "honey_level")) {
+            Cell::VanillaTarget
+        } else {
+            Cell::Solid
+        };
     };
     let axis = |a: Option<Axis>| a.map_or(Cell::Solid, |a| Cell::Axis(a, Gate::Open));
     match block {

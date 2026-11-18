@@ -31,6 +31,9 @@ pub enum Cell {
     Port(Dir),
     /// Open space a pipe can end at (`isOpenEnd`: replaceable, a fluid, waterloggable).
     Open,
+    /// `VanillaFluidTargets`: cauldrons and states with `LEVEL_HONEY`.
+    /// Connectable during placement, and an open endpoint during transport.
+    VanillaTarget,
     /// Anything else.
     Solid,
 }
@@ -51,13 +54,22 @@ pub enum Gate {
 /// a one-sided handler's side.
 pub fn connects(neighbour: Cell, toward: Dir) -> bool {
     match neighbour {
-        Cell::Pipe(_) | Cell::Tank => true,
+        Cell::Pipe(_) | Cell::Tank | Cell::VanillaTarget => true,
         Cell::Encased(sides) => sides & toward.opposite().bit() != 0,
         Cell::Axis(a, _) => a == toward.axis(),
         Cell::Port(side) => side == toward.opposite(),
         Cell::Pump(f) => f.axis() == toward.axis(),
         _ => false,
     }
+}
+
+/// `VanillaFluidTargets.canProvideFluidWithoutCapability`, independent of contents.
+pub fn vanilla_target(block: &str, has_honey_level: bool) -> bool {
+    has_honey_level
+        || matches!(
+            block,
+            "minecraft:cauldron" | "minecraft:water_cauldron" | "minecraft:lava_cauldron"
+        )
 }
 
 /// The sides fluid leaves a pipe-like block by (`getPipeConnections`); none for others.
@@ -195,7 +207,9 @@ pub fn reach_toward(
             ends.push((end(first, true, Pass::default(), side), 0))
         }
         // A pump right against water or air is an open end itself (`isOpenEnd` from the pump).
-        Cell::Open => ends.push((end(first, false, Pass::default(), side), 0)),
+        Cell::Open | Cell::VanillaTarget => {
+            ends.push((end(first, false, Pass::default(), side), 0))
+        }
         Cell::Pipe(_) | Cell::Encased(_) | Cell::Axis(..) if connects(first_cell, side) => {
             let start = Pass::default().through(first_cell);
             let mut frontier = std::collections::VecDeque::from([(1, first, start)]);
@@ -219,7 +233,9 @@ pub fn reach_toward(
                         Cell::Port(s) if s == d.opposite() => {
                             ends.push((end(next, true, pass, d), distance))
                         }
-                        Cell::Open => ends.push((end(next, false, pass, d), distance)),
+                        Cell::Open | Cell::VanillaTarget => {
+                            ends.push((end(next, false, pass, d), distance))
+                        }
                         Cell::Pipe(_) | Cell::Encased(_) | Cell::Axis(..)
                             if openings(next_cell) & d.opposite().bit() != 0 =>
                         {
@@ -305,7 +321,7 @@ pub fn ways_toward(
             }
             let next_cell = cell(next, d);
             match next_cell {
-                Cell::Tank | Cell::Open => ends.push((next, at, d)),
+                Cell::Tank | Cell::Open | Cell::VanillaTarget => ends.push((next, at, d)),
                 Cell::Port(s) if s == d.opposite() => ends.push((next, at, d)),
                 c if piped(c) && openings(c) & d.opposite().bit() != 0 => {
                     if distance + 1 >= PUMP_RANGE || !visited.insert(next) {
@@ -943,6 +959,49 @@ pub fn draws_casing(sides: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Java issue #67 witness: empty cauldron west, player looking south.
+    // FluidPipeBlock.updateBlockState opens west and its opposite (mask 48).
+    #[test]
+    fn vanilla_target_placement_opens_east_west() {
+        let sides = pipe_sides(
+            0,
+            |d| {
+                if d == Dir::West {
+                    Cell::VanillaTarget
+                } else {
+                    Cell::Solid
+                }
+            },
+            Dir::South,
+        );
+        assert_eq!(sides, 48);
+    }
+
+    #[test]
+    fn vanilla_target_neighbour_replaces_north_south_shape() {
+        let previous = Dir::North.bit() | Dir::South.bit();
+        assert_eq!(
+            pipe_sides(
+                previous,
+                |d| if d == Dir::West {
+                    Cell::VanillaTarget
+                } else {
+                    Cell::Open
+                },
+                Dir::North
+            ),
+            48
+        );
+    }
+
+    #[test]
+    fn vanilla_target_is_an_open_transport_endpoint() {
+        let ends = reach([0, 0, 0], Dir::East, 32.0, |_| Cell::VanillaTarget);
+        assert_eq!(ends.len(), 1);
+        assert!(!ends[0].tank);
+        assert_eq!(ends[0].pressure, 32.0);
+    }
 
     #[test]
     fn the_smart_pipe_slot_sits_on_its_slanted_side() {
