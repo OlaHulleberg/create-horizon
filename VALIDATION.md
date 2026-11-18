@@ -1,6 +1,6 @@
 # Validation
 
-Run on 2026-11-17 at 28e4ff5 (Linux x86_64, Rust 1.99.1), the mod pinned to Sunrise `b77574eb1b7ef6b8a36456ec890a3d2ba3af37a6`.
+Run on 2026-11-18 at 570f551 (full rebuild into a fresh target directory) (Linux x86_64, Rust 1.99.1), the mod pinned to Sunrise `b77574eb1b7ef6b8a36456ec890a3d2ba3af37a6`.
 Sunrise has published no SDK for this pin yet, so `cargo horizon-mod check` used `cargo-horizon-mod` built from
 Sunrise at the pin with an SDK built from the same checkout, signed with a throwaway key and fetched through
 `HORIZON_SDK_BASE` / `HORIZON_SDK_TRUSTED_KEY`.
@@ -11,9 +11,9 @@ Sunrise at the pin with an SDK built from the same checkout, signed with a throw
 |---|---|---|
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
-| `create/` | `cargo +1.99.1 test` | Pass (87 glue tests) |
-| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (723 engine tests) |
-| `create/` | `cargo horizon-mod check` | Pass ("Create uses 3578 items of the API … Made for b77574e.") |
+| `create/` | `cargo +1.99.1 test` | Pass (91 glue tests) |
+| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (771 engine tests) |
+| `create/` | `cargo horizon-mod check` | Pass ("Create uses 3585 items of the API … Made for b77574e.") |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/src/engine/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 fmt --check` | Pass |
