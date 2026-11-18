@@ -34,7 +34,7 @@
 //!   `waxed_`). A state fact for it would make it exact.
 //! - What follows a placement from an item (placards and clipboards turned, a clipboard's pages,
 //!   girders joining, a large water wheel's room, a peculiar bell) runs in the item's
-//!   `on_block_placed_by`, which names no level: a dispenser's placement, with no placer, is left
+//!   `on_block_placed_by`: a dispenser's placement, with no placer, is finished
 //!   as the template made it. A level in `OnBlockPlacedByEvent` would close it.
 //! - A placard shows a 3D item at half size (`PlacardRenderer`: `isGui3d`): no API reads an
 //!   item model's `gui3d`, so an item that places a block stands for it.

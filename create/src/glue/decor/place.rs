@@ -7,9 +7,7 @@
 use super::super::persist;
 use super::super::server::ServerLevel;
 use super::super::states;
-use super::{
-    add, block_of, creative, dir, flag, girders, player_dimension, prop, with, with_props,
-};
+use super::{add, block_of, creative, dir, flag, girders, prop, with, with_props};
 use create_engine::Block;
 use create_engine::decor;
 use create_engine::kinetics::{Axis, Dir};
@@ -149,9 +147,7 @@ impl ItemPart for Placed {
         let Some((block, info)) = block_of(id) else {
             return;
         };
-        // The notice names no level: the placer's is the one (a dispenser's placement, with
-        // no placer, is left as the template made it).
-        let Some(dimension) = event.placer.and_then(|p| player_dimension(&*host, p)) else {
+        let Some(dimension) = event.level.dimension().id(&*host) else {
             return;
         };
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
