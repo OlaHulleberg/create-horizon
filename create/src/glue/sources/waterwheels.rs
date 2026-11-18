@@ -212,17 +212,13 @@ impl BlockPart for Wheel {
         let material = Compound::from([("Name".into(), Tag::String(name.as_str().into()))]);
         let data = Compound::from([(MATERIAL.into(), Tag::Compound(material))]);
         let _ = entity.merge_data(&mut *lv.host, data);
-        // `level.levelEvent(PARTICLES_DESTROY_BLOCK, pos, Block.getId(material))`: the planks'
-        // break particles and sound (the game's state ids are not the API's, so the event is
-        // played as its parts).
+        // `level.levelEvent(PARTICLES_DESTROY_BLOCK, pos, Block.getId(material))`.
         break_effect(&mut lv, master, &name);
         Some(InteractionResult::Success)
     }
 }
 
-/// The planks' break particles over the wheel and their break sound (`LevelRenderer
-/// .levelEvent` 2001: `addDestroyBlockEffect`, the sound type's break sound at
-/// `(volume + 1) / 2` and `pitch * 0.8`).
+/// The planks' destroy-block level event at the wheel.
 fn break_effect(lv: &mut ServerLevel<'_>, pos: [i32; 3], planks: &str) {
     if let Some(state) = lv
         .host

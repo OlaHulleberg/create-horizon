@@ -64,7 +64,7 @@ impl Subsystem for Drawing {
         _pos: [i32; 3],
         entity: &mod_api::ModBlockEntity,
     ) -> bool {
-        holds_structure(&entity.nbt)
+        moving(&entity.nbt)
             || (holds_structure(&entity.nbt) && actor_draw::view(&entity.nbt).is_some())
             || actor_draw::animated(block, entity)
     }
@@ -142,6 +142,15 @@ fn anchors(dim: usize, pos: [i32; 3]) -> bool {
             })
     })
     .unwrap_or(false)
+}
+
+/// Whether `data` holds a structure that moves along a line (drawn each frame, so its block
+/// entity's geometry is not kept between frames).
+pub fn moving(data: &Compound) -> bool {
+    match data.get(&KEY.into()) {
+        Some(Tag::Compound(c)) => matches!(int(c, "Kind"), Some(GLIDE | ELEVATOR)),
+        _ => false,
+    }
 }
 
 /// Whether `data` holds a structure (a key taken away reaches clients as absent:
@@ -1158,7 +1167,7 @@ fn submit(
     let now = draw.game_time() as f64 + f64::from(draw.partial());
     let partial = draw.partial();
     let camera = host.camera().map(|c| c.position);
-
+    let anim = draw.animation_time();
     let speed = own_speed(data);
     let view = actor_draw::view(data);
     SHOWN.with_borrow_mut(|s| {
@@ -1235,9 +1244,12 @@ fn submit(
                         );
                         draw.pop();
                     }
+                    // A steady turn is kept and spun by the game. Its blocks keep the light of
+                    // where they were when it was drawn: a kept draw has no per-frame light
+                    // (Create's light volume), API_GAPS.md.
                     (None, None) => {
-                        draw.push();
-                        draw.rotate_about(*axis, here % 360.0, [0.5; 3]);
+                        let phase = (f64::from(here) - anim * f64::from(rate)) % 360.0;
+                        draw.spin(*axis, [0.5; 3], rate, phase as f32);
                         draw_blocks(
                             host,
                             draw,
@@ -1246,7 +1258,8 @@ fn submit(
                             None,
                             WorldPose::turned(pos, *axis, here % 360.0),
                         );
-                        draw.pop();
+                        draw.still();
+                        draw.keep();
                     }
                 }
             }
@@ -1262,8 +1275,8 @@ fn submit(
                     [(hour, angles.0, speeds.0), (minute, angles.1, speeds.1)]
                 {
                     let here = angle + rate * (now - since) as f32;
-                    draw.push();
-                    draw.rotate_about(*axis, here % 360.0, [0.5; 3]);
+                    let phase = (f64::from(here) - anim * f64::from(rate)) % 360.0;
+                    draw.spin(*axis, [0.5; 3], rate, phase as f32);
                     draw_blocks(
                         host,
                         draw,
@@ -1272,8 +1285,9 @@ fn submit(
                         None,
                         WorldPose::turned(pos, *axis, here % 360.0),
                     );
-                    draw.pop();
+                    draw.still();
                 }
+                draw.keep();
             }
             Shape::Glide {
                 blocks,
@@ -1835,17 +1849,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_structure_redraws_to_refresh_world_lighting() {
+    fn a_turning_structure_is_kept_and_a_sliding_one_is_not() {
         let with = |kind: i32| {
             let mut c = Compound::new();
             c.insert("Kind".into(), Tag::Int(kind));
             Compound::from([(KEY.into(), Tag::Compound(c))])
         };
-        assert!(holds_structure(&with(TURN)));
-        assert!(holds_structure(&with(CLOCK)));
-        assert!(holds_structure(&with(GLIDE)));
-        assert!(holds_structure(&with(ELEVATOR)));
-        assert!(!holds_structure(&Compound::new()));
+        assert!(!moving(&with(TURN)));
+        assert!(!moving(&with(CLOCK)));
+        assert!(moving(&with(GLIDE)));
+        assert!(moving(&with(ELEVATOR)));
+        assert!(!moving(&Compound::new()));
     }
 }
 
