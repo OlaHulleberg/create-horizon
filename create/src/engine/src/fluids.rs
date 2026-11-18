@@ -5,6 +5,8 @@
 //! the pipes behind it and pushes through those in front, as far as the pump range, from a tank
 //! or an open end into a tank or an open end, past open valves and the filters of smart pipes.
 
+pub mod transport;
+
 use crate::kinetics::{Axis, Dir};
 use crate::tank::Fluid;
 
