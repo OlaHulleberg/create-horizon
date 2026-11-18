@@ -244,10 +244,10 @@ pub(super) fn client_tick(host: &mut dyn ClientHost) {
 /// Hears each kinetic block's speed.
 struct Listen;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for Listen {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for Listen {
     fn block_entity_data_received(
         &self,

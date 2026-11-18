@@ -522,7 +522,7 @@ fn show_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 /// The saw and the drill as blocks: what walks into their blades.
 pub struct Blades;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockPart for Blades {
     /// `SawBlock.entityInside` and `DrillBlock.entityInside`: the entity (not an item), for the
     /// level's tick (its box can't be read inside its move).

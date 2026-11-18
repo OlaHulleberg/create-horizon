@@ -870,6 +870,7 @@ pub(super) fn elevator_controls_clicked(
         blocks,
         1.0,
         1.5,
+        None,
     );
     lv.level.play_sound(
         &mut *lv.host,
@@ -878,6 +879,7 @@ pub(super) fn elevator_controls_clicked(
         blocks,
         0.75,
         0.8,
+        None,
     );
     let Some(y) = target else {
         return true;
@@ -1227,6 +1229,7 @@ fn elevator_doors(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             mod_api::SoundSource::Blocks,
             0.125,
             1.0,
+            None,
         );
     }
     show_elevator(lv, pos);
@@ -1526,7 +1529,7 @@ fn call_contact(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, powered: b
 
 struct LiftPart(Block);
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for LiftPart {
     /// A right click on a clockwork bearing, rope pulley or elevator pulley with an empty hand,
     /// not sneaking (`useItemOn`): a running clock or elevator comes apart, else it assembles on
@@ -1612,7 +1615,7 @@ pub(crate) fn contact_wrenched(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 
 struct ContactPart;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for ContactPart {
     /// `RedstoneContactBlock.getStateForPlacement`: facing away from the player's view, or onto
     /// the clicked face when sneaking or a contact is there; powered when a contact faces back.

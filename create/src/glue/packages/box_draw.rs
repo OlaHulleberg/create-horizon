@@ -213,9 +213,15 @@ fn send_flag(lv: &mut ServerLevel<'_>, pos: [i32; 3], f: Flag) {
 
 fn sound(lv: &mut ServerLevel<'_>, pos: [i32; 3], id: &str, volume: f32, pitch: f32) {
     let at = pos.map(|v| f64::from(v) + 0.5);
-    let _ = lv
-        .level
-        .play_sound(&mut *lv.host, id, at, SoundSource::Blocks, volume, pitch);
+    let _ = lv.level.play_sound(
+        &mut *lv.host,
+        id,
+        at,
+        SoundSource::Blocks,
+        volume,
+        pitch,
+        None,
+    );
 }
 
 fn tray_of(nbt: &Compound) -> Option<Tray> {
@@ -282,10 +288,10 @@ fn part(draw: &mut dyn BlockEntityDrawContext, name: &str) {
 
 pub(super) struct BoxDraw;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for BoxDraw {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for BoxDraw {
     fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
         let Some(id) = states::id(event.state) else {

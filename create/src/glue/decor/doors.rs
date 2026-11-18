@@ -87,10 +87,10 @@ std::thread_local! {
 
 struct DoorEntity;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for DoorEntity {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for DoorEntity {
     /// `createRenderBoundingBox().inflate(1)`: the panel reaches into the next block.
     fn block_entity_render_bounding_box(

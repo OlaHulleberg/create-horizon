@@ -6,7 +6,7 @@ Create as a native Rust mod on the mod SDK (`mod_api`). Paths are under `create/
 
 | Path | What it is |
 |---|---|
-| `horizon-mod.toml` | Identity, the pinned Sunrise build, Create's jar (`[[jar]]`, by SHA-512). |
+| `sunrise-mod.toml` | Identity, the pinned Sunrise build, Create's jar (`[[jar]]`, by SHA-512). |
 | `src/lib.rs` | The one `impl Hooks`. Each hook hands off to every subsystem; every Create block carries the `CreateBlock` part. |
 | `src/engine/` | `create-engine`: Create's rules as plain Rust, no game types, unit-tested. |
 | `src/glue/` | Game glue on `mod_api`, one module per subsystem. |

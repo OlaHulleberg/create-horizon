@@ -2088,6 +2088,7 @@ fn apply(lv: &mut ServerLevel<'_>, key: [i32; 3], a: &Actor, e: Effect) -> Optio
                     SoundSource::Neutral,
                     0.25,
                     1.0,
+                    None,
                 );
             }
         }
@@ -3157,7 +3158,7 @@ pub(super) fn tick_mounted(lv: &mut ServerLevel<'_>) {
 /// A roller's item placed it (`setPlacedBy` → `searchForSharedValues`, at the level's tick).
 struct RollerItem;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for RollerItem {
     fn on_block_placed_by(&self, host: &mut dyn ServerHost, event: &mut OnBlockPlacedByEvent<'_>) {
         let Some(level) = event.placer.and_then(|p| p.level(&*host)) else {
@@ -3174,7 +3175,7 @@ impl ItemPart for RollerItem {
 
 struct MountedPart;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for MountedPart {
     /// A click on contraption controls or a roller (`useWithoutItem`, `FilteringBehaviour`).
     /// Controls: on the filter slot the held item becomes the kind of actor it switches
@@ -3258,6 +3259,7 @@ fn use_mounted(
             SoundSource::Blocks,
             0.25,
             0.1,
+            None,
         );
         return Some(InteractionResult::Success);
     }
@@ -3312,6 +3314,7 @@ fn controls_status(
         SoundSource::Blocks,
         1.0,
         if on { 1.5 } else { 0.8 },
+        None,
     );
 }
 

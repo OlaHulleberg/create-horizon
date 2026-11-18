@@ -452,6 +452,7 @@ impl ServerLevel<'_> {
             mod_api::SoundSource::Blocks,
             volume,
             pitch,
+            None,
         );
     }
 }

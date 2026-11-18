@@ -29,7 +29,7 @@ pub(super) fn register(r: &mut dyn Registrar) {
 
 struct Scaffolding;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockPart for Scaffolding {
     /// `MetalScaffoldingBlock.tick`: nothing (the template would fall or break).
     fn tick_block(&self, _level: &mut dyn LevelWriteHost, _event: &mut TickBlockEvent) -> Flow {

@@ -38,6 +38,7 @@ pub(super) fn left_click(host: &mut dyn ServerHost, event: &LeftClickBlockEvent)
         SoundSource::Players,
         0.5,
         1.85,
+        None,
     );
 }
 
@@ -69,6 +70,7 @@ pub(super) fn attack(host: &mut dyn ServerHost, event: &AttackEntityEvent<'_>) -
             SoundSource::Players,
             0.75,
             1.85,
+            None,
         );
     }
     knock_back(host, player, target);

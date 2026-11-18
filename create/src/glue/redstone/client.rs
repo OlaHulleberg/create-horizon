@@ -281,10 +281,10 @@ fn tick_clock(host: &mut dyn ClientHost, pos: [i32; 3], turning: bool) {
 /// The redstone blocks' renderers, on the kinetic block entity type.
 struct RedstoneEntity;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for RedstoneEntity {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for RedstoneEntity {
     fn block_entity_client_ticks(
         &self,

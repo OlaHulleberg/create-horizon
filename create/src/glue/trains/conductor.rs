@@ -20,7 +20,7 @@ fn sound_at(host: &mut dyn ServerHost, player: PlayerRef, id: &str, volume: f32,
         return;
     };
     if let Some(at) = player.entity().position(&*host) {
-        level.play_sound(host, id, at, SoundSource::Players, volume, pitch);
+        level.play_sound(host, id, at, SoundSource::Players, volume, pitch, None);
     }
 }
 
@@ -299,6 +299,7 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
             SoundSource::Blocks,
             1.0,
             1.0,
+            None,
         );
         for (key, at, spread, speed, count) in [
             (&HAPPY_VILLAGER, at, [0.35, 0.05, 0.35], 1.0, 8),

@@ -592,6 +592,7 @@ pub(crate) fn return_filter(
         SoundSource::Blocks,
         0.25,
         0.1,
+        None,
     );
 }
 
@@ -792,7 +793,7 @@ fn write_attributes(stack: &mut ItemStack, mode: Mode, tests: &[(String, Option<
 /// (`FilterItem.use` / `useOn`; a block's filter slot takes the click before the item).
 pub(super) struct FilterPart;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for FilterPart {
     fn use_item(&self, host: HostSide, event: &mut UseItemEvent<'_>) -> Option<InteractionResult> {
         used(host, event.player, event.hand)

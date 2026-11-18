@@ -667,6 +667,7 @@ fn toggle_diode(lv: &mut ServerLevel<'_>, pos: [i32; 3], inverted: bool, facing:
         SoundSource::Blocks,
         0.3,
         create_engine::diode::toggle_pitch(inverted),
+        None,
     );
 }
 

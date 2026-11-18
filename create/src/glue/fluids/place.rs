@@ -102,7 +102,7 @@ fn set(level: &dyn LevelHost, state: BlockState, props: &[(&str, &str)]) -> Bloc
     })
 }
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for Placement {
     fn state_for_placement(
         &self,
@@ -261,7 +261,7 @@ pub(super) fn reset() {
     LAYERS.with_borrow_mut(Vec::clear);
 }
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::ItemPart for TankItem {
     fn on_block_placed_by(
         &self,
@@ -275,7 +275,7 @@ impl mod_api::ItemPart for TankItem {
         // The accepted placement can be followed immediately by a save. Publish
         // FluidTankBlockEntity.write state, including pending updateConnectivity,
         // before any optional layer placement is queued.
-        if let Some(dimension) = player.dimension(&*host) {
+        if let Some(dimension) = event.level.dimension().id(&*host) {
             let dimension = dimension.to_string();
             if let Some(mut lv) = super::super::server::ServerLevel::new(host, &dimension) {
                 super::super::persist::publish(&mut lv);
@@ -289,8 +289,10 @@ impl mod_api::ItemPart for TankItem {
             mod_api::BlockFace::Down => false,
             _ => return,
         };
-        let Some(dim) = player
-            .dimension(&*host)
+        let Some(dim) = event
+            .level
+            .dimension()
+            .id(&*host)
             .and_then(|d| level_index(&d.to_string()))
         else {
             return;
@@ -311,9 +313,7 @@ impl mod_api::ItemPart for TankItem {
         if start_y != pos[1] {
             return;
         }
-        let Some(level) = player.level(&*host) else {
-            return;
-        };
+        let level = event.level;
         let mut free = Vec::new();
         for x in 0..i32::from(m.width) {
             for z in 0..i32::from(m.width) {

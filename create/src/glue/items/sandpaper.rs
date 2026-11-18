@@ -50,7 +50,7 @@ fn polished(host: &dyn mod_api::Host, item: &ItemStack) -> Option<ItemStack> {
     crate::glue::packages::body::new_stack(host, &out, u32::from(n.max(1)))
 }
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for SandPaper {
     /// `getUseDuration`: 32.
     fn use_duration(&self, _host: &dyn mod_api::Host, event: &mut UseDurationEvent<'_>) {
@@ -154,7 +154,7 @@ pub(super) fn use_tick(
     ) else {
         return;
     };
-    use mod_api::RandomSource;
+
     let r: [f32; 6] = level
         .with_random(&mut *host, |r| std::array::from_fn(|_| r.next_float()))
         .unwrap_or([0.5; 6]);
@@ -191,6 +191,7 @@ pub(super) fn use_tick(
             mod_api::SoundSource::Players,
             0.9 + 0.2 * r[4],
             r[5] * 0.2 + 0.9,
+            None,
         );
     }
 }
@@ -320,7 +321,6 @@ pub(super) fn finished(
             entity.eye_position(&*host),
             entity.view_vector(&*host),
         ) {
-            use mod_api::RandomSource;
             let at = [0, 1, 2].map(|i| eye[i] + look[i] * 0.5);
             let options = mod_api::ParticleOptions::item_stack(*key, item);
             for _ in 0..20 {
@@ -384,7 +384,6 @@ fn scrape(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
         .is_some_and(|(_, p)| p.starts_with("waxed_"));
     lv.set_state(event.pos, next, super::super::server::update_all());
     let pitch = {
-        use mod_api::RandomSource;
         let r = lv
             .level
             .with_random(&mut *lv.host, |r| r.next_float())
@@ -399,6 +398,7 @@ fn scrape(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
         mod_api::SoundSource::Players,
         1.0,
         pitch,
+        None,
     );
     let _ = lv
         .level

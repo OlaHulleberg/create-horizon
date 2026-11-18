@@ -60,7 +60,7 @@ fn props_on(
 
 struct Placement;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockPart for Placement {
     fn state_for_placement(
         &self,
@@ -140,7 +140,7 @@ fn dir_of(face: BlockFace) -> Dir {
 /// The items of the blocks whose placement Create finishes after the template's.
 struct Placed;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for Placed {
     fn on_block_placed_by(&self, host: &mut dyn ServerHost, event: &mut OnBlockPlacedByEvent<'_>) {
         let Some(id) = states::id(event.state) else {

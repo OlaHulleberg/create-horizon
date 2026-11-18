@@ -151,7 +151,7 @@ fn decode_open(data: &[u8]) -> Option<Opened> {
 
 struct ScheduleItem;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for ScheduleItem {
     /// `ScheduleItem.use`: not sneaking, the main hand's schedule opens its screen.
     fn use_item(&self, host: HostSide, event: &mut UseItemEvent<'_>) -> Option<InteractionResult> {

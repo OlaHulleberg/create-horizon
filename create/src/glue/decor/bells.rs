@@ -178,7 +178,7 @@ fn clicked(host: &mut dyn ServerHost, click: &BlockClick<'_>) -> Option<Interact
 
 struct BellBlock;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for BellBlock {
     fn use_item_on(
         &self,
@@ -210,10 +210,10 @@ fn swing_angle(time: f32) -> f32 {
 
 pub(super) struct BellDraw;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for BellDraw {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for BellDraw {
     fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
         let name = match event.block {

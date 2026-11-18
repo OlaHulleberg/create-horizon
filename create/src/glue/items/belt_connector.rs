@@ -18,7 +18,7 @@ use mod_api::{
 
 pub(super) struct Connector;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for Connector {
     fn use_on(&self, host: HostSide, event: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
         match host {
@@ -156,6 +156,7 @@ pub(crate) fn create_belts(lv: &mut ServerLevel<'_>, start: [i32; 3], end: [i32;
         SoundSource::Blocks,
         0.5,
         1.0,
+        None,
     );
     let layout = {
         let ground = Ground { lv };

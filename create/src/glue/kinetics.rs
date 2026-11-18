@@ -805,10 +805,10 @@ pub fn shown_speeds(host: &dyn mod_api::Host, level: mod_api::LevelRef, pos: [i3
 /// The kinetic block entity: found by the world when it loads, drawn by its parts.
 struct KineticEntity;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for KineticEntity {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for KineticEntity {
     fn block_entity_on_load(&self, host: HostSide, event: &mut BlockEntityOnLoadEvent) {
         let HostSide::Server(host) = host else {

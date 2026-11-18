@@ -22,7 +22,7 @@ pub(super) fn register(r: &mut dyn Registrar) {
 
 struct PlacingItem;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for PlacingItem {
     fn use_on(&self, host: HostSide, event: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
         let HostSide::Server(host) = host else {
@@ -134,6 +134,7 @@ fn give_burner(
         SoundSource::Blocks,
         0.25,
         0.75,
+        None,
     );
     lv.level.play_sound(
         host,
@@ -142,6 +143,7 @@ fn give_burner(
         SoundSource::Blocks,
         0.5,
         0.75,
+        None,
     );
     let single = stack.count() <= 1;
     let creative = creative(&*host, player);

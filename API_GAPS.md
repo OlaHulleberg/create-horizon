@@ -1,6 +1,6 @@
 # API gaps
 
-What the mod SDK can't do yet, at the Sunrise pin in `create/horizon-mod.toml` (`b77574e`), checked against the
+What the mod SDK can't do yet, at the Sunrise pin in `create/sunrise-mod.toml` (`2d81263`), checked against the
 latest nightly (`2d81263`, 2026-11-17). We only ask for what Create itself uses; better APIs wait until after parity.
 Links point to the Create 6.0.11 source (`b62e837`) that uses the missing feature.
 

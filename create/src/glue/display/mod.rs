@@ -1655,7 +1655,7 @@ fn update_nixie_power(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 /// The nixie tubes' clicks (`NixieTubeBlock.useItemOn`).
 struct NixieBlock;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for NixieBlock {
     fn use_item_on(
         &self,
@@ -1789,7 +1789,7 @@ fn use_nixie(
 /// (facing the player, or as the board it was placed against unless sneaking).
 struct DisplayBlock;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for DisplayBlock {
     /// `DisplayLinkBlock.useWithoutItem` takes any hand (the item's own use passes to it); a
     /// display board takes a click on one of its lines (`FlapDisplayBlock.useItemOn`).

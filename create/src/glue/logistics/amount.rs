@@ -184,7 +184,7 @@ fn feedback_sound(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     ];
     for (sound, volume, pitch) in sounds {
         lv.level
-            .play_sound(&mut *lv.host, sound, at, blocks, volume, pitch);
+            .play_sound(&mut *lv.host, sound, at, blocks, volume, pitch, None);
     }
 }
 

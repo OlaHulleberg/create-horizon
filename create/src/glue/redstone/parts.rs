@@ -76,7 +76,7 @@ const VANILLA_CONTAINERS: [&str; 12] = [
 /// The part on vanilla's containers: their changes reach the detectors watching them.
 struct WatchedContainer;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for WatchedContainer {
     fn contents_changed(&self, host: &mut dyn ServerHost, event: &mut ContentsChangedEvent) {
         // Most containers have no detector on them: nothing more than this look.
@@ -94,7 +94,7 @@ impl BlockPart for WatchedContainer {
 
 struct RedstoneBlock;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for RedstoneBlock {
     /// `BlockState.getSignal` / `getDirectSignal`. The hook names the face touching the reader;
     /// vanilla's direction points from the reader to the block.

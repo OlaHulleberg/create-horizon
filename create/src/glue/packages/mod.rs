@@ -1660,6 +1660,7 @@ fn use_packager(
             SoundSource::Blocks,
             1.0,
             1.0,
+            None,
         );
         return Some(InteractionResult::Success);
     }
@@ -1800,7 +1801,7 @@ fn address_to_clipboard(clip: &ItemStack, address: &str) -> Option<(ItemStack, S
 /// read of each.
 struct PackageBlock;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for PackageBlock {
     /// A packager's slots changed: automation took its box or put a package in (`automation`).
     fn contents_changed(
@@ -2037,6 +2038,7 @@ fn chain_clicked(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3]) {
             SoundSource::Blocks,
             1.0,
             1.0,
+            None,
         );
     };
     if d2 >= MAX_CHAIN_LENGTH * MAX_CHAIN_LENGTH {
@@ -2091,6 +2093,7 @@ fn chain_clicked(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3]) {
         SoundSource::Blocks,
         1.0,
         0.8,
+        None,
     );
 }
 
@@ -2454,7 +2457,7 @@ const CHAIN_MODELS: [&str; 15] = [
 /// (`ChainConveyorInteractionHandler.onUse`).
 struct FrogportItem;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::ItemPart for FrogportItem {
     fn use_item(
         &self,
@@ -2474,10 +2477,10 @@ impl mod_api::ItemPart for FrogportItem {
 /// wheel turning about the conveyor at its speed, along a chain gliding at the chain's.
 struct ConveyorDraw;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for ConveyorDraw {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for ConveyorDraw {
     fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
         if event.block != "create:chain_conveyor" {

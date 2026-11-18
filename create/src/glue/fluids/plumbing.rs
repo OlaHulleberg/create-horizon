@@ -274,8 +274,15 @@ impl create_engine::hose::Level for HoseLevel<'_, '_> {
         };
         let lv = &mut *self.0;
         let at = p.map(f64::from);
-        lv.level
-            .play_sound(&mut *lv.host, sound, at, SoundSource::Blocks, 0.3, 1.0);
+        lv.level.play_sound(
+            &mut *lv.host,
+            sound,
+            at,
+            SoundSource::Blocks,
+            0.3,
+            1.0,
+            None,
+        );
         if fizz {
             lv.level.play_sound(
                 &mut *lv.host,
@@ -284,6 +291,7 @@ impl create_engine::hose::Level for HoseLevel<'_, '_> {
                 SoundSource::Blocks,
                 0.5,
                 2.6,
+                None,
             );
         }
     }
@@ -715,6 +723,7 @@ fn tick_whistles(lv: &mut ServerLevel<'_>) {
                     SoundSource::Records,
                     0.175,
                     p,
+                    None,
                 );
             }
             if wh.replay_in == 0 {
@@ -726,6 +735,7 @@ fn tick_whistles(lv: &mut ServerLevel<'_>) {
                     SoundSource::Records,
                     1.0,
                     p,
+                    None,
                 );
                 wh.replay_in = whistle::replay_ticks(wh.pitch);
             } else {
@@ -976,6 +986,7 @@ pub(super) fn grow_whistle_at(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Bl
         SoundSource::Blocks,
         0.25,
         pitch,
+        None,
     );
     lv.level.play_sound(
         &mut *lv.host,
@@ -984,6 +995,7 @@ pub(super) fn grow_whistle_at(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Bl
         SoundSource::Blocks,
         1.0,
         pitch,
+        None,
     );
     true
 }

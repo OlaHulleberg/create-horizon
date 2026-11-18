@@ -123,13 +123,19 @@ fn sneaking(host: &dyn Host, player: PlayerRef) -> bool {
 
 fn play(lv: &mut ServerLevel<'_>, sound: &str, pos: [i32; 3], volume: f32, pitch: f32) {
     let at = pos.map(|v| f64::from(v) + 0.5);
-    lv.level
-        .play_sound(&mut *lv.host, sound, at, SoundSource::Blocks, volume, pitch);
+    lv.level.play_sound(
+        &mut *lv.host,
+        sound,
+        at,
+        SoundSource::Blocks,
+        volume,
+        pitch,
+        None,
+    );
 }
 
 /// A pitch of `random.nextFloat() * 0.1 + 0.9`, from the level's random.
 fn door_pitch(lv: &mut ServerLevel<'_>) -> f32 {
-    use mod_api::RandomSource;
     lv.level
         .with_random(&mut *lv.host, |r| r.next_float())
         .map_or(0.9, |f| f * 0.1 + 0.9)
@@ -138,7 +144,7 @@ fn door_pitch(lv: &mut ServerLevel<'_>) -> f32 {
 /// The valve handles, sliding doors, toolboxes, postboxes and Create's trapdoors.
 struct TemplateBlock;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for TemplateBlock {
     fn use_item_on(
         &self,
@@ -502,10 +508,10 @@ fn tick_doors(lv: &mut ServerLevel<'_>) {
 /// The toolbox's menu screen.
 struct ToolboxMenu;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for ToolboxMenu {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for ToolboxMenu {
     /// A toolbox's screen (`ToolboxScreen`) shows each compartment by its first stack round the
     /// toolbox's picture; the other stacks and the container's four slots past Create's 32 are
@@ -522,13 +528,21 @@ impl BlockEntityPart for ToolboxMenu {
         Some(Screen {
             width: toolbox::SCREEN_WIDTH,
             height: toolbox::SCREEN_HEIGHT,
-            slots: (0..toolbox::SLOTS).map(toolbox::slot_position).collect(),
+            slots: (0..toolbox::SLOTS)
+                .map(|i| {
+                    toolbox::slot_position(i).map(|position| mod_api::ScreenSlot {
+                        position,
+                        no_item_icon: None,
+                    })
+                })
+                .collect(),
             inventory_y: toolbox::INVENTORY_Y,
             inventory_x: toolbox::INVENTORY_X,
             own_labels: true,
             own_background: true,
             recipe_book: None,
             recipe_book_toggle: None,
+            recipe_book_big_result: false,
         })
     }
 

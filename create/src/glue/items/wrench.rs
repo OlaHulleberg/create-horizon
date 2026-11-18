@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 
 pub(super) struct Wrench;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for Wrench {
     fn use_on(&self, host: HostSide, event: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
         match host {
@@ -166,7 +166,6 @@ fn remove(
 
 /// `Create.RANDOM.nextFloat()`, from the level's random.
 fn random(lv: &mut ServerLevel<'_>) -> f32 {
-    use mod_api::RandomSource;
     lv.level
         .with_random(&mut *lv.host, |r| r.next_float())
         .unwrap_or(0.5)
@@ -181,6 +180,7 @@ fn sound(lv: &mut ServerLevel<'_>, name: &str, pos: [i32; 3], volume: f32, pitch
         mod_api::SoundSource::Blocks,
         volume,
         pitch,
+        None,
     );
 }
 

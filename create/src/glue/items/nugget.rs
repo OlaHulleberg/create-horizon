@@ -6,7 +6,7 @@ use mod_api::{Compound, HostSide, InteractionResult, ItemPart, ServerHost, Tag, 
 
 pub(super) struct Nugget;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for Nugget {
     fn use_item(&self, host: HostSide, event: &mut UseItemEvent<'_>) -> Option<InteractionResult> {
         if let HostSide::Server(host) = host {

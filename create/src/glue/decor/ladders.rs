@@ -43,7 +43,7 @@ fn facing_in(text: &str) -> Option<Dir> {
 
 struct Ladder;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockPart for Ladder {
     /// `MetalLadderBlock.canSurvive`: the same ladder facing the same way above holds it; else
     /// the ladder's own rule (a sturdy wall behind).

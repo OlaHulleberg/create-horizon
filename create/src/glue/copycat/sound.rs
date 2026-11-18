@@ -68,7 +68,7 @@ pub(super) fn reset_client() {
 /// The sound part on the copycat blocks.
 pub(super) struct CopycatSound;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for CopycatSound {
     fn sound_type(&self, context: &dyn LoopContext, event: &mut SoundTypeEvent<'_>) {
         let pos = [event.pos.x, event.pos.y, event.pos.z];

@@ -4,3 +4,5 @@
 /create/Cargo.lock
 /tools/create-data/target/
 /create/src/engine/target/
+
+/create/.sunrise/

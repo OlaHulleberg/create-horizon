@@ -62,7 +62,7 @@ fn straight_pipe_axis(open: impl Fn(Dir) -> bool) -> Option<Axis> {
 /// The bracket items.
 struct BracketItem;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for BracketItem {
     /// `BracketBlockItem.useOn`: on a shaft, cog or pipe, the bracket for the clicked face (else
     /// the face toward the player) replaces any it had, which goes back to the player; the
@@ -163,7 +163,7 @@ pub(super) fn removed_effect(lv: &mut ServerLevel<'_>, pos: [i32; 3], b: decor::
 /// Shafts, cogs and pipes: the wrench's `onWrenched` reaches their bracket first.
 struct Bracketed;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for Bracketed {
     /// `WrenchItem.useOn` → `IWrenchableWithBracket.onWrenched`, not sneaking (a sneaking wrench
     /// picks the block up, its bracket dropping as it goes): the bracket comes off and the block
@@ -191,10 +191,10 @@ impl BlockPart for Bracketed {
 /// The bracket a shaft's, cog's or pipe's block entity draws.
 struct BracketEntity;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for BracketEntity {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for BracketEntity {
     /// `BracketedKineticBlockEntityRenderer`: the bracket block's model, still.
     fn block_entity_submit(&self, _host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {

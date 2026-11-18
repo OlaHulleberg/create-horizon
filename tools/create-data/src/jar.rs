@@ -1,6 +1,6 @@
 //! Create's jar, fetched for the player from Create's official distribution. The Create team
 //! publishes each release on Modrinth (project `LNytGWDc`); this pins one exact file there by URL
-//! and hashes, the same file `create/horizon-mod.toml` names in its `[[jar]]` (which the launcher
+//! and hashes, the same file `create/sunrise-mod.toml` names in its `[[jar]]` (which the launcher
 //! layers, assets and data, under the mod). The jar's assets are All Rights Reserved: it is
 //! downloaded into the player's own cache and read there, never committed or shipped.
 
@@ -172,7 +172,7 @@ mod tests {
         assert!(CREATE.file.contains(CREATE.version));
         // The launcher layers the file the manifest names: it must be the one prepare reads.
         let manifest = fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../create/horizon-mod.toml"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../create/sunrise-mod.toml"),
         )
         .unwrap();
         assert!(manifest.contains(&format!("sha512 = \"{}\"", CREATE.sha512)));

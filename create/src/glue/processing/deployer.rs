@@ -24,8 +24,7 @@ use create_engine::deployer::{self, Deployer};
 use create_engine::kinetics::Dir;
 use create_engine::{belt, processing};
 use mod_api::{
-    BlockClick, BlockHit, Hand, ItemStack, PlayerAction, PlayerActionSetup, PlayerRef,
-    RandomSource, ServerHost,
+    BlockClick, BlockHit, Hand, ItemStack, PlayerAction, PlayerActionSetup, PlayerRef, ServerHost,
 };
 
 /// `DeployerFakePlayer`'s fallback profile: `9e2faded-cafe-4ec2-c314-dad129ae971d`, "Deployer".
@@ -773,7 +772,7 @@ fn finish_using(
     target: PlayerRef,
     food: Option<(i32, f32, bool)>,
 ) -> Option<ItemStack> {
-    use mod_api::{RandomSource, SoundSource, Tag};
+    use mod_api::{SoundSource, Tag};
     let host = &*lv.host;
     let Some(Tag::Compound(consumable)) = component(host, stack, "minecraft:consumable") else {
         return Some(stack.clone());
@@ -803,7 +802,7 @@ fn finish_using(
         .level
         .with_random(&mut *lv.host, |r| {
             let eat_volume = if r.next_boolean() { 0.5 } else { 1.0 };
-            let eat_pitch = r.triangle_float(1.0, 0.2);
+            let eat_pitch = 1.0 + 0.2 * (r.next_float() - r.next_float());
             let drink_pitch = 0.9 + r.next_float() * 0.1;
             if drinks {
                 (0.5, drink_pitch)
@@ -820,17 +819,27 @@ fn finish_using(
             SoundSource::Players,
             volume,
             pitch,
+            None,
         );
     }
     // `FoodProperties.onConsume`.
     if let Some((nutrition, saturation, _)) = food {
         let pitch = lv
             .level
-            .with_random(&mut *lv.host, |r| r.triangle_float(1.0, 0.4))
+            .with_random(&mut *lv.host, |r| {
+                1.0 + 0.4 * (r.next_float() - r.next_float())
+            })
             .unwrap_or(1.0);
         if !sound.is_empty() {
-            lv.level
-                .play_sound(&mut *lv.host, &sound, at, SoundSource::Neutral, 1.0, pitch);
+            lv.level.play_sound(
+                &mut *lv.host,
+                &sound,
+                at,
+                SoundSource::Neutral,
+                1.0,
+                pitch,
+                None,
+            );
         }
         // `FoodData.eat(nutrition, saturation)`, given as its modifier
         // (`saturation = nutrition * modifier * 2`).
@@ -851,6 +860,7 @@ fn finish_using(
             SoundSource::Players,
             0.5,
             pitch,
+            None,
         );
     }
     // `PotionContents.onConsume`.
@@ -927,7 +937,7 @@ fn random_index(lv: &mut ServerLevel<'_>, n: usize) -> usize {
     let n = n as i32;
     let pick = lv
         .level
-        .with_random(&mut *lv.host, |r| r.next_int_bound(n).unwrap_or(0))
+        .with_random(&mut *lv.host, |r| r.next_int_bound(n))
         .unwrap_or(0) as usize;
     pick.min(n as usize - 1)
 }
@@ -1048,6 +1058,7 @@ fn punch(
             mod_api::SoundSource::Neutral,
             0.25,
             1.0,
+            None,
         );
     }
     match d.punch(at, per_hit) {

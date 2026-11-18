@@ -707,7 +707,7 @@ static HAUNTING: AttachmentType<u32> = AttachmentType {
 
 /// Keeps the haunting progress on each horse (`HauntingType.affectEntity`'s `Horse`).
 pub struct Haunted;
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl EntityPart for Haunted {}
 impl EntityPartState for Haunted {
     type Data = u32;
@@ -745,6 +745,7 @@ fn haunt_horse(lv: &mut ServerLevel<'_>, entity: EntityRef) {
                 SoundSource::Neutral,
                 1.0,
                 pitch,
+                None,
             );
         }
         return;
@@ -756,6 +757,7 @@ fn haunt_horse(lv: &mut ServerLevel<'_>, entity: EntityRef) {
         SoundSource::Neutral,
         1.25,
         0.65,
+        None,
     );
     let host = &mut *lv.host;
     let Some(mut saved) = entity.nbt(host) else {

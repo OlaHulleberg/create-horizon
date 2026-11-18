@@ -21,7 +21,7 @@ Catnip's placement indicator under `create/assets`, and, where Create's jar is a
 `prepare` cache), refuses any file under `create/assets` or `create/data` that is one of the jar's assets, byte for
 byte or as JSON. Code that copies a model's numbers is for review to catch.
 
-Also don't commit binaries or `create/.horizon/`.
+Also don't commit binaries or `create/.sunrise/`.
 
 ## Keep it MIT
 
@@ -31,7 +31,7 @@ Sunrise's own (read it only to learn the API).
 
 ## Checks
 
-Run the checks listed in [VALIDATION.md](VALIDATION.md). In the pull request, say what you ran and what you tried in
+Use `cargo sunrise-mod` for the pinned SDK. Run the checks listed in [VALIDATION.md](VALIDATION.md). In the pull request, say what you ran and what you tried in
 game.
 
 ## Sign-off (DCO)

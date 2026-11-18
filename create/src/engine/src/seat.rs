@@ -83,6 +83,11 @@ pub fn sits_down(
     on_ground && !riding && !occupied && can_sit(kind) && feet.map(|v| v.floor() as i32) == pos
 }
 
+/// SeatBlock.fallOn passes half the fall distance to the ordinary fall calculation.
+pub fn fall_distance(distance: f64) -> f64 {
+    distance * 0.5
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

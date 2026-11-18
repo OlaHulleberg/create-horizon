@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, HashSet};
 
 pub(super) struct Shaper;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for Shaper {
     /// `ZapperItem.useOn`: sneaking opens the screen; otherwise the use goes on to `use`.
     fn use_on(&self, host: HostSide, event: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
@@ -230,6 +230,7 @@ fn select(host: &mut dyn ServerHost) -> Option<()> {
             SoundSource::Players,
             1.0,
             1.0,
+            None,
         );
     }
     Some(())
@@ -288,6 +289,7 @@ fn use_shaper(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> Option<()>
             SoundSource::Players,
             0.1,
             pitch,
+            None,
         );
     }
     let paint = match &block {

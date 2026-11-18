@@ -26,10 +26,16 @@ use mod_api::{
 #[derive(Default)]
 struct Create;
 
-#[mod_api::horizon_mod]
+#[mod_api::sunrise_mod]
 impl Hooks for Create {
     fn register(&self, r: &mut dyn Registrar, cx: &RegistrationContext) {
         states::register(r);
+        let _ = r.register_attachment_type("create:column", false);
+        let _ = r.register_attachment_type("create:logistics_networks", false);
+        let _ = r.register_attachment_type("create:station_ports", false);
+        let _ = r.register_attachment_type("create:minecart_contraptions", false);
+        let _ = r.register_attachment_type("create:haunting", false);
+
         for &block in create_engine::Block::ALL.iter() {
             r.block_part(states::key(block), CreateBlock);
         }
@@ -357,7 +363,7 @@ impl Hooks for Create {
 
     fn living_incoming_damage(
         &self,
-        level: &mut dyn mod_api::LevelRandomHost,
+        level: &mut dyn mod_api::HitHost,
         event: &mut mod_api::LivingIncomingDamageEvent<'_>,
     ) -> Flow {
         until_cancel(|s| s.living_incoming_damage(level, event))
@@ -682,7 +688,7 @@ fn reborrow<'a>(host: &'a mut HostSide<'_>) -> HostSide<'a> {
 /// parts to their own blocks for the rest.
 struct CreateBlock;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for CreateBlock {
     /// A neighbour of a Create block changed (`neighborChanged`). Runs inside the write: the
     /// subsystems note it and act in the level tick.

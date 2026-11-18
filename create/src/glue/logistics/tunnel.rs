@@ -172,6 +172,7 @@ pub fn grab_stacks(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: u128) -> boo
         mod_api::SoundSource::Players,
         0.2,
         1.0 + seed,
+        None,
     );
     true
 }

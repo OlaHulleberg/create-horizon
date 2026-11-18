@@ -728,7 +728,7 @@ fn observer_powered(state: u32) -> Option<bool> {
 /// A track observer's part: the click on its filter slot.
 struct Observer;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for Observer {
     fn use_item_on(
         &self,

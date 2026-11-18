@@ -40,11 +40,26 @@ pub(super) fn cannon_screen() -> Screen {
         width: 213.0,
         height: 251.0,
         slots: vec![
-            Some([15.0, 65.0]),
-            Some([171.0, 65.0]),
-            Some([134.0, 19.0]),
-            Some([174.0, 19.0]),
-            Some([15.0, 19.0]),
+            Some(mod_api::ScreenSlot {
+                position: [15.0, 65.0],
+                no_item_icon: None,
+            }),
+            Some(mod_api::ScreenSlot {
+                position: [171.0, 65.0],
+                no_item_icon: None,
+            }),
+            Some(mod_api::ScreenSlot {
+                position: [134.0, 19.0],
+                no_item_icon: None,
+            }),
+            Some(mod_api::ScreenSlot {
+                position: [174.0, 19.0],
+                no_item_icon: None,
+            }),
+            Some(mod_api::ScreenSlot {
+                position: [15.0, 19.0],
+                no_item_icon: None,
+            }),
         ],
         inventory_y: 161.0,
         inventory_x: 37.0,
@@ -400,7 +415,19 @@ pub(super) fn table_screen() -> Screen {
     Screen {
         width: 214.0,
         height: 197.0,
-        slots: vec![Some([21.0, 59.0]), Some([166.0, 59.0]), None, None, None],
+        slots: vec![
+            Some(mod_api::ScreenSlot {
+                position: [21.0, 59.0],
+                no_item_icon: None,
+            }),
+            Some(mod_api::ScreenSlot {
+                position: [166.0, 59.0],
+                no_item_icon: None,
+            }),
+            None,
+            None,
+            None,
+        ],
         inventory_y: 107.0,
         inventory_x: 38.0,
         own_labels: true,

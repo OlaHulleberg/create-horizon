@@ -39,7 +39,7 @@ pub(super) fn answers(host: &dyn Host, player: PlayerRef, block: Block) -> bool 
 /// The part a hand crank carries.
 struct Crank;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for Crank {
     /// `HandCrankBlock.useItemOn`: the crank turns for 10 ticks, backwards while sneaking, and
     /// tires the player (`crankHungerMultiplier` 0.01 per RPM).

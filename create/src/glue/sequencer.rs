@@ -166,7 +166,7 @@ pub fn save_run(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 
 struct Gearshift;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockPart for Gearshift {
     /// `SequencedGearshiftBlock.useItemOn`: a wrench, or a kinetic block held against a shaft
     /// end, pass; else the screen opens.

@@ -322,6 +322,7 @@ fn play(lv: &mut ServerLevel<'_>, pos: [i32; 3], sound: &str, volume: f32, pitch
         mod_api::SoundSource::Blocks,
         volume,
         pitch,
+        None,
     );
 }
 
@@ -366,6 +367,7 @@ pub(super) fn put_on_goggles(lv: &mut ServerLevel<'_>, click: &mod_api::BlockCli
             mod_api::SoundSource::Blocks,
             0.5,
             1.0,
+            None,
         );
     }
     done
@@ -405,10 +407,10 @@ fn flag(c: &Compound, k: &str) -> bool {
 /// The frogport's drawing on the shared block entity type.
 pub(super) struct FrogDraw;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for FrogDraw {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for FrogDraw {
     fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
         if event.block != "create:package_frogport" {

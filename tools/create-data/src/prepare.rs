@@ -2,10 +2,10 @@
 //! Rights Reserved assets (textures, hand-written models, sounds); neither ships with the port. This
 //! reads them from Create's jar on the player's machine (`jar.rs` downloads the pinned one from
 //! Modrinth; a jar or folders laid out like one may be given) and writes the native mod the
-//! launcher builds: the mod's crate (`create/`: `horizon-mod.toml`, `Cargo.toml`, `src/`) and
+//! launcher builds: the mod's crate (`create/`: `sunrise-mod.toml`, `Cargo.toml`, `src/`) and
 //! declarations (`data/`, `assets/`), Create's data converted from 1.21.1 to 26.3, and what 26.3
 //! needs made from its assets (item model definitions, flattened and tinted models, connected
-//! texture tiles). `horizon-mod.toml` names the pinned jar (`[[jar]]`): the launcher fetches it
+//! texture tiles). `sunrise-mod.toml` names the pinned jar (`[[jar]]`): the launcher fetches it
 //! and layers its assets and data under the mod, so a file the jar already holds as it is is not
 //! written again. Reading a zip runs no Java. The folder holds what is made from Create's assets:
 //! it is for the player's own game, never for redistribution.
@@ -632,7 +632,7 @@ fn c_tag_files(files: &BTreeMap<String, Vec<u8>>) -> Vec<(String, Value)> {
 
 /// The mod folder's (`create/`) files that make up its crate, besides `src/`, `data/` and
 /// `assets/`.
-const CRATE_FILES: &[&str] = &["horizon-mod.toml", "Cargo.toml"];
+const CRATE_FILES: &[&str] = &["sunrise-mod.toml", "Cargo.toml"];
 
 /// The repository's notices that go into the package beside them.
 const NOTICES: &[&str] = &["LICENSE", "README.md", "THIRD_PARTY_NOTICES.md"];
@@ -658,7 +658,7 @@ fn particle_behaviour(path: &str) -> Option<Value> {
     }
 }
 
-/// Whether the sources are exactly the jar `create/horizon-mod.toml` names, which the launcher
+/// Whether the sources are exactly the jar `create/sunrise-mod.toml` names, which the launcher
 /// layers under the mod: then what would be copied from it unchanged is left to that layer.
 fn layered(sources: &[PathBuf]) -> Result<bool, String> {
     let [source] = sources else {
@@ -670,7 +670,7 @@ fn layered(sources: &[PathBuf]) -> Result<bool, String> {
     let hash = crate::jar::sha512_of(source).map_err(|e| format!("{}: {e}", source.display()))?;
     if hash != crate::jar::CREATE.sha512 {
         eprintln!(
-            "{}: not the jar create/horizon-mod.toml names (Create {}, {}); copying all of it",
+            "{}: not the jar create/sunrise-mod.toml names (Create {}, {}); copying all of it",
             source.display(),
             crate::jar::CREATE.version,
             crate::jar::CREATE.file
@@ -823,8 +823,8 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
     let declared: Vec<String> = ours
         .keys()
         .filter_map(|k| {
-            k.strip_prefix("data/create/horizon/block/")
-                .or_else(|| k.strip_prefix("data/create/horizon/item/"))
+            k.strip_prefix("data/create/sunrise/block/")
+                .or_else(|| k.strip_prefix("data/create/sunrise/item/"))
                 .and_then(|n| n.strip_suffix(".json"))
                 .map(str::to_string)
         })
@@ -840,7 +840,7 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
         if let Some(behaviour) = particle_behaviour(path) {
             let mut doc: Value =
                 serde_json::from_slice(bytes).map_err(|e| format!("{path}: {e}"))?;
-            doc["horizon:behaviour"] = behaviour;
+            doc["sunrise:behaviour"] = behaviour;
             put(path, &serde_json::to_vec_pretty(&doc).unwrap())?;
             copied += 1;
             continue;
@@ -992,7 +992,7 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
     }
     // A fluid in the world brings its bucket, `<fluid>_bucket`, whose model is Create's.
     for name in ours.keys().filter_map(|k| {
-        k.strip_prefix("data/create/horizon/fluid/")?
+        k.strip_prefix("data/create/sunrise/fluid/")?
             .strip_suffix(".json")
     }) {
         let doc = json!({ "model": { "type": "minecraft:model", "model": format!("create:item/{name}_bucket") } });
@@ -1059,7 +1059,7 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
     // The placement helpers' ghosts, baked from the jar's models (`ghosts.rs`).
     let (ghost_models, ghosts) = crate::ghosts::source_file(&files)?;
     put(crate::ghosts::RS, ghost_models.as_bytes())?;
-    // The jar layer (`[[jar]]` in horizon-mod.toml) also holds the data left out above (recipes for
+    // The jar layer (`[[jar]]` in sunrise-mod.toml) also holds the data left out above (recipes for
     // other mods, the worldgen 26.3 cannot place, recipe advancements...): the mod's own file at
     // the same path keeps each out, as it was when the mod carried copies of what it kept.
     let mut kept_out = 0;
@@ -1413,7 +1413,7 @@ mod c_tags_resolve {
                 .or_else(|| serde_json::from_slice(files.get(&rel)?).ok())?;
             doc["values"].as_array().cloned()
         };
-        let decl = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../create/data/create/horizon");
+        let decl = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../create/data/create/sunrise");
         let mut items = HashSet::new();
         for kind in ["item", "block"] {
             for e in fs::read_dir(decl.join(kind)).unwrap() {

@@ -14,18 +14,17 @@ jobs:
           python-version: '3.12'
       - name: The pinned Sunrise build
         id: pin
-        run: echo "horizon=$(python3 -c 'import tomllib; print(tomllib.load(open("create/horizon-mod.toml", "rb"))["native"]["horizon"])')" >> "$GITHUB_OUTPUT"
+        run: echo "sunrise=$(python3 -c 'import tomllib; print(tomllib.load(open("create/sunrise-mod.toml", "rb"))["native"]["sunrise"])')" >> "$GITHUB_OUTPUT"
       - name: Install the SDK's Rust
         run: |
           rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy --target wasm32-unknown-unknown
           rustup default 1.99.1
-      - name: Install cargo horizon-mod at the pinned build
-        run: cargo install --locked --git https://github.com/sunrise-org/sunrise --rev "${{ steps.pin.outputs.horizon }}" cargo-horizon-mod
-      # Fetches the SDK of the pinned build from Sunrise's releases: this step fails until Sunrise
-      # publishes an SDK for the pin (see VALIDATION.md for the local check against a built SDK).
+      - name: Install cargo sunrise-mod at the pinned build
+        run: cargo install --locked --git https://github.com/sunrise-org/sunrise --rev "${{ steps.pin.outputs.sunrise }}" cargo-sunrise-mod
+      # Fetch and verify the official SDK for the pinned build.
       - name: Package rules, SDK fetch and cargo check
         working-directory: create
-        run: cargo horizon-mod check
+        run: cargo sunrise-mod check
       - working-directory: create
         run: cargo fmt --all --check
       - working-directory: create

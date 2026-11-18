@@ -171,7 +171,7 @@ fn uuid(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> u128 {
     if let Some(u) = kept(lv.dim, pos).uuid {
         return u;
     }
-    use mod_api::RandomSource;
+
     let words = lv
         .level
         .with_random(&mut *lv.host, |r| {
@@ -1796,7 +1796,7 @@ pub(crate) fn render_gui_post(host: &dyn ClientHost, event: &mut mod_api::Render
 /// prediction knows).
 struct CompartmentRules;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::MenuPart for CompartmentRules {
     fn menu_slot_rules(
         &self,

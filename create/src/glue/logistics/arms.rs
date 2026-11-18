@@ -847,6 +847,7 @@ impl arm::World for ArmWorld<'_, '_> {
                         mod_api::SoundSource::Blocks,
                         1.0,
                         1.0,
+                        None,
                     );
                 }
                 count - 1

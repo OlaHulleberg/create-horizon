@@ -662,7 +662,7 @@ fn use_block(
     used.then_some(InteractionResult::Success)
 }
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for LogisticsBlock {
     fn use_item_on(
         &self,

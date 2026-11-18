@@ -1412,7 +1412,7 @@ fn requester_succeeded(dim: usize, pos: [i32; 3]) -> Option<bool> {
 /// Links', gauges' and requesters' own moments.
 struct StockBlock;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for StockBlock {
     /// A right click on a stock link or a gauge does nothing here (their screens are
     /// commands): the click is used, so the block's template does nothing either. A linking
@@ -1529,6 +1529,7 @@ fn own_use(
                 mod_api::SoundSource::Players,
                 0.2,
                 pitch,
+                None,
             );
             return Some(InteractionResult::Success);
         }
@@ -1569,7 +1570,6 @@ fn tuned(stack: &ItemStack) -> Option<Network> {
 
 /// `UUID.randomUUID()` for `new_network_started`, from the level's random.
 fn new_network(lv: &mut ServerLevel<'_>) -> Network {
-    use mod_api::RandomSource;
     let half = |lv: &mut ServerLevel<'_>| {
         lv.level
             .with_random(&mut *lv.host, |r| r.next_long())
@@ -1721,13 +1721,13 @@ fn linked_block(b: Block) -> bool {
     )
 }
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for StockItem {
     fn on_block_placed_by(&self, host: &mut dyn ServerHost, event: &mut OnBlockPlacedByEvent<'_>) {
         let Some(player) = event.placer else {
             return;
         };
-        let Some(dimension) = player.dimension(&*host).map(|d| d.to_string()) else {
+        let Some(dimension) = event.level.dimension().id(&*host).map(|d| d.to_string()) else {
             return;
         };
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {

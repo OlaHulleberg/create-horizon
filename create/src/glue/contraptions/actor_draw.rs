@@ -574,10 +574,10 @@ pub fn animated(block: Block, entity: &ModBlockEntity) -> bool {
 /// The part drawing placed actors' parts, on Create's kept block entity type.
 pub(super) struct PlacedActors;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for PlacedActors {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for PlacedActors {
     fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
         let Some(id) = states::id(event.state) else {

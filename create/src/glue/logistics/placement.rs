@@ -66,7 +66,7 @@ pub(crate) fn in_water(level: &dyn LevelHost, event: &StateForPlacementEvent<'_>
 
 struct Placement;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for Placement {
     fn state_for_placement(
         &self,
@@ -362,7 +362,7 @@ thread_local! {
     static LAYERS: std::cell::RefCell<Vec<Layer>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::ItemPart for VaultItem {
     fn on_block_placed_by(
         &self,
@@ -376,8 +376,10 @@ impl mod_api::ItemPart for VaultItem {
         if player_items::sneaking(&*host, player) {
             return;
         }
-        let Some(dim) = player
-            .dimension(&*host)
+        let Some(dim) = event
+            .level
+            .dimension()
+            .id(&*host)
             .and_then(|d| level_index(&d.to_string()))
         else {
             return;
@@ -423,9 +425,7 @@ impl mod_api::ItemPart for VaultItem {
         {
             return;
         }
-        let Some(level) = player.level(&*host) else {
-            return;
-        };
+        let level = event.level;
         let mut free = Vec::new();
         for x in 0..width {
             for z in 0..width {

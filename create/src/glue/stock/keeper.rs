@@ -487,6 +487,7 @@ fn order(
                 mod_api::SoundSource::Blocks,
                 1.0,
                 1.0,
+                None,
             );
         }
         super::for_ticker(pos, || {
@@ -512,6 +513,7 @@ fn order(
         mod_api::SoundSource::Blocks,
         1.0,
         1.0,
+        None,
     );
     crate::glue::advancements::award(lv.host, player, "stock_ticker");
     let Some(net) = network_at(dim, pos) else {

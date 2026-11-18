@@ -14,7 +14,7 @@ pub(super) const IDS: [&str; 3] = [
 
 pub(super) struct Transitional;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for Transitional {
     fn item_bar(&self, _host: &dyn ClientHost, event: &mut ItemBarEvent<'_>) {
         let progress = progress(&custom(event.stack));

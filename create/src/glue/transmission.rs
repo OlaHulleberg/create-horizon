@@ -39,7 +39,7 @@ pub fn register(r: &mut dyn Registrar) {
 /// gearbox. (Its drops are the loot table's, which `create-data prepare` gives the same rule.)
 struct GearboxPick;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockPart for GearboxPick {
     fn clone_item_stack(
         &self,
@@ -118,6 +118,7 @@ impl ServerLevel<'_> {
             SoundSource::Blocks,
             (sound.volume + 1.0) / 2.0,
             sound.pitch * 0.8,
+            None,
         );
     }
 
@@ -141,7 +142,7 @@ fn use_one(host: &mut dyn ServerHost, player: PlayerRef, hand: Hand, stack: &Ite
 
 struct Clicked;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockPart for Clicked {
     fn use_item_on(
         &self,

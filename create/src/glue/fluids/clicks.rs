@@ -38,7 +38,7 @@ pub(super) const CLICKED: [Block; 8] = [
 /// The part on `CLICKED`.
 pub(super) struct Clicks;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for Clicks {
     fn use_item_on(
         &self,
@@ -126,8 +126,15 @@ fn bucket_sound(lv: &mut ServerLevel<'_>, pos: [i32; 3], fluid: Fluid, fill: boo
         (false, true) => "minecraft:item.bucket.empty_lava",
     };
     let at = pos.map(|v| f64::from(v) + 0.5);
-    lv.level
-        .play_sound(&mut *lv.host, sound, at, SoundSource::Blocks, 0.5, 1.0);
+    lv.level.play_sound(
+        &mut *lv.host,
+        sound,
+        at,
+        SoundSource::Blocks,
+        0.5,
+        1.0,
+        None,
+    );
 }
 
 /// `FluidTankBlock.useItemOn`: only creative players, or anyone on a creative tank; an item is
@@ -300,6 +307,7 @@ fn encase(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block) {
         SoundSource::Blocks,
         1.0,
         0.8,
+        None,
     );
 }
 
@@ -368,6 +376,7 @@ fn use_smart_pipe(
         SoundSource::Blocks,
         0.25,
         0.1,
+        None,
     );
     true
 }

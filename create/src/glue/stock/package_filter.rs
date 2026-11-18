@@ -32,7 +32,7 @@ const ADDRESS: &str = create_engine::package::ADDRESS_KEY;
 /// screen.
 pub(super) struct PackageFilterPart;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for PackageFilterPart {
     fn use_item(&self, host: HostSide, event: &mut UseItemEvent<'_>) -> Option<InteractionResult> {
         used(host, event.player, event.hand)

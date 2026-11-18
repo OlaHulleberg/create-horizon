@@ -196,6 +196,7 @@ impl Subsystem for Equipment {
             SoundSource::Players,
             0.75,
             1.0,
+            None,
         );
         let _ = living.set_equipment(lv.host, EquipmentSlot::Chest, Some(stack));
         lv.destroy_block(pos, false);
@@ -338,6 +339,7 @@ impl Subsystem for Equipment {
                     SoundSource::Players,
                     0.2,
                     0.8,
+                    None,
                 );
             }
         }
@@ -395,7 +397,7 @@ impl Subsystem for Equipment {
     /// Create's `CreateFireImmune`: `isInvulnerableTo` any `#minecraft:is_fire` damage).
     fn living_incoming_damage(
         &self,
-        _level: &mut dyn mod_api::LevelRandomHost,
+        _level: &mut dyn mod_api::HitHost,
         event: &mut mod_api::LivingIncomingDamageEvent<'_>,
     ) -> Flow {
         let fire = matches!(
@@ -443,7 +445,11 @@ impl Subsystem for Equipment {
     }
 
     fn special_model_renderers(&self, renderers: &mut dyn mod_api::SpecialModelRenderers) {
-        renderers.register("create:extendo_grip".into(), std::sync::Arc::new(GripModel));
+        renderers.register(
+            "create:extendo_grip".into(),
+            mod_api::SpecialModelPolicy::Stack,
+            std::sync::Arc::new(GripModel),
+        );
     }
 
     /// A player immune to fire is never set alight, so their view shows no flames.
@@ -558,7 +564,7 @@ struct PlacedBacktank;
 /// `BacktankItem.BAR_COLOR`.
 const BAR_COLOR: u32 = 0xEFEFEF;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for PlacedBacktank {
     fn item_bar(&self, _host: &dyn mod_api::ClientHost, event: &mut mod_api::ItemBarEvent<'_>) {
         let max = eq::max_air(capacity(event.stack));
@@ -822,8 +828,17 @@ fn consume_air(host: &mut dyn ServerHost, player: PlayerRef, slot: usize, amount
                 SoundSource::Players,
                 1.0,
                 0.625,
+                None,
             );
-            level.play_sound(host, "create:steam", at, SoundSource::Neutral, 0.5, 0.5);
+            level.play_sound(
+                host,
+                "create:steam",
+                at,
+                SoundSource::Neutral,
+                0.5,
+                0.5,
+                None,
+            );
         }
         let color = if w == eq::Warning::Depleted {
             "red"
@@ -972,10 +987,10 @@ pub(crate) fn register_cogs(r: &mut dyn Registrar, kind: &mod_api::BlockEntityTy
 /// speed in degrees a tick.
 struct BacktankCogs;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockPart for BacktankCogs {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockEntityPart for BacktankCogs {
     fn block_entity_submit(
         &self,
@@ -1183,12 +1198,12 @@ pub(crate) fn grip_pose(
         angle += 360.0 * shown.powi(3);
     }
     let cog = ((angle.rem_euclid(45.0) / 45.0 * GRIP_COG_STEPS as f32) as i64) % GRIP_COG_STEPS;
-    event.models.push(if hand {
+    event.layers.push(mod_api::ItemModelLayer::new(if hand {
         let pose = if hold { "holding" } else { "punching" };
         format!("hand_{step}_{cog}_{pose}")
     } else {
         format!("rest_{cog}")
-    });
+    }));
 }
 
 /// A number in a special model's config (its JSON converted to NBT).
@@ -1215,6 +1230,7 @@ impl mod_api::SpecialModelRenderer for GripModel {
         _host: &dyn mod_api::ClientHost,
         _stack: &ItemStack,
         config: &Tag,
+        _context: &mod_api::SpecialModelContext,
     ) -> Result<Vec<mod_api::SpecialModelPart>, String> {
         const ROT: [f32; 3] = [0.0, 0.5, 0.5];
         const BACK: [f32; 3] = [0.0, -0.5, -0.5];

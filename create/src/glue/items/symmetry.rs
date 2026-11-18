@@ -33,7 +33,7 @@ const WAND: &str = "create:wand_of_symmetry";
 
 pub(super) struct WandPart;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for WandPart {
     /// `SymmetryWandItem.useOn`: sneaking opens its screen on the client; otherwise (main hand)
     /// the mirror moves before the clicked face.

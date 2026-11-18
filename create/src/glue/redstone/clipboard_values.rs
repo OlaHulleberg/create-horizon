@@ -385,6 +385,7 @@ fn paste_filter(
                     mod_api::SoundSource::Blocks,
                     1.0,
                     1.0,
+                    None,
                 );
             }
             return false;

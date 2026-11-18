@@ -729,7 +729,7 @@ fn use_one(host: &mut dyn ServerHost, player: mod_api::PlayerRef) {
 /// The assembler's part: the carts that pass it, and clicks on it.
 struct AssemblerBlock;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for AssemblerBlock {
     /// `onMinecartPass`: a cart Create may load (`canAssembleTo`) is handled at its next tick
     /// (`assembleNextTick`: the first cart to pass since then).
@@ -792,6 +792,7 @@ impl BlockPart for AssemblerBlock {
             SoundSource::Players,
             1.0,
             1.0,
+            None,
         );
         lv.set_state(click.pos, next, update_all());
         if player.is_creative(&*lv.host) != Some(true) {
@@ -849,7 +850,7 @@ fn wrench_assembler(
 /// rail becomes an assembler holding it.
 struct AssemblerItem;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for AssemblerItem {
     fn use_on(&self, host: HostSide, event: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
         let HostSide::Server(host) = host else {
@@ -919,6 +920,7 @@ fn place_assembler(lv: &mut ServerLevel<'_>, player: mod_api::PlayerRef, pos: [i
         SoundSource::Blocks,
         1.0,
         1.0,
+        None,
     );
     use_one(lv.host, player);
 }
@@ -1547,7 +1549,7 @@ fn item_contraption(stack: &ItemStack) -> Option<Compound> {
 /// facing the player's way (`createAtYaw`); elsewhere nothing (`FAIL`).
 struct ContraptionItem;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for ContraptionItem {
     fn use_on(&self, host: HostSide, event: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
         let HostSide::Server(host) = host else {

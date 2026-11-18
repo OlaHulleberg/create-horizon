@@ -11,8 +11,7 @@ use create_engine::Block;
 use create_engine::decor;
 use mod_api::{
     BlockState, Flow, GameEventContext, Host, HostSide, InteractionResult, ItemPart, LevelHost,
-    LevelWriteHost, RandomSource, RandomTickEvent, Registrar, ToolAbility, ToolModifiedStateEvent,
-    UseOnEvent,
+    LevelWriteHost, RandomTickEvent, Registrar, ToolAbility, ToolModifiedStateEvent, UseOnEvent,
 };
 
 pub(super) fn register(r: &mut dyn Registrar) {
@@ -98,7 +97,7 @@ fn as_block_on(level: &dyn LevelHost, state: BlockState, to: Block) -> Option<Bl
 
 struct Copper;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockPart for Copper {
     /// `ChangeOverTimeBlock.changeOverTime`: vanilla's chance and neighbour rule, into Create's
     /// next age. Vanilla's own random tick (which would look for vanilla's next copper) is
@@ -146,7 +145,7 @@ impl mod_api::BlockPart for Copper {
 /// The chance draws of `changeOverTime` for a block of age `own` at `pos`: whether it ages.
 fn change_over_time(
     level: &dyn LevelHost,
-    random: &mut impl RandomSource,
+    random: &mut dyn mod_api::RandomSource,
     pos: [i32; 3],
     own: u8,
 ) -> bool {
@@ -184,7 +183,7 @@ fn change_over_time(
 /// Honeycomb on Create's copper: `HoneycombItem.useOn`.
 struct Honeycomb;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for Honeycomb {
     /// Into Create's waxed twin: the `item_used_on_block` trigger, one honeycomb used (not in
     /// creative), the block changed, the `block_change` game event and the wax-on level event

@@ -66,7 +66,7 @@ fn local(click: &BlockClick<'_>) -> [f64; 3] {
 /// The placard, clipboard, desk bell, creative crate, item hatch and girder.
 struct DecorBlock;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockPart for DecorBlock {
     fn use_item_on(
         &self,
@@ -476,7 +476,7 @@ pub(super) fn left_click(host: &mut dyn ServerHost, event: &mut LeftClickBlockEv
 /// Table cloths: `TableClothBlock.useItemOn`.
 struct TableCloth;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockPart for TableCloth {
     fn use_item_on(
         &self,
@@ -613,7 +613,7 @@ pub(crate) fn helper_target(
 /// Sails and sail frames: `SailBlock.useItemOn`.
 struct Sail;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockPart for Sail {
     /// Not sneaking, a sail or sail frame goes on the nearest free side of the clicked one in
     /// its plane, facing its way (`SailBlock.PlacementHelper`); shears make sails frames and a
@@ -665,7 +665,6 @@ impl mod_api::BlockPart for Sail {
         let pitch = match color {
             None => 1.0,
             Some(_) => {
-                use mod_api::RandomSource;
                 let r = lv
                     .level
                     .with_random(&mut *lv.host, |r| r.next_float())

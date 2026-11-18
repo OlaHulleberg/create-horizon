@@ -194,7 +194,6 @@ pub(super) fn tick(lv: &mut ServerLevel<'_>) {
     });
     let rung: Vec<[i32; 3]> = level.effects.keys().copied().collect();
     for pos in rung {
-        use mod_api::RandomSource;
         let r: [f64; 8] = lv
             .level
             .with_random(&mut *lv.host, |r| std::array::from_fn(|_| r.next_double()))
@@ -223,6 +222,7 @@ pub(super) fn tick(lv: &mut ServerLevel<'_>) {
             SoundSource::Blocks,
             volume,
             0.6 + r[7] as f32 * 0.4,
+            None,
         );
     }
     // The pulses.

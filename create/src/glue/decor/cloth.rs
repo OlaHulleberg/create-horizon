@@ -76,10 +76,10 @@ pub(super) fn check(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 
 pub(super) struct ClothDraw;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for ClothDraw {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for ClothDraw {
     fn block_entity_submit(&self, _host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
         let Some(kind) = event

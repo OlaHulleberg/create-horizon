@@ -44,10 +44,10 @@ pub fn register(r: &mut dyn Registrar) {
 /// (the lid and drawers stay closed: the port keeps no count of players looking in).
 struct ToolboxDraw;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockPart for ToolboxDraw {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockEntityPart for ToolboxDraw {
     fn block_entity_submit(
         &self,
@@ -167,7 +167,7 @@ fn containers() -> Vec<(Block, ModContainer)> {
 /// container) put into or took from its slots.
 struct ContentsChanged;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for ContentsChanged {
     fn contents_changed(&self, host: &mut dyn ServerHost, event: &mut ContentsChangedEvent) {
         let Some(dimension) = event.level.dimension().id(&*host) else {

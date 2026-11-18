@@ -428,10 +428,10 @@ fn beside_ticker(host: &dyn ClientHost, pos: [i32; 3]) -> bool {
 /// Draws the press head, the deployer's pole and hand, the mixer's pole and head.
 struct MachineDraw;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for MachineDraw {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for MachineDraw {
     fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
         let Some(id) = states::id(event.state) else {

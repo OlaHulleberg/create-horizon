@@ -81,8 +81,8 @@ cargo run --release -- prepare --out ../../target/create-mod/create
 
 # Build it into your instance, then play.
 cd ../..
-horizon-launcher native-build target/create-mod --instance "My Instance" --trust-native-code
-horizon-launcher play --instance "My Instance" --allow-jar-downloads
+sunrise-launcher native-build target/create-mod --instance "My Instance" --trust-native-code
+sunrise-launcher play --instance "My Instance" --allow-jar-downloads
 ```
 
 Or start the instance from the launcher's window: it asks before downloading Create's jar into the instance.
@@ -94,12 +94,7 @@ The folder in `target/create-mod` holds files made from Create's assets. It is f
 > The port follows Create 6.0.11's source. Its assets come from the newest published jar, 1.21.1-6.0.10
 > (6.0.11 isn't released yet); the two differ in only two textures.
 
-<!-- TODO: drop this note once Sunrise publishes the SDK for the pinned build. -->
-> [!IMPORTANT]
-> The launcher builds a native mod against the SDK of the Sunrise build it pins (`create/horizon-mod.toml`).
-> Until Sunrise publishes that SDK, the build works only on a local developer base built from Sunrise at the
-> pin ([how](https://github.com/sunrise-org/sunrise/blob/main/docs/modding/src/how-to/native-mods/07-local-developer-builds.md)).
-> See [VALIDATION.md](VALIDATION.md).
+> The pinned nightly has an official signed SDK, fetched automatically by `cargo sunrise-mod`.
 
 ## See it running
 
@@ -136,17 +131,17 @@ Every capture is in game on Sunrise, with every machine running. Nothing is pain
 ## Build from source
 
 You need Rust 1.99.1 with the `wasm32-unknown-unknown` target (the SDK's toolchain), and Sunrise's
-`cargo horizon-mod` tool:
+`cargo sunrise-mod` tool:
 
 ```sh
 rustup toolchain install 1.99.1 --target wasm32-unknown-unknown
-cargo install --locked --git https://github.com/sunrise-org/sunrise --rev <the pin> cargo-horizon-mod
+cargo install --locked --git https://github.com/sunrise-org/sunrise --rev <the pin> cargo-sunrise-mod
 ```
 
-`<the pin>` is `[native] horizon` in [create/horizon-mod.toml](create/horizon-mod.toml).
+`<the pin>` is `[native] sunrise` in [create/sunrise-mod.toml](create/sunrise-mod.toml).
 
 ```sh
-cd create && cargo horizon-mod check        # fetches the pinned SDK into create/.horizon/, then checks
+cd create && cargo sunrise-mod check        # fetches the pinned SDK into create/.sunrise/, then checks
 ```
 
 `create-data prepare` and `native-build` (see [Install](#install)) turn the checkout into a playable mod.
@@ -164,7 +159,7 @@ cargo +1.99.1 fmt --check
 cargo +1.99.1 clippy --all-targets -- -D warnings
 cargo +1.99.1 test                      # the glue's tests
 cargo +1.99.1 test -p create-engine     # the engine's tests
-cargo horizon-mod check                 # Sunrise's package rules, then cargo check for the pinned build
+cargo sunrise-mod check                 # Sunrise's package rules, then cargo check for the pinned build
 cd src/engine                           # the engine crate's own format and lints
 cargo +1.99.1 fmt --check
 cargo +1.99.1 clippy --all-targets -- -D warnings
@@ -180,7 +175,7 @@ The latest results, and what was tried in game: [VALIDATION.md](VALIDATION.md).
 
 ```text
 create/                 The native mod: what the launcher builds
-  horizon-mod.toml      Identity and the pinned Sunrise build
+  sunrise-mod.toml      Identity and the pinned Sunrise build
   src/lib.rs            The one `impl Hooks`, handing each hook to every subsystem
   src/glue/             The game glue on the mod API, one module per subsystem
   src/engine/           create-engine: Create's rules as plain Rust, no game types

@@ -302,7 +302,7 @@ pub trait Subsystem: Sync {
     /// subsystem to answer `Flow::Cancel` spares it.
     fn living_incoming_damage(
         &self,
-        _level: &mut dyn mod_api::LevelRandomHost,
+        _level: &mut dyn mod_api::HitHost,
         _event: &mut mod_api::LivingIncomingDamageEvent<'_>,
     ) -> Flow {
         Flow::Continue

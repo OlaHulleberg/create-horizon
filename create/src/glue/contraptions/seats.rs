@@ -194,7 +194,7 @@ fn sit_down(lv: &mut ServerLevel<'_>, pos: [i32; 3], rider: EntityRef) -> bool {
     let Some(seat) = spawn_seat(lv, seat::seat_at(pos, &kind)) else {
         return false;
     };
-    if !rider.start_riding(&mut *lv.host, seat, true) {
+    if !rider.start_riding(&mut *lv.host, seat, true).is_ok() {
         seat.discard(&mut *lv.host);
         return false;
     }
@@ -290,7 +290,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
             player.stop_riding(&mut *lv.host);
         }
         stand.teleport_to(&mut *lv.host, seat::seat_at(pos, "minecraft:player"), None);
-        if player.start_riding(&mut *lv.host, stand, true) {
+        if player.start_riding(&mut *lv.host, stand, true).is_ok() {
             SEATS.with_borrow_mut(|s| {
                 if let Some(s) = s.get_mut(&(dim, pos)) {
                     s.player = true;
@@ -431,7 +431,7 @@ fn turn_local_player(host: &mut dyn ClientHost) {
 
 struct SeatPart;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for SeatPart {
     /// `SeatBlock.useItemOn` on the server: sneaking passes; a dye of another colour recolours
     /// the seat (`BlockHelper.copyProperties`); a seat a player sits on passes; otherwise the
@@ -497,7 +497,7 @@ impl BlockPart for SeatPart {
     /// `SeatBlock.fallOn`: the fall counted at half its distance (the turntable's is whole).
     fn fall_on(&self, _level: &mut dyn LevelRandomHost, event: &mut FallOnEvent<'_>) {
         if event.state.block() != key(Block::Turntable) {
-            event.damage = seat::fall_damage(event.distance, event.damage);
+            event.distance = seat::fall_distance(event.distance);
         }
     }
 

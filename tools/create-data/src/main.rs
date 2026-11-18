@@ -1,6 +1,6 @@
 //! `create-data compile`: reads Create's MIT data (`src/generated/`) and registration Java once,
 //! and writes the mod's committed outputs, under `create/`: its block, item and fluid declarations
-//! (`data/create/horizon/`), the partial models' block states (`assets/create/`) and the engine's
+//! (`data/create/sunrise/`), the partial models' block states (`assets/create/`) and the engine's
 //! typed block table (`src/engine/src/generated.rs`).
 //!
 //! `create-data prepare`: assembles the playable native mod from this repository and Create's jar,
@@ -154,7 +154,8 @@ fn compile(create: &Path, repo: &Path) {
     let all = blocks::read_blocks(&generated, &block_java);
     let shapes = BTreeMap::new();
 
-    let decl_dir = out.join("data/create/horizon");
+    let _ = fs::remove_dir_all(out.join("data/create/horizon"));
+    let decl_dir = out.join("data/create/sunrise");
     let _ = fs::remove_dir_all(&decl_dir);
     let mut pending: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut declared = Vec::new();

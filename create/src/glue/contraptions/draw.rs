@@ -1713,10 +1713,10 @@ pub(super) fn elevator_turn(facing: Dir) -> f32 {
 /// The part every Create block entity carries that draws a structure its block anchors.
 struct StructurePart;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for StructurePart {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for StructurePart {
     /// An anchor came back with a structure in its data: the level tick looks whether it runs.
     fn block_entity_on_load(&self, host: HostSide, event: &mut BlockEntityOnLoadEvent) {

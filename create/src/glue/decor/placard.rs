@@ -28,10 +28,10 @@ pub(super) fn register(r: &mut dyn Registrar) {
 
 struct PlacardEntity;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for PlacardEntity {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for PlacardEntity {
     fn block_entity_update_tag(
         &self,

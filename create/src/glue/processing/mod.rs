@@ -502,7 +502,7 @@ impl Subsystem for Processing {
 /// A toolbox exploding: its contents go with its drop.
 struct ToolboxPart;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for ToolboxPart {
     fn on_block_exploded(
         &self,
@@ -519,15 +519,17 @@ impl BlockPart for ToolboxPart {
 /// A toolbox placed from its item takes the contents the item keeps.
 struct ToolboxItem;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::ItemPart for ToolboxItem {
     fn on_block_placed_by(
         &self,
         host: &mut dyn ServerHost,
         event: &mut mod_api::OnBlockPlacedByEvent<'_>,
     ) {
-        let Some(player) = event.placer else { return };
-        let Some(dimension) = player.dimension(&*host).map(|d| d.to_string()) else {
+        if event.placer.is_none() {
+            return;
+        }
+        let Some(dimension) = event.level.dimension().id(&*host).map(|d| d.to_string()) else {
             return;
         };
         let pos = event.pos;
@@ -582,7 +584,7 @@ impl Subsystem for Tools {
 /// progress with it).
 struct Landing;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for Landing {
     fn item_after_vertical_collision(
         &self,
@@ -620,7 +622,7 @@ impl BlockPart for Landing {
 /// a captured blaze, smouldering, facing the player.
 struct BurnerPlacement;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for BurnerPlacement {
     fn state_for_placement(
         &self,

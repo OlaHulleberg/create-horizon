@@ -915,6 +915,7 @@ impl CannonWorld for World<'_, '_> {
             SoundSource::Blocks,
             0.1,
             1.1,
+            None,
         );
     }
     fn dinged(&mut self) {
@@ -926,6 +927,7 @@ impl CannonWorld for World<'_, '_> {
             SoundSource::Blocks,
             1.0,
             0.7,
+            None,
         );
     }
 }
@@ -1438,10 +1440,10 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
 /// (`SchematicannonRenderer`), the table's screen, and their column's data once they load.
 struct SchematicEntity;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for SchematicEntity {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for SchematicEntity {
     fn block_entity_on_load(&self, host: HostSide, event: &mut BlockEntityOnLoadEvent) {
         let HostSide::Server(host) = host else {
@@ -1554,7 +1556,10 @@ impl BlockEntityPart for SchematicEntity {
         if event.slot < event.container_slots {
             return Flow::Continue;
         }
-        let id = packages::body::item_id(&*host, event.stack);
+        let Some(stack) = event.stack.as_ref().cloned() else {
+            return Flow::Continue;
+        };
+        let id = packages::body::item_id(&*host, &stack);
         let to = match (event.entity.id(), id.as_str()) {
             ("create:schematicannon", SCHEMATIC) => 0,
             ("create:schematicannon", "minecraft:book" | "minecraft:written_book")
@@ -1563,8 +1568,7 @@ impl BlockEntityPart for SchematicEntity {
             ("create:schematic_table", EMPTY_SCHEMATIC | QUILL | SCHEMATIC) => 0,
             _ => return Flow::Cancel,
         };
-        let max = host.max_stack_size(event.stack.item()).unwrap_or(64);
-        let stack = event.stack.clone();
+        let max = host.max_stack_size(stack.item()).unwrap_or(64);
         let room = |s: &Option<ItemStack>| match s {
             None => max,
             Some(t) if t.is_stackable_with(&stack) => max.saturating_sub(t.count()),
@@ -1583,9 +1587,7 @@ impl BlockEntityPart for SchematicEntity {
         }
         let there = items[to].as_ref().map_or(0, ItemStack::count);
         items[to] = packages::body::with_count(&stack, there + n);
-        if let Some(rest) = packages::body::with_count(&stack, stack.count() - n) {
-            *event.stack = rest;
-        }
+        *event.stack = packages::body::with_count(&stack, stack.count() - n);
         Flow::Cancel
     }
 
@@ -1600,7 +1602,7 @@ impl BlockEntityPart for SchematicEntity {
 /// A cannon's slots changed (a player's click in its menu): it looks at them again.
 struct CannonBlock;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for CannonBlock {
     fn contents_changed(&self, host: &mut dyn ServerHost, event: &mut ContentsChangedEvent) {
         if OWN_WRITE.get() {
@@ -1630,14 +1632,16 @@ impl BlockPart for CannonBlock {
 /// `applyImplicitComponents`' default).
 struct CannonItem;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for CannonItem {
     fn on_block_placed_by(&self, host: &mut dyn ServerHost, event: &mut OnBlockPlacedByEvent<'_>) {
         let Some(player) = event.placer else {
             return;
         };
-        let Some(dim) = player
-            .dimension(&*host)
+        let Some(dim) = event
+            .level
+            .dimension()
+            .id(&*host)
             .and_then(|d| level_index(&d.to_string()))
         else {
             return;

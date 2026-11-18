@@ -42,8 +42,8 @@ use create_engine::potato::{self, Type};
 use mod_api::{
     ActiveEffect, ClientHost, Compound, EntityRef, EquipmentSlot, Flow, Hand, Host, HostSide,
     Identifier, InteractionResult, ItemPart, ItemStack, ParticleKey, ParticleOptions, PlayerRef,
-    ProjectileImpactEvent, RandomSource, Registrar, RegistrationContext, ServerHost, SoundSource,
-    Tag, Text, TooltipEvent, UseItemEvent,
+    ProjectileImpactEvent, Registrar, RegistrationContext, ServerHost, SoundSource, Tag, Text,
+    TooltipEvent, UseItemEvent,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -225,7 +225,7 @@ impl Subsystem for PotatoCannon {
 
 struct CannonPart;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for CannonPart {
     /// `PotatoCannonItem.use`: passes without ammunition.
     fn use_item(&self, host: HostSide, event: &mut UseItemEvent<'_>) -> Option<InteractionResult> {
@@ -498,6 +498,7 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
         SoundSource::Players,
         1.0,
         pitch_shift,
+        None,
     );
     true
 }
@@ -664,6 +665,7 @@ fn pop(lv: &mut ServerLevel<'_>, shot: &Shot, at: [f64; 3]) {
         SoundSource::Neutral,
         1.0,
         1.0,
+        None,
     );
 }
 
@@ -894,10 +896,9 @@ fn entity_hit(lv: &mut ServerLevel<'_>, shot: &Shot, target: EntityRef) -> bool 
             let zombie = target.kind(&*lv.host).map(|k| k.id(&*lv.host)).as_deref()
                 == Some("minecraft:zombie_villager");
             if zombie && weak {
-                use mod_api::RandomSource;
                 let time = lv
                     .level
-                    .with_random(&mut *lv.host, |r| r.next_int_bound(2401).unwrap_or(1200))
+                    .with_random(&mut *lv.host, |r| r.next_int_bound(2401))
                     .unwrap_or(1200)
                     + 3600;
                 // `ZOMBIE_CONVERTER_NAME`'s UUID, be12d3dc-27d3-4992-8c97-66be53fd49c5.
@@ -984,8 +985,15 @@ fn chorus(lv: &mut ServerLevel<'_>, target: EntityRef, diameter: f64) -> bool {
             at[2] + (rz - 0.5) * diameter,
         ];
         if living.random_teleport(lv.host, to, None) {
-            lv.level
-                .play_sound(&mut *lv.host, sound, at, SoundSource::Players, 1.0, 1.0);
+            lv.level.play_sound(
+                &mut *lv.host,
+                sound,
+                at,
+                SoundSource::Players,
+                1.0,
+                1.0,
+                None,
+            );
             target.set_velocity(lv.host, [0.0; 3]);
             return true;
         }

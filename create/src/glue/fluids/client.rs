@@ -109,10 +109,10 @@ fn client_block(host: &dyn ClientHost, state: mod_api::BlockState) -> Option<(Bl
 
 struct FluidEntity;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for FluidEntity {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for FluidEntity {
     fn block_entity_client_ticks(
         &self,

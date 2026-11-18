@@ -81,7 +81,7 @@ fn shape_of(host: &dyn Host, state: BlockState) -> Option<TrackShape> {
 /// shows on the action bar. Outside creative the tracks laid are paid for (`pay_tracks`).
 struct TrackItem;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for TrackItem {
     fn use_on(&self, host: HostSide, event: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
         let host = match host {
@@ -114,7 +114,7 @@ impl ItemPart for TrackItem {
         if shape_of(&*host, event.state).is_none() {
             return;
         }
-        let Some(dimension) = player.level(&*host).and_then(|l| l.dimension().id(&*host)) else {
+        let Some(dimension) = event.level.dimension().id(&*host) else {
             return;
         };
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
@@ -866,6 +866,7 @@ fn click_sound(lv: &mut ServerLevel<'_>, pos: [i32; 3], id: &str, volume: f32, p
         mod_api::SoundSource::Blocks,
         volume,
         pitch,
+        None,
     );
 }
 
@@ -938,7 +939,7 @@ fn use_signal(
 /// The signal item (`TrackTargetingBlockItem`).
 struct SignalItem;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for SignalItem {
     fn use_on(&self, host: HostSide, event: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
         let host = match host {
@@ -981,7 +982,7 @@ impl ItemPart for SignalItem {
         if event.state.block() != states::key(Block::TrackSignal) {
             return;
         }
-        let Some(dimension) = player.level(&*host).and_then(|l| l.dimension().id(&*host)) else {
+        let Some(dimension) = event.level.dimension().id(&*host) else {
             return;
         };
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
@@ -1117,10 +1118,10 @@ fn lay_fake_track(lv: &mut ServerLevel<'_>) {
 /// when they come in, carried to clients, and drawn there.
 pub struct TrackEntity;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for TrackEntity {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for TrackEntity {
     fn block_entity_on_load(&self, host: HostSide, event: &mut BlockEntityOnLoadEvent) {
         let HostSide::Server(host) = host else {

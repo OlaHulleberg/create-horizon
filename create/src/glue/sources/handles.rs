@@ -218,7 +218,7 @@ pub(super) fn level_tick(lv: &mut ServerLevel<'_>) {
 /// has no collision shapes; the neighbour check above has.)
 struct Supported;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for Supported {
     fn can_survive(&self, level: &dyn LevelHost, event: &mut CanSurviveEvent) -> Option<bool> {
         let id = states::id(event.state)?;
@@ -243,10 +243,10 @@ impl BlockPart for Supported {
 /// Draws the handles; ticks the cranks' on the client.
 struct Handles;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for Handles {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for Handles {
     fn block_entity_client_ticks(
         &self,

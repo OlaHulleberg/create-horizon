@@ -85,10 +85,10 @@ pub(super) fn client_tick(host: &mut dyn ClientHost) {
 /// Hears each block's network turning overstressed or recovering.
 struct Effects;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for Effects {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for Effects {
     /// `KineticBlockEntity.read` on the client: an update that turns the overstress on or off
     /// while the block should turn (`speed != 0`) triggers its effect.

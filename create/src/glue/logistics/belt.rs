@@ -100,6 +100,7 @@ pub fn use_belt_with(
                 mod_api::SoundSource::Blocks,
                 1.0,
                 0.8,
+                None,
             );
             true
         }

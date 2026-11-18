@@ -73,7 +73,7 @@ fn click_station(host: &mut dyn ServerHost, click: &BlockClick<'_>) -> Option<In
     Some(InteractionResult::SuccessServer)
 }
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for Station {
     fn use_item_on(
         &self,
@@ -627,7 +627,7 @@ fn click_track(host: &mut dyn ServerHost, click: &BlockClick<'_>) -> Option<Inte
         .then_some(InteractionResult::SuccessServer)
 }
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for TrackClick {
     fn use_item_on(
         &self,
@@ -728,6 +728,7 @@ fn bogey_clicked(
                 mod_api::SoundSource::Blocks,
                 1.0,
                 1.0,
+                None,
             );
             return true;
         }
@@ -772,6 +773,7 @@ fn bogey_clicked(
         mod_api::SoundSource::Blocks,
         1.0,
         0.8,
+        None,
     );
     if !creative {
         crate::glue::items::shrink_held(lv.host, player, hand, 1);

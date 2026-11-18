@@ -232,6 +232,7 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
                 mod_api::SoundSource::Blocks,
                 0.125,
                 1.0,
+                None,
             );
         }
     }

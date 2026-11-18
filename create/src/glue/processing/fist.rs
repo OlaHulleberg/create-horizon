@@ -120,5 +120,6 @@ pub(super) fn trigger(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         mod_api::SoundSource::Blocks,
         0.75,
         0.75,
+        None,
     );
 }

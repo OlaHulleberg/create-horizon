@@ -7,7 +7,7 @@ publish = false
 description = "Create for Horizon: the native mod (game glue on the mod API)"
 
 [dependencies]
-# The pinned SDK's API crate, fetched into .horizon/sdk/ by any `cargo horizon-mod` command.
-horizon-mod-api = { path = ".horizon/sdk/api/crates/horizon-mod-api" }
+# The pinned SDK's API crate, fetched into .sunrise/sdk/ by any `cargo sunrise-mod` command.
+sunrise-mod-api = { path = ".sunrise/sdk/api/crates/sunrise-mod-api" }
 # Create's rules as plain Rust with no game types.
 create-engine = { path = "src/engine" }

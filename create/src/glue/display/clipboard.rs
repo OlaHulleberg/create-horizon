@@ -232,7 +232,7 @@ fn use_clipboard(
 
 struct ClipboardItem;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl ItemPart for ClipboardItem {
     fn use_item(&self, host: HostSide, event: &mut UseItemEvent<'_>) -> Option<InteractionResult> {
         use_clipboard(host, event.player, event.hand, event.stack)

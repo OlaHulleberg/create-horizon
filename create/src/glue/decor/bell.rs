@@ -66,10 +66,10 @@ const CENTRE: [f32; 3] = [0.5; 3];
 
 pub(super) struct BellDraw;
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for BellDraw {}
 
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockEntityPart for BellDraw {
     fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
         if event.state.block() != states::key(Block::DeskBell) {

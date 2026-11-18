@@ -2382,7 +2382,7 @@ const BASIN: [[f64; 6]; 6] = [
 /// `BlazeBurnerBlock.HEAT_LEVEL` (`blaze`), in order.
 pub const HEATS: &[&str] = &["none", "smouldering", "fading", "kindled", "seething"];
 
-/// AllFluids' honey and chocolate as Horizon fluid declarations (`data/<id>/horizon/fluid/`):
+/// AllFluids' honey and chocolate as Horizon fluid declarations (`data/<id>/sunrise/fluid/`):
 /// in the world (`levelDecreasePerBlock(2)`, `tickRate(25)`, `slopeFindDistance(3)`, with their
 /// buckets), drawn with Create's still texture, untinted
 /// (`SolidRenderedPlaceableFluidType.getTintColor`). Create's flowing texture is the client's
@@ -4184,7 +4184,7 @@ mod tests {
         let expected: Value =
             serde_json::from_str(include_str!("pending_template_decisions.json")).unwrap();
         let root =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../create/data/create/horizon/block");
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../create/data/create/sunrise/block");
         let mut unlisted = BTreeSet::new();
         for (name, defaults) in runtime_defaults() {
             if matches!(name.as_str(), "chocolate" | "honey") {
@@ -4256,7 +4256,7 @@ mod tests {
     #[test]
     fn every_default_state_key_exists_on_declared_block() {
         let root =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../create/data/create/horizon/block");
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../create/data/create/sunrise/block");
         let pending: Value =
             serde_json::from_str(include_str!("pending_template_decisions.json")).unwrap();
         for entry in fs::read_dir(root).unwrap() {
