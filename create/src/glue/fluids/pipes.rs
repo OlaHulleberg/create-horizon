@@ -293,10 +293,9 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
         if let Some((fluid, n)) = offer {
             // The flows on the way advance (`manageFlows`); the ends in front they have
             // reached take an equal share each (`FluidNetwork.tick`'s `availableOutputs`).
-            pump.pumped = pump.pumped.saturating_add(1);
+            let pumped = pump.advance_flow();
             // No list of them is made: the k-th reached end is found when it is filled.
             let push = std::mem::take(&mut pump.push);
-            let pumped = pump.pumped;
             let reaches = |to: &&fluids::End| {
                 to.kind != fluids::Endpoint::Pump
                     && to.passes(fluid)

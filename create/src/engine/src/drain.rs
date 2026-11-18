@@ -132,11 +132,15 @@ pub fn tick(d: &mut Drain, recipes: &[(String, Emptying)]) -> Tick {
             }
             return Tick::Idle;
         }
-        if !room {
-            d.processing = FILLING_TIME;
-            return Tick::Idle;
+        // continueProcessing only simulates capacity while processingTicks > 5.
+        // At 5 it consumes the item and executes a (possibly partial) tank fill.
+        match d.fluid {
+            None => d.fluid = Some((e.fluid, e.amount.min(CAPACITY))),
+            Some((fluid, amount)) if fluid == e.fluid => {
+                d.fluid = Some((fluid, amount.saturating_add(e.amount).min(CAPACITY)));
+            }
+            Some(_) => {}
         }
-        d.fluid = Some((e.fluid, d.fluid.map_or(0, |f| f.1) + e.amount));
         match e.leftover {
             Some(left) => held.item = left,
             None => d.held = None,
@@ -183,6 +187,68 @@ mod tests {
             .map(|_| tick(d, recipes))
             .filter(|t| *t != Tick::Idle)
             .collect()
+    }
+
+    #[test]
+    fn drain_and_pump_turns_match_java_capacity_boundary() {
+        // Native seed 147: the drain precedes the pump. First emptying is at 79;
+        // first transfer at 101, capacity admission at 133, second emptying at 147.
+        let mut drain = Drain::default();
+        let mut pump = crate::world::Pump::default();
+        let end = crate::fluids::End {
+            pos: [0, 0, 0],
+            kind: crate::fluids::Endpoint::Handler,
+            pressure: 32.0,
+            blocked: false,
+            only: None,
+            distance: 1,
+            face: Dir::East,
+        };
+        let arrival = crate::fluids::arrival_ticks(&end, &end, 32.0);
+        let mut tank = 0;
+        for clock in 0..225 {
+            if clock == 60 || clock == 110 {
+                assert_eq!(
+                    insert(&mut drain, "minecraft:water_bucket", 1, Dir::North, &[]),
+                    1
+                );
+            }
+            if let Tick::Out(_) = tick(&mut drain, &[]) {
+                drain.held = None;
+            }
+            if drain.fluid.is_some() {
+                if pump.advance_flow() >= arrival {
+                    tank += super::drain(&mut drain, 16).unwrap().1;
+                }
+            } else {
+                pump.pumped = 0;
+            }
+            let amount = drain.fluid.map_or(0, |(_, n)| n);
+            let completed = clock + 1;
+            match completed {
+                79 | 100 => assert_eq!((amount, tank), (1000, 0)),
+                101 => assert_eq!((amount, tank), (984, 16)),
+                132 => assert_eq!((amount, tank, drain.processing), (488, 512, 20)),
+                133 => assert_eq!((amount, tank, drain.processing), (472, 528, 19)),
+                147 => {
+                    assert_eq!((amount, tank, drain.processing), (1248, 752, 5));
+                    assert_eq!(drain.held.as_ref().unwrap().item, "minecraft:bucket");
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn final_emptying_turn_consumes_item_even_if_capacity_changed() {
+        let mut d = Drain::default();
+        insert(&mut d, "minecraft:water_bucket", 1, Dir::North, &[]);
+        d.processing = 6;
+        d.fluid = Some((Fluid::Water, 1490));
+        assert_eq!(tick(&mut d, &[]), Tick::Emptied);
+        assert_eq!(d.processing, 5);
+        assert_eq!(d.fluid, Some((Fluid::Water, 1500)));
+        assert_eq!(d.held.unwrap().item, "minecraft:bucket");
     }
 
     #[test]

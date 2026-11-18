@@ -564,6 +564,17 @@ pub struct Pump {
     pub ways_push: Vec<([i32; 3], Vec<crate::fluids::Step>)>,
 }
 
+impl Pump {
+    /// Age of the current flow at this turn, before advancing it. The creation
+    /// turn has age zero: PipeConnection.manageFlows returns after starting a
+    /// flow, and FluidNetwork.tick admits targets only after their flows complete.
+    pub fn advance_flow(&mut self) -> u32 {
+        let elapsed = self.pumped;
+        self.pumped = self.pumped.saturating_add(1);
+        elapsed
+    }
+}
+
 /// An assembled windmill: its blocks (offset from the bearing, state) and its sails.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Windmill {
