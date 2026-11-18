@@ -41,6 +41,26 @@ struct Crank;
 
 #[mod_api::sunrise_part]
 impl BlockPart for Crank {
+    /// `HandCrankBlock.canSurvive`: any collision behind the crank supports it.
+    fn can_survive(
+        &self,
+        level: &dyn mod_api::LevelHost,
+        event: &mut mod_api::CanSurviveEvent,
+    ) -> Option<bool> {
+        let text = level.state_string(event.state)?;
+        let (_, props) = states::split(&text);
+        let facing = props.iter().find(|(k, _)| *k == "facing")?.1;
+        let offset = create_engine::kinetics::Dir::ALL
+            .into_iter()
+            .find(|d| super::super::kinetics::dir_name(*d) == facing)?
+            .opposite()
+            .offset();
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        level
+            .collision_shape([0, 1, 2].map(|i| pos[i] + offset[i]))
+            .map(|boxes| !boxes.is_empty())
+    }
+
     /// `HandCrankBlock.useItemOn`: the crank turns for 10 ticks, backwards while sneaking, and
     /// tires the player (`crankHungerMultiplier` 0.01 per RPM).
     fn use_item_on(
