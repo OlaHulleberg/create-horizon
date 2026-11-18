@@ -8,8 +8,9 @@
 //! anew only when its data changes, and once more when the client looks away.
 //!
 //! The icon boxes (`IconValueBox`: bearings', pistons', arms', tunnels' modes) are drawn as world
-//! quads with the icon atlas (`hud::value_box_outline`). Left out: the ejector's number
-//! (its block entity is the logistics one, drawn by another part; the same call would serve it) and the filter slots' items and counts (`FilteringRenderer`).
+//! quads with the icon atlas (`hud::value_box_outline`). Logistics, processing and factory gauge
+//! renderers draw filter items with `BlockEntityDrawContext::item`. This module does not draw
+//! filter counts or the ejector's number.
 
 use super::super::net;
 use super::board::block_at;
