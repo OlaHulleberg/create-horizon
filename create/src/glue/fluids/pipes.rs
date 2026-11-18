@@ -155,7 +155,11 @@ pub(super) fn tick_pipes(lv: &mut ServerLevel<'_>) {
     let mut transport =
         with_world(|w| std::mem::take(&mut w.dims[dim].fluid_transport)).unwrap_or_default();
     for &p in &positions {
-        transport.register(p, pipe_cell(lv, p));
+        transport.register(
+            p,
+            pipe_cell(lv, p),
+            with_world(|w| w.speed(dim, p)).flatten().unwrap_or(0.),
+        );
     }
     let mut host = TransportHost(lv);
     transport.prepare(&host);
@@ -213,6 +217,9 @@ impl Host for TransportHost<'_, '_> {
         let lv = &mut *self.0;
         let dim = lv.dim;
         let pos = face.connected();
+        if !lv.is_loaded(pos) {
+            return None;
+        }
         if let Source::Open(open) = source {
             return open.drain(
                 &mut super::open_end::Front {
@@ -253,6 +260,9 @@ impl Host for TransportHost<'_, '_> {
         let lv = &mut *self.0;
         let dim = lv.dim;
         let pos = face.connected();
+        if !lv.is_loaded(pos) {
+            return 0;
+        }
         if let Source::Open(open) = source {
             return open
                 .drain(
@@ -442,12 +452,16 @@ pub(super) fn chunk_load(dim: usize, data: &Compound) {
                     .or_insert_with(|| {
                         create_engine::fluids::transport::FluidTransportBehaviour::new(side.bit())
                     });
+                if pipe.connection(side).is_none() {
+                    pipe.interfaces.push((side, Default::default()));
+                }
                 if let Some(connection) = pipe.connection(side) {
                     connection.set_source(Source::open(create_engine::open_end::OpenEnd {
                         tank,
                         pulling: c[6] != 0,
                     }));
                 }
+                w.dims[dim].fluid_transport.changed.push(pos);
             });
         }
     }

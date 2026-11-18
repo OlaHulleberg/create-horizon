@@ -1077,9 +1077,8 @@ impl CreateWorld {
         }
         let d = &mut self.dims[dim];
         if is_fluid_block(block) {
-            // `FluidPropagator.propagateChangedPipe`: the pipe and its neighbours connect again,
-            // pumps find their ends again.
-            d.fluid_transport.changed.push(pos);
+            // Scan geometry on load; actual block changes queue pressure invalidation
+            // in block_changed. Saved Connections remain authoritative on cold load.
             d.pipe_checks.push(pos);
             for dir in crate::kinetics::Dir::ALL {
                 let o = dir.offset();
@@ -1153,9 +1152,6 @@ impl CreateWorld {
             if !d.drilling.contains(&pos) {
                 d.drilling.push(pos);
             }
-        }
-        if block == Block::MechanicalPump {
-            d.fluid_transport.changed.push(pos);
         }
         if block == Block::MechanicalMixer && !d.mixers.contains_key(&pos) {
             d.mixers.insert(pos, Default::default());
@@ -1356,7 +1352,23 @@ impl CreateWorld {
     #[inline]
     pub fn block_changed(&mut self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
         self.register_block_entity(dim, pos, old, new);
-        self.dims[dim].fluid_transport.changed.push(pos);
+        let affects_fluid = [old, new].into_iter().any(|state| {
+            self.table
+                .get(state)
+                .is_some_and(|(block, _)| is_fluid_block(block))
+        }) || crate::kinetics::Dir::ALL.into_iter().any(|side| {
+            let o = side.offset();
+            let neighbour = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+            self.dims[dim]
+                .states
+                .get(&neighbour)
+                .and_then(|state| self.table.get(*state))
+                .is_some_and(|(block, _)| is_fluid_block(block))
+        });
+        if affects_fluid {
+            self.dims[dim].fluid_transport.changed.push(pos);
+        }
+
         if self
             .table
             .get(new)

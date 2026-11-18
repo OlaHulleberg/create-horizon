@@ -79,10 +79,11 @@ fn endpoint(cell: Cell, side: Dir, pull: bool) -> bool {
     }
 }
 impl Transport {
-    pub fn register(&mut self, pos: Pos, cell: Cell) {
+    pub fn register(&mut self, pos: Pos, cell: Cell, speed: f32) {
         if sides(cell) == 0 {
             return;
         }
+        let restored = self.pipes.contains_key(&pos);
         self.pipes
             .entry(pos)
             .or_insert_with(|| FluidTransportBehaviour::new(sides(cell)));
@@ -94,8 +95,8 @@ impl Transport {
         }
         if matches!(cell, Cell::Pump(_)) {
             self.pumps.entry(pos).or_insert(Pump {
-                speed: 0.,
-                pending: 3,
+                speed: if restored { speed.abs() } else { 0. },
+                pending: if restored { 0 } else { 3 },
             });
         }
     }
@@ -742,7 +743,7 @@ mod tests {
     fn register(world: &World) -> Transport {
         let mut transport = Transport::default();
         for (&p, &cell) in &world.cells {
-            transport.register(p, cell);
+            transport.register(p, cell, world.speed(p));
         }
         transport
     }
@@ -850,6 +851,53 @@ mod tests {
                 .unwrap()
                 .pressure(),
             [0., 32.]
+        );
+    }
+
+    #[test]
+    fn cold_load_keeps_the_saved_shared_pressure_without_redistributing_it() {
+        let mut world = World::default();
+        world.cells.extend([
+            ([0, 0, 0], Cell::Pump(Dir::East)),
+            ([1, 0, 0], Cell::Pipe(Dir::West.bit() | Dir::East.bit())),
+            ([2, 0, 0], Cell::Pump(Dir::East)),
+        ]);
+        let mut live = register(&world);
+        live.distribute_pressure_to(&world, [0, 0, 0], Dir::East, false);
+        live.distribute_pressure_to(&world, [2, 0, 0], Dir::West, true);
+        let mut restored = Transport::default();
+        for (&pos, pipe) in &live.pipes {
+            restored.pipes.insert(
+                pos,
+                FluidTransportBehaviour::read(&pipe.write(), sides(world.cell(pos, Dir::Down))),
+            );
+        }
+        for pos in [[0, 0, 0], [1, 0, 0], [2, 0, 0]] {
+            restored.register(pos, world.cell(pos, Dir::Down), world.speed(pos));
+        }
+        restored.prepare(&world);
+        for pos in [[0, 0, 0], [1, 0, 0], [2, 0, 0]] {
+            restored.tick_pipe(&mut world, pos);
+        }
+        assert_eq!(
+            restored
+                .connection(Face {
+                    pos: [1, 0, 0],
+                    side: Dir::West
+                })
+                .unwrap()
+                .pressure(),
+            [64., 0.]
+        );
+        assert_eq!(
+            restored
+                .connection(Face {
+                    pos: [1, 0, 0],
+                    side: Dir::East
+                })
+                .unwrap()
+                .pressure(),
+            [0., 64.]
         );
     }
 
