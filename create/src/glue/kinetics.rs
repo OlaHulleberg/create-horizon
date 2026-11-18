@@ -740,7 +740,8 @@ fn set_speeds(
 /// again after. Runs each level tick, frozen or not; nothing happens without a change.
 pub fn show_freeze(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
-    let frozen = !super::world::running();
+    // KineticBlockEntity.getSpeed consults isFrozen even during /tick step.
+    let frozen = lv.host.tick_rate_is_frozen().unwrap_or(false);
     let changed = FROZEN_SHOWN.with_borrow_mut(|f| {
         if f.len() <= dim {
             f.resize(dim + 1, false);
@@ -912,7 +913,7 @@ impl BlockEntityPart for KineticEntity {
             })
             .collect();
         // `/tick freeze`: drawn at rest while the server is frozen.
-        let frozen = if super::world::running() {
+        let frozen = if !FROZEN_SHOWN.with_borrow(|levels| levels.iter().any(|frozen| *frozen)) {
             absent()
         } else {
             Tag::Byte(1)
