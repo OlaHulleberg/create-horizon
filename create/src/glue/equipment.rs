@@ -1161,7 +1161,7 @@ pub(crate) fn grip_swing(
 }
 
 /// `ExtendoGripRenderHandler.tick`: the animation falls off, and the hand pose follows the
-/// hands (a block item stands in for `isGui3d`).
+/// hands (`ExtendoGripRenderHandler` resolves the held model for `isGui3d`).
 pub(crate) fn grip_tick(host: &dyn mod_api::ClientHost) {
     let (a, _) = GRIP_SWING.get();
     let a = a * a.clamp(0.8, 0.99);
@@ -1170,7 +1170,7 @@ pub(crate) fn grip_tick(host: &dyn mod_api::ClientHost) {
         let main = super::items::held(host, p, Hand::Main);
         off.is_some_and(|s| matches!(gear_of(host, &s), Gear::ExtendoGrip))
             && main
-                .is_some_and(|s| super::logistics::items::is_block_item(host, &s.item().id(host)))
+                .is_some_and(|s| host.item_uses_block_light(&s, mod_api::ItemDisplayContext::Gui))
     });
     GRIP_SWING.set((a, hold));
 }
