@@ -1724,9 +1724,6 @@ fn linked_block(b: Block) -> bool {
 #[mod_api::sunrise_part]
 impl ItemPart for StockItem {
     fn on_block_placed_by(&self, host: &mut dyn ServerHost, event: &mut OnBlockPlacedByEvent<'_>) {
-        let Some(player) = event.placer else {
-            return;
-        };
         let Some(dimension) = event.level.dimension().id(&*host).map(|d| d.to_string()) else {
             return;
         };
@@ -1734,6 +1731,13 @@ impl ItemPart for StockItem {
             return;
         };
         place_block(&mut lv, event.pos);
+        // `RedstoneRequesterBlock.setPlacedBy`.
+        if let Some(r) = programmed(&*lv.host, event.stack) {
+            PROGRAMMED.with_borrow_mut(|p| p.push((lv.dim, event.pos, r)));
+        }
+        let Some(player) = event.placer else {
+            return;
+        };
         if block_at(&lv, event.pos) == Some(Block::FactoryGauge) {
             gauge::placed(&mut lv, event.pos, event.click, tuned(event.stack));
             let _ = player.action_bar(
@@ -1741,10 +1745,6 @@ impl ItemPart for StockItem {
                 mod_api::Text::translate("create.logistically_linked.connected", Vec::new()),
             );
             return;
-        }
-        // `RedstoneRequesterBlock.setPlacedBy`.
-        if let Some(r) = programmed(&*lv.host, event.stack) {
-            PROGRAMMED.with_borrow_mut(|p| p.push((lv.dim, event.pos, r)));
         }
         let net = tuned(event.stack);
         // `useOn`: `connected`, or `new_network_started`.
