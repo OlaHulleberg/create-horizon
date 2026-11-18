@@ -24,7 +24,7 @@ static KEYS: OnceLock<Vec<BlockKey>> = OnceLock::new();
 
 /// The content's partial-model blocks (`create:part_*`): never placed, one model per state, drawn
 /// by block entity renderers for the parts that move on their own (a shaft half, a press head).
-/// They are not engine blocks. Sorted, as `data/create/horizon/block/part_*.json`.
+/// They are not engine blocks. Sorted, as `data/create/sunrise/block/part_*.json`.
 pub const PARTIALS: &[&str] = &[
     "part_analog_lever_handle",
     "part_andesite_door_fold_left",
@@ -445,7 +445,7 @@ mod tests {
 
     #[test]
     fn partials_are_the_content_s_part_blocks_sorted() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/data/create/horizon/block");
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/data/create/sunrise/block");
         let mut declared: Vec<String> = std::fs::read_dir(dir)
             .unwrap()
             .filter_map(|e| e.ok()?.file_name().into_string().ok())

@@ -177,8 +177,8 @@ mod tests {
         // ChainDriveBlock registers only PART; the running Java 6.0.11 binary
         // reports axis=y, axis_along_first=true, part=none for both drives.
         for declaration in [
-            include_str!("../../../data/create/horizon/block/encased_chain_drive.json"),
-            include_str!("../../../data/create/horizon/block/adjustable_chain_gearshift.json"),
+            include_str!("../../../data/create/sunrise/block/encased_chain_drive.json"),
+            include_str!("../../../data/create/sunrise/block/adjustable_chain_gearshift.json"),
         ] {
             assert!(declaration.contains("\"axis_along_first\": \"true\""));
         }
