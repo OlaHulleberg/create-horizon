@@ -11,3 +11,6 @@ description = "Create for Horizon: the native mod (game glue on the mod API)"
 sunrise-mod-api = { path = ".sunrise/sdk/api/crates/sunrise-mod-api" }
 # Create's rules as plain Rust with no game types.
 create-engine = { path = "src/engine" }
+
+[dev-dependencies]
+sunrise-mod-api = { path = ".sunrise/sdk/api/crates/sunrise-mod-api", features = ["testing"] }

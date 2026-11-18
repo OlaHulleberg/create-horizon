@@ -6,7 +6,7 @@
 
 use super::super::states;
 use super::BELT_COLOR;
-use super::items::{is_block_item, stack_of};
+use super::items::stack_of;
 use create_engine::Block;
 use create_engine::arm;
 use create_engine::belt;
@@ -400,14 +400,6 @@ fn speed(pos: [i32; 3]) -> f32 {
 /// Client rendering resolves the model; server display recording uses display item semantics.
 pub(crate) trait ItemLayout {
     fn solid(&self, host: &dyn Host, id: &str) -> bool;
-}
-
-pub(crate) struct DisplayItemLayout;
-impl ItemLayout for DisplayItemLayout {
-    fn solid(&self, host: &dyn Host, id: &str) -> bool {
-        let id = create_engine::arm::item_id(id);
-        is_block_item(host, id) || create_engine::package::is_package(id)
-    }
 }
 
 struct ClientItemLayout<'a>(&'a dyn ClientHost);
@@ -2164,6 +2156,17 @@ pub(crate) fn draw_riding_segment(
 mod tests {
     use super::decompose;
     use create_engine::math::{Mat4, Quat, Vec3};
+
+    #[test]
+    fn client_layout_does_not_infer_package_geometry_without_a_model() {
+        let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+        let host = mod_api::testing::FakeHost::new();
+        let id = "create:cardboard_package_10x8";
+        assert!(create_engine::package::is_package(id));
+        // An unavailable item has no resolved client model, even if its identifier
+        // would be classified as a package for server display recording.
+        assert!(!super::block_item(&host, id));
+    }
 
     /// The decomposed pose put back together moves points where the pose does.
     #[test]
