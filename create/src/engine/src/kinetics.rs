@@ -12,6 +12,7 @@ use networks::TorquePropagator;
 use state::KineticState;
 pub use state::{PartLocation, SavedKineticState, SavedNetwork};
 
+use crate::block_entity_order::{BlockEntityOrder, View};
 use std::collections::{HashMap, HashSet};
 
 /// Create's `maxRotationSpeed` (CKinetics, default 256).
@@ -509,9 +510,12 @@ pub struct Kinetics {
     free: Vec<u32>,
     /// Nodes at a position: index 0, and a split shaft's second half at 1.
     at: HashMap<[i32; 3], [u32; 2]>,
+    /// Kinetic entities in level registration order, indexed independently of recycled ports.
+    order: BlockEntityOrder,
     /// Parts joined to parts beyond their neighbours at ratio 1 (chain conveyors' chains,
     /// `ChainConveyorBlockEntity.propagateRotationTo`): both sides list each other.
     far: HashMap<[i32; 3], Vec<[i32; 3]>>,
+    /// Wake-up work only; update_speed on each entity owns attachment and order owns traversal.
     dirty: Vec<u32>,
     legacy_loads: Vec<(u32, u64)>,
     legacy_loading: bool,
@@ -703,7 +707,7 @@ impl Kinetics {
             || !self.reactivation_due.is_empty()
             || !self.pending_events.is_empty()
             || !self.changed.is_empty()
-            || self.nodes.iter().any(|n| n.live && n.state.network_dirty)
+            || self.networks.has_dirty()
     }
 
     /// One tick went by: every part's flicker score falls by one (`KineticBlockEntity.tick`).
@@ -833,6 +837,7 @@ impl Kinetics {
             }
         };
         slot[sub as usize] = id;
+        self.order.register(pos, None);
         self.mark_changed(id);
         self.dirty.push(id);
     }
@@ -942,7 +947,9 @@ impl Kinetics {
         let Some(ids) = self.at.remove(&pos) else {
             return;
         };
+        self.order.remove(pos);
         for id in ids.into_iter().filter(|&id| id != NONE) {
+            self.networks.clear_entity_dirty(id, &self.nodes);
             self.nodes[id as usize].live = false;
             self.free.push(id);
         }
@@ -954,11 +961,13 @@ impl Kinetics {
         let Some(ids) = self.at.remove(&pos) else {
             return;
         };
+        self.order.remove(pos);
         // destroyBlock makes the position absent before block entity removal callbacks.
         // Existing propagation frames retain their old entity's speed, as Java references do.
         for id in ids.into_iter().filter(|&i| i != NONE) {
             let net = self.nodes[id as usize].state.net;
             self.networks.remove(net, id, &mut self.nodes);
+            self.networks.clear_entity_dirty(id, &self.nodes);
             self.nodes[id as usize].live = false;
         }
         let mut breaks = Vec::new();
@@ -1249,9 +1258,9 @@ impl Kinetics {
 
     /// KineticBlockEntity.updateFromNetwork: sync figures and notify on overstress changes.
     fn update_from_network(&mut self, id: u32, capacity: f32, stress: f32, size: u32) {
+        self.networks.clear_entity_dirty(id, &self.nodes);
         let n = &mut self.nodes[id as usize];
         self.saved_dirty.insert(n.pos);
-        n.state.network_dirty = false;
         n.state.network_size = size;
         n.state.capacity = capacity;
         n.state.stress = stress;
@@ -1311,7 +1320,7 @@ impl Kinetics {
             {
                 let (stress, capacity, size) = self.networks.figures(net);
                 self.update_from_network(id, capacity, stress, size);
-                self.nodes[id as usize].state.network_dirty = true;
+                self.networks.mark_entity_dirty(id, &self.nodes);
             }
         }
     }
@@ -1335,17 +1344,14 @@ impl Kinetics {
         }
     }
 
-    /// Level block entity registration order, retained across setting changes.
-    pub(crate) fn registration_order(&self, pos: [i32; 3]) -> u64 {
-        self.at
-            .get(&pos)
-            .into_iter()
-            .flatten()
-            .copied()
-            .filter(|&id| id != NONE)
-            .map(|id| self.nodes[id as usize].entity)
-            .min()
-            .unwrap_or(u64::MAX)
+    /// A split shaft's ports share one entity; retain the former (entity, node id)
+    /// tie order without allocating or sorting a per-tick list.
+    fn ordered_ports(&self, pos: [i32; 3]) -> [u32; 2] {
+        let mut ids = self.at.get(&pos).copied().unwrap_or([NONE; 2]);
+        if ids[0] > ids[1] {
+            ids.swap(0, 1);
+        }
+        ids
     }
 
     /// Deliver onSpeedChanged before a subclass continues its tick.
@@ -1364,20 +1370,16 @@ impl Kinetics {
         {
             return;
         }
-        let order = self.registration_order(pos);
         // SmartBlockEntity.tick initializes earlier registered entities before this
         // handle's HandCrankBlockEntity.tick can expire its use.
-        let mut pending: Vec<_> = self
-            .nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, n)| n.live && n.state.lifecycle.is_new() && n.entity <= order)
-            .map(|(id, n)| (n.entity, id as u32))
-            .collect();
-        pending.sort_unstable();
+        let mut pending = self.order.walk_through(View::All, pos);
         let mut events = Vec::new();
-        for (_, id) in pending {
-            self.tick_base(id, self.now + 1, &mut events);
+        while let Some(pos) = pending.next(&self.order) {
+            for id in self.ordered_ports(pos).into_iter().filter(|&id| id != NONE) {
+                if self.nodes[id as usize].state.lifecycle.is_new() {
+                    self.tick_base(id, self.now + 1, &mut events);
+                }
+            }
         }
         self.pending_events.extend(events);
     }
@@ -1421,7 +1423,7 @@ impl Kinetics {
                 .validate_later(tick, id, self.nodes[id as usize].stamp);
         }
         self.nodes[id as usize].state.lifecycle = state::Lifecycle::Ticked(self.base_pass + 1);
-        if std::mem::take(&mut self.nodes[id as usize].state.network_dirty) {
+        if self.networks.take_entity_dirty(id, &self.nodes) {
             let net = self.nodes[id as usize].state.net;
             let sync = self.networks.update_network(net, &self.nodes);
             if let Some(ref sync) = sync {
@@ -1469,19 +1471,14 @@ impl Kinetics {
         self.migrate_saves_without_kinetic_state();
         events.append(&mut self.pending_events);
         self.dirty.clear();
-        // KineticBlockEntity.tick visits each live entity in level registration order;
-        // dirtied members earlier in the order wait until the next pass.
-        let mut pending: Vec<_> = self
-            .nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, n)| n.live)
-            .map(|(id, n)| (n.entity, id as u32))
-            .collect();
-        pending.sort_unstable();
-        let pending = pending.into_iter().map(|(_, id)| id);
-        for id in pending {
-            self.tick_base(id, self.now, events);
+        // KineticBlockEntity.tick runs for registered entities in level order. The
+        // indexed walk allocates nothing, excludes later registrations and skips removals.
+        // Dirtied members earlier in this order wait until their next base tick.
+        let mut pending = self.order.walk(View::All);
+        while let Some(pos) = pending.next(&self.order) {
+            for id in self.ordered_ports(pos).into_iter().filter(|&id| id != NONE) {
+                self.tick_base(id, self.now, events);
+            }
         }
         // Scheduled block attachments precede GeneratingKineticBlockEntity.tick.
         for (id, stamp) in std::mem::take(&mut self.reactivation_due) {
@@ -1590,6 +1587,41 @@ fn controls(controller: &Part, cog: &Part) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_dirty_membership_is_cancelled_before_slot_reuse() {
+        let mut k = Kinetics::new();
+        let pos = [0, 0, 0];
+        k.set(pos, 0, motor(Dir::East, 16.0));
+        solve(&mut k);
+        let id = k.at[&pos][0];
+        let net = k.nodes[id as usize].state.net;
+        assert!(!k.networks.has_dirty());
+        k.networks.mark_entity_dirty(id, &k.nodes);
+        assert!(k.networks.has_dirty());
+        let (stress, capacity, size) = k.networks.figures(net);
+        k.update_from_network(id, capacity, stress, size);
+        assert!(
+            !k.networks.has_dirty(),
+            "updateFromNetwork cancels the queued flag"
+        );
+        k.networks.mark_entity_dirty(id, &k.nodes);
+        k.unload(pos);
+        assert!(!k.networks.has_dirty(), "an unloaded entity cannot tick");
+        k.set(pos, 0, motor(Dir::East, 16.0));
+        assert_eq!(k.at[&pos][0], id, "exercise a recycled node slot");
+        k.networks.mark_dirty(net, &mut k.nodes);
+        assert!(
+            !k.networks.has_dirty(),
+            "the old member must not dirty its replacement"
+        );
+        k.networks.mark_entity_dirty(id, &k.nodes);
+        k.remove(pos);
+        assert!(
+            !k.networks.has_dirty(),
+            "removal cancels the new entity's flag too"
+        );
+    }
 
     #[test]
     fn early_reload_keeps_caches_until_a_member_syncs_changed_totals() {

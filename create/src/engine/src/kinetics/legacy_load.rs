@@ -200,7 +200,7 @@ impl Kinetics {
                 let (stress, capacity, size) = self.networks.figures(net);
                 self.update_from_network(id, capacity, stress, size);
                 if net.is_some() {
-                    self.nodes[id as usize].state.network_dirty = true;
+                    self.networks.mark_entity_dirty(id, &self.nodes);
                 }
                 if first {
                     self.scheduler

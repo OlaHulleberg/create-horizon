@@ -258,21 +258,45 @@ pub(super) struct NetworkSync {
 #[derive(Default)]
 pub(super) struct TorquePropagator {
     networks: HashMap<i64, KineticNetwork>,
+    /// KineticBlockEntity.networkDirty membership, keyed by retained entity identity.
+    dirty: HashSet<(u32, Entity)>,
 }
 impl TorquePropagator {
     pub(super) fn get_or_create_network_for(&mut self, id: Option<i64>) -> &mut KineticNetwork {
         let id = id.expect("network identity");
         self.networks.entry(id).or_default()
     }
+    /// KineticNetwork.add marks the entity after its initial updateFromNetwork.
+    pub(super) fn mark_entity_dirty(&mut self, id: u32, nodes: &[Node]) {
+        let n = &nodes[id as usize];
+        if n.live {
+            self.dirty.insert((id, Entity(n.entity)));
+        }
+    }
+
+    /// KineticBlockEntity.updateFromNetwork and invalidation cancel pending membership.
+    pub(super) fn clear_entity_dirty(&mut self, id: u32, nodes: &[Node]) {
+        self.take_entity_dirty(id, nodes);
+    }
+
+    /// Only this entity's base tick consumes its flag; never drain an entire network.
+    pub(super) fn take_entity_dirty(&mut self, id: u32, nodes: &[Node]) -> bool {
+        self.dirty.remove(&(id, Entity(nodes[id as usize].entity)))
+    }
+
+    pub(super) fn has_dirty(&self) -> bool {
+        !self.dirty.is_empty()
+    }
+
     pub(super) fn mark_dirty(&mut self, net: Option<i64>, nodes: &mut [Node]) {
         if let Some((&entity, member)) = net
             .and_then(|n| self.networks.get(&n))
             .and_then(|n| n.members.iter().next())
         {
             for &id in &member.ports {
-                let n = &mut nodes[id as usize];
-                if n.entity == entity.0 {
-                    n.state.network_dirty = true;
+                let n = &nodes[id as usize];
+                if n.live && n.entity == entity.0 {
+                    self.dirty.insert((id, entity));
                 }
             }
         }

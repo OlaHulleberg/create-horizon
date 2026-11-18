@@ -45,8 +45,6 @@ pub(super) struct KineticState {
     pub(super) net: Option<i64>,
     /// Added since the last solve (not a replaced part): a block entity that has not ticked yet.
     pub(super) lifecycle: Lifecycle,
-    /// KineticBlockEntity.networkDirty, consumed by this entity's base tick.
-    pub(super) network_dirty: bool,
     /// KineticBlockEntity.updateSpeed: attach on the next server tick.
     pub(super) update_speed: bool,
     pub(super) source: Option<PartLocation>,
@@ -70,7 +68,6 @@ impl Default for KineticState {
             flicker_at: 0,
             net: None,
             lifecycle: Lifecycle::New,
-            network_dirty: false,
             update_speed: true,
             source: None,
             reactivate_source: false,

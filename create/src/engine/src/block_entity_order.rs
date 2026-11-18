@@ -142,6 +142,13 @@ impl BlockEntityOrder {
         }
     }
 
+    /// Walk the registration prefix ending at an existing entity, without collecting it.
+    pub(crate) fn walk_through(&self, view: View, pos: Pos) -> Walk {
+        let mut walk = self.walk(view);
+        walk.end = self.registration_order(pos).unwrap_or(0);
+        walk
+    }
+
     pub(crate) fn walk(&self, view: View) -> Walk {
         Walk {
             next: self.lists[view as usize].first,
@@ -187,6 +194,25 @@ mod tests {
     fn positions(order: &BlockEntityOrder, view: View) -> Vec<Pos> {
         let mut walk = order.walk(view);
         std::iter::from_fn(|| walk.next(order)).collect()
+    }
+
+    #[test]
+    fn prefix_walk_keeps_its_boundary_when_the_target_is_replaced() {
+        let mut order = BlockEntityOrder::default();
+        let (a, b, c) = ([0, 0, 0], [1, 0, 0], [2, 0, 0]);
+        for pos in [a, b, c] {
+            order.register(pos, None);
+        }
+        let mut prefix = order.walk_through(View::All, b);
+        assert_eq!(prefix.next(&order), Some(a));
+        order.remove(b);
+        order.register(b, None);
+        assert_eq!(prefix.next(&order), None);
+        let mut prefix = order.walk_through(View::All, b);
+        assert_eq!(prefix.next(&order), Some(a));
+        assert_eq!(prefix.next(&order), Some(c));
+        assert_eq!(prefix.next(&order), Some(b));
+        assert_eq!(prefix.next(&order), None);
     }
 
     #[test]
