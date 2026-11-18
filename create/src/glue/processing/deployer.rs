@@ -989,7 +989,9 @@ fn act_with(
         Dir::West => (90.0, 0.0),
         Dir::East => (-90.0, 0.0),
     };
-    let setup = PlayerActionSetup::new(stack, eye, yaw, pitch, false);
+    let mut setup = PlayerActionSetup::new(stack, eye, yaw, pitch, false);
+    // DeployerFakePlayer.resetAttackStrengthTicker gives each punch a full charge.
+    setup.full_attack_charge = true;
     let Ok(result) = fake.perform_action_scoped(&mut *lv.host, action, setup) else {
         return (None, Vec::new());
     };
