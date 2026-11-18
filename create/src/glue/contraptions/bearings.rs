@@ -464,7 +464,10 @@ pub(super) fn tick_windmills(lv: &mut ServerLevel<'_>) {
         v
     })
     .unwrap_or_default();
+    // A changed structure (assembled, turning anew, stopped, taken apart) is saved data:
+    // `MechanicalBearingBlockEntity.write` saves its angle.
     for pos in changed {
+        super::super::persist::mark_pos_unsaved(dim, pos);
         show_windmill(lv, pos);
     }
 }
