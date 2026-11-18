@@ -36,9 +36,6 @@
 //!   blocks that override it (glass and the like) are not known to the API.
 //! - A schematic's export classes its blocks by their block entity and a full collision cube;
 //!   `isSolidRender` is not in the API.
-//! - Shift-clicking a whole stack into the cannon's or the table's slot of its own (gunpowder,
-//!   a book) only works where the game's routing puts it: `menu_quick_move` cannot empty the
-//!   clicked slot (an `ItemStack` is never empty).
 
 pub mod body;
 mod deploy;
@@ -1546,8 +1543,7 @@ impl BlockEntityPart for SchematicEntity {
     /// inventory a schematic goes to the schematic slot, a book or clipboard to the checklist's,
     /// gunpowder to the fuel slot (`SchematicannonInventory.isItemValid`); the table takes blank
     /// schematics, quills and schematics in its input. The game's own routing (the first slot
-    /// with room) moves it when that is the right slot; a part of a stack is moved here; a whole
-    /// stack bound elsewhere stays, as the hook cannot empty the clicked slot.
+    /// with room) is replaced by the destination order of Create’s menu, including whole stacks.
     fn menu_quick_move(
         &self,
         host: &mut dyn ServerHost,
@@ -1578,11 +1574,8 @@ impl BlockEntityPart for SchematicEntity {
         if items.len() <= to {
             return Flow::Cancel;
         }
-        if items.iter().position(|s| room(s) > 0) == Some(to) && room(&items[to]) >= stack.count() {
-            return Flow::Continue;
-        }
         let n = room(&items[to]).min(stack.count());
-        if n == 0 || n == stack.count() {
+        if n == 0 {
             return Flow::Cancel;
         }
         let there = items[to].as_ref().map_or(0, ItemStack::count);
