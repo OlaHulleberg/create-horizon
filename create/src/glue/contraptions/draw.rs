@@ -11,6 +11,8 @@ use super::super::subsystem::Subsystem;
 use super::super::world::{level_index, with_world};
 use super::actor_draw::{self, Frame, Motion};
 use super::state_text;
+use create_engine::Block;
+use create_engine::client::{self, Draw, Model};
 use create_engine::contraption::Turn;
 use create_engine::elevator::{ColumnKey, Elevator};
 use create_engine::kinetics::{Axis, Dir};
@@ -58,13 +60,12 @@ impl Subsystem for Drawing {
         ]
     }
 
-    fn animated(
-        &self,
-        block: create_engine::Block,
-        _pos: [i32; 3],
-        entity: &mod_api::ModBlockEntity,
-    ) -> bool {
-        moving(&entity.nbt)
+    fn draws_itself(&self, _block: Block, part: &Draw) -> bool {
+        matches!(part.model, Model::BearingTop(_) | Model::BearingTopMetal(_))
+    }
+
+    fn animated(&self, block: Block, _pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
+        redraws_each_frame(&entity.nbt)
             || (holds_structure(&entity.nbt) && actor_draw::view(&entity.nbt).is_some())
             || actor_draw::animated(block, entity)
     }
@@ -144,11 +145,14 @@ fn anchors(dim: usize, pos: [i32; 3]) -> bool {
     .unwrap_or(false)
 }
 
-/// Whether `data` holds a structure that moves along a line (drawn each frame, so its block
-/// entity's geometry is not kept between frames).
-pub fn moving(data: &Compound) -> bool {
-    match data.get(&KEY.into()) {
-        Some(Tag::Compound(c)) => matches!(int(c, "Kind"), Some(GLIDE | ELEVATOR)),
+/// Linear motion and limited turns need a new pose every frame: `spin` cannot stop at a limit.
+fn redraws_each_frame(data: &Compound) -> bool {
+    let Some(Tag::Compound(c)) = data.get(&KEY.into()) else {
+        return false;
+    };
+    match int(c, "Kind") {
+        Some(GLIDE | ELEVATOR) => true,
+        Some(TURN) => get_float(c, "Limit").is_some(),
         _ => false,
     }
 }
@@ -1130,23 +1134,30 @@ fn own_speed(data: &Compound) -> f32 {
     }
 }
 
-/// Draws the structure of the anchor at `pos` whose data is `data`.
+/// The bearing's separate top model, drawn under the same pose as its structure.
+fn draw_bearing_top(draw: &mut dyn BlockEntityDrawContext, top: Option<(Block, Model)>) {
+    if let Some((block, model)) = top
+        && let Some((part, Some(facing))) = super::super::kinetics::part_model(block, model)
+    {
+        draw.block(part, &[facing]);
+    }
+}
+
+/// Draws the anchor's structure and its bearing top, if it has one.
 fn submit(
     host: &dyn ClientHost,
-    pos: [i32; 3],
-    data: &Compound,
-    draw: &mut dyn BlockEntityDrawContext,
-    elevator_turn: Option<f32>,
+    event: &mut BlockEntitySubmitEvent<'_>,
+    c: &Compound,
+    top: Option<(Block, Model)>,
 ) {
-    let Some(Tag::Compound(c)) = data.get(&KEY.into()).filter(|_| holds_structure(data)) else {
-        SHOWN.with_borrow_mut(|s| s.remove(&pos));
-        actor_draw::client_forget(pos);
-        return;
-    };
+    let pos = event.pos;
+    let data = &event.entity.nbt;
+    let draw = &mut *event.draw;
     let rev = int(c, "Rev").unwrap_or(0);
     let fresh = SHOWN.with_borrow(|s| s.get(&pos).is_none_or(|x| x.rev != rev));
     if fresh {
         let Some(shape) = parse(host, c) else {
+            draw_bearing_top(draw, top);
             return;
         };
         SHOWN.with_borrow_mut(|s| {
@@ -1199,68 +1210,45 @@ fn submit(
                 let turned = rate * (now - since) as f32;
                 // A sequenced turn is held where its limit runs out.
                 let held = limit.map(|l| turned.clamp(-l, l));
-                let here = angle + held.unwrap_or(turned);
-                match (&view, held) {
-                    // Its actors move each frame: all of it is drawn each frame, turned.
-                    (Some(view), _) => {
+                let here = (angle + held.unwrap_or(turned)) % 360.0;
+                let world_pose = WorldPose::turned(pos, *axis, here);
+                if view.is_some() || held.is_some() {
+                    // Actors and sequenced turns need a fresh pose every frame.
+                    let frame = if let Some(view) = &view {
+                        let axis = axis_enum(*axis);
                         let stopped = held.is_some_and(|h| h != turned);
-                        let frame = Frame {
+                        shown.turned = Some((axis, here));
+                        Some(Frame {
                             anchor: pos,
                             view,
                             motion: Motion::Turn {
-                                axis: axis_enum(*axis),
-                                angle: here % 360.0,
+                                axis,
+                                angle: here,
                                 rate: if stopped { 0.0 } else { rate },
                             },
                             now,
                             partial,
                             camera,
                             elevator: None,
-                        };
-                        shown.turned = Some((axis_enum(*axis), here % 360.0));
-                        draw.push();
-                        draw.rotate_about(*axis, here % 360.0, [0.5; 3]);
-                        draw_blocks(
-                            host,
-                            draw,
-                            pos,
-                            blocks,
-                            Some(&frame),
-                            WorldPose::turned(pos, *axis, here % 360.0),
-                        );
-                        draw.pop();
-                    }
-                    // A sequenced turn is drawn each frame.
-                    (None, Some(_)) => {
-                        draw.push();
-                        draw.rotate_about(*axis, here % 360.0, [0.5; 3]);
-                        draw_blocks(
-                            host,
-                            draw,
-                            pos,
-                            blocks,
-                            None,
-                            WorldPose::turned(pos, *axis, here % 360.0),
-                        );
-                        draw.pop();
-                    }
+                        })
+                    } else {
+                        None
+                    };
+                    draw.push();
+                    draw.rotate_about(*axis, here, [0.5; 3]);
+                    draw_bearing_top(draw, top);
+                    draw_blocks(host, draw, pos, blocks, frame.as_ref(), world_pose);
+                    draw.pop();
+                } else {
                     // A steady turn is kept and spun by the game. Its blocks keep the light of
                     // where they were when it was drawn: a kept draw has no per-frame light
                     // (Create's light volume), API_GAPS.md.
-                    (None, None) => {
-                        let phase = (f64::from(here) - anim * f64::from(rate)) % 360.0;
-                        draw.spin(*axis, [0.5; 3], rate, phase as f32);
-                        draw_blocks(
-                            host,
-                            draw,
-                            pos,
-                            blocks,
-                            None,
-                            WorldPose::turned(pos, *axis, here % 360.0),
-                        );
-                        draw.still();
-                        draw.keep();
-                    }
+                    let phase = (f64::from(here) - anim * f64::from(rate)) % 360.0;
+                    draw.spin(*axis, [0.5; 3], rate, phase as f32);
+                    draw_bearing_top(draw, top);
+                    draw_blocks(host, draw, pos, blocks, None, world_pose);
+                    draw.still();
+                    draw.keep();
                 }
             }
             Shape::Clock {
@@ -1271,12 +1259,16 @@ fn submit(
                 speeds,
                 since,
             } => {
-                for (blocks, angle, rate) in
-                    [(hour, angles.0, speeds.0), (minute, angles.1, speeds.1)]
-                {
+                for (is_hour, blocks, angle, rate) in [
+                    (true, hour, angles.0, speeds.0),
+                    (false, minute, angles.1, speeds.1),
+                ] {
                     let here = angle + rate * (now - since) as f32;
                     let phase = (f64::from(here) - anim * f64::from(rate)) % 360.0;
                     draw.spin(*axis, [0.5; 3], rate, phase as f32);
+                    if is_hour {
+                        draw_bearing_top(draw, top);
+                    }
                     draw_blocks(
                         host,
                         draw,
@@ -1386,7 +1378,12 @@ fn submit(
                 draw.pop();
                 // The magnet a block over its anchor, and the belt up to the pulley.
                 let offset = (f64::from(pos[1]) - y - 1.0) as f32;
-                draw_hanging(host, draw, elevator_turn.or(Some(180.0)), offset, true);
+                let turn = if event.block == "create:elevator_pulley" {
+                    facing_turn(host, event.state)
+                } else {
+                    180.0
+                };
+                draw_hanging(host, draw, Some(turn), offset, true);
             }
         }
     });
@@ -1795,14 +1792,29 @@ impl BlockEntityPart for StructurePart {
     }
 
     fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
-        if !holds_structure(&event.entity.nbt) && SHOWN.with_borrow(|s| !s.contains_key(&event.pos))
-        {
-            draw_resting(host, event);
+        let top = match event.block {
+            "create:mechanical_bearing"
+            | "create:windmill_bearing"
+            | "create:clockwork_bearing" => states::id(event.state).and_then(|id| {
+                super::super::client_table(host, |table| {
+                    let (block, info) = table.get(id)?;
+                    Some((block, client::bearing_top(block, info.facing?)?))
+                })
+                .flatten()
+            }),
+            _ => None,
+        };
+        let Some(Tag::Compound(structure)) = super::super::kinetics::synced(&event.entity.nbt, KEY)
+        else {
+            draw_bearing_top(event.draw, top);
+            if SHOWN.with_borrow_mut(|s| s.remove(&event.pos).is_some()) {
+                actor_draw::client_forget(event.pos);
+            } else {
+                draw_resting(host, event);
+            }
             return;
-        }
-        let turn =
-            (event.block == "create:elevator_pulley").then(|| facing_turn(host, event.state));
-        submit(host, event.pos, &event.entity.nbt, event.draw, turn);
+        };
+        submit(host, event, structure, top);
     }
 
     /// A structure is drawn wherever it moves to: never culled.
@@ -1849,17 +1861,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_turning_structure_is_kept_and_a_sliding_one_is_not() {
-        let with = |kind: i32| {
-            let mut c = Compound::new();
-            c.insert("Kind".into(), Tag::Int(kind));
+    fn a_limited_turn_or_linear_motion_is_not_kept() {
+        let with = |kind: i32, limit: Option<f32>| {
+            let mut c = Compound::from([("Kind".into(), Tag::Int(kind))]);
+            if let Some(limit) = limit {
+                c.insert("Limit".into(), float(limit));
+            }
             Compound::from([(KEY.into(), Tag::Compound(c))])
         };
-        assert!(!moving(&with(TURN)));
-        assert!(!moving(&with(CLOCK)));
-        assert!(moving(&with(GLIDE)));
-        assert!(moving(&with(ELEVATOR)));
-        assert!(!moving(&Compound::new()));
+        assert!(!redraws_each_frame(&with(TURN, None)));
+        assert!(redraws_each_frame(&with(TURN, Some(45.0))));
+        assert!(redraws_each_frame(&with(TURN, Some(0.0))));
+        assert!(!redraws_each_frame(&with(CLOCK, None)));
+        assert!(redraws_each_frame(&with(GLIDE, None)));
+        assert!(redraws_each_frame(&with(ELEVATOR, None)));
+        assert!(!redraws_each_frame(&Compound::new()));
     }
 }
 
