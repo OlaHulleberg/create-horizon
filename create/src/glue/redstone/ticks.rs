@@ -521,11 +521,6 @@ pub(super) fn tick_links(lv: &mut ServerLevel<'_>) {
     if !shown.is_empty() {
         let players = lv.players();
         send_links(lv, &players, &shown);
-        // A link's drawing is kept until its block entity changes: touched, its clients draw
-        // the new frequency.
-        for &pos in &shown {
-            crate::glue::logistics::touch_shown(lv, pos);
-        }
     }
     let mut done: HashSet<[i32; 3]> = HashSet::new();
     for pos in checks {
@@ -614,6 +609,15 @@ pub(super) fn send_links(lv: &mut ServerLevel<'_>, players: &[PlayerRef], links:
     for chunk in shown.chunks(64) {
         let m = create_engine::link::encode(chunk);
         net::send_to_players(&mut *lv.host, players, create_engine::link::CHANNEL, &m);
+    }
+    for contents in &shown {
+        crate::glue::drawn::publish(
+            lv,
+            contents.0,
+            crate::glue::drawn::snapshot([create_engine::link::encode(std::slice::from_ref(
+                contents,
+            ))]),
+        );
     }
 }
 

@@ -471,11 +471,6 @@ impl Subsystem for Logistics {
 /// else.
 pub struct Entities;
 
-/// A block entity key the server bumps when a depot's or belt's contents (or a nixie tube's or
-/// display board's text) sent on its channel change what its kept drawing shows: synced, so the
-/// client draws it again.
-const SHOWN: &str = "Shown";
-
 /// A block entity key holding the item a brass funnel's or smart chute's filter slot shows
 /// (an empty string: none), synced for its clients to draw.
 pub(crate) const FILTER: &str = "Filter";
@@ -508,21 +503,6 @@ pub(crate) fn show_filter(
     }
 }
 
-/// Touches the block entity at `pos` (`SHOWN`) so its clients draw it again.
-pub(crate) fn touch_shown(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
-    let Some(entity) = lv.host.block_entity(lv.level, pos) else {
-        return;
-    };
-    let n = match entity
-        .data(&*lv.host)
-        .and_then(|d| d.get(&SHOWN.into()).cloned())
-    {
-        Some(Tag::Int(n)) => n.wrapping_add(1),
-        _ => 1,
-    };
-    let _ = entity.merge_data(&mut *lv.host, Compound::from([(SHOWN.into(), Tag::Int(n))]));
-}
-
 impl Subsystem for Entities {
     /// Arms and ejectors move their own parts every frame, sliding stacks and belts' items
     /// move (`client::animated`).
@@ -537,7 +517,7 @@ impl Subsystem for Entities {
 
     fn synced_keys(&self) -> &'static [&'static str] {
         &[
-            SHOWN,
+            super::drawn::SHOWN,
             FILTER,
             BELT_COLOR,
             BELT_CASING,

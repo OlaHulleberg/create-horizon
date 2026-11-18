@@ -846,24 +846,6 @@ pub fn tick_transport(lv: &mut ServerLevel<'_>) {
                     );
                 }
             }
-            let carrying = with_world(|w| {
-                w.dims[dim]
-                    .belts
-                    .get(&c)
-                    .is_some_and(|b| !b.items.is_empty())
-            })
-            .unwrap_or(false);
-            let was = CARRYING.with_borrow_mut(|s| {
-                if carrying {
-                    !s.insert((dim, c))
-                } else {
-                    s.remove(&(dim, c));
-                    true
-                }
-            });
-            if !was {
-                super::touch_shown(lv, c);
-            }
         }
     }
     crate::glue::fluids::pipes::finish_ticks(lv);
@@ -895,12 +877,6 @@ pub fn tick_covers(lv: &mut ServerLevel<'_>) {
     for pos in mine {
         update_cover(lv, pos);
     }
-}
-
-thread_local! {
-    /// Belts (by level and controller) last sent carrying items.
-    static CARRYING: std::cell::RefCell<std::collections::HashSet<(usize, [i32; 3])>> =
-        std::cell::RefCell::default();
 }
 
 fn axis_name(a: Axis) -> &'static str {
@@ -956,6 +932,13 @@ pub fn send_belts(lv: &mut ServerLevel<'_>, players: &[PlayerRef], belts: &[[i32
         .collect();
     for m in belt::encode(&all) {
         net::send_to_players(&mut *lv.host, players, belt::CHANNEL, &m);
+    }
+    for contents in &all {
+        super::super::drawn::publish(
+            lv,
+            contents.controller,
+            super::super::drawn::snapshot(belt::encode(std::slice::from_ref(contents))),
+        );
     }
 }
 

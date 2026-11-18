@@ -1479,10 +1479,6 @@ fn send_changed(lv: &mut ServerLevel<'_>) {
     }
     let players = lv.players();
     send_displays(lv, &players, &shown, &forgotten);
-    // Their kept drawing (the kinetic block entity's) is drawn again once its data changes.
-    for &pos in &shown {
-        super::logistics::touch_shown(lv, pos);
-    }
 }
 
 fn shown_of(dim: usize, pos: [i32; 3]) -> Option<Shown> {
@@ -1545,6 +1541,16 @@ fn send_displays(
     for chunk in all.chunks(16) {
         let m = display::encode(chunk);
         net::send_to_players(&mut *lv.host, players, display::CHANNEL, &m);
+    }
+    for contents in &all {
+        let pos = match contents {
+            Shown::Nixie { pos, .. } | Shown::Board { pos, .. } | Shown::Forget { pos } => *pos,
+        };
+        super::drawn::publish(
+            lv,
+            pos,
+            super::drawn::snapshot([display::encode(std::slice::from_ref(contents))]),
+        );
     }
 }
 

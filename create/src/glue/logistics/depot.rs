@@ -236,37 +236,13 @@ fn contents(lv: &ServerLevel<'_>, pos: [i32; 3]) -> depot::Contents {
     }
 }
 
-/// DepotBehaviour.notifyUpdate sends its actual transport contents. Use those same
-/// contents as the kept drawing's revision, rather than an incrementing counter:
-/// the SDK also reports a block-entity data write as a contents notification.
-/// Repeating that notification must converge when the contents have not changed.
-fn render_update(
-    previous: Option<&mod_api::Tag>,
-    contents: &depot::Contents,
-) -> Option<mod_api::Tag> {
-    use mod_api::Tag;
-    let snapshot = Tag::List(
-        depot::encode(std::slice::from_ref(contents))
-            .into_iter()
-            .map(Tag::ByteArray)
-            .collect(),
-    );
-    (previous != Some(&snapshot)).then_some(snapshot)
+/// DepotBehaviour.write's client contents, also used for kept-drawing invalidation.
+fn drawn_contents(contents: &depot::Contents) -> mod_api::Tag {
+    super::super::drawn::snapshot(depot::encode(std::slice::from_ref(contents)))
 }
 
 fn show_contents(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
-    let Some(entity) = lv.host.block_entity(lv.level, pos) else {
-        return;
-    };
-    let Some(data) = entity.data(&*lv.host) else {
-        return;
-    };
-    if let Some(update) = render_update(data.get(&super::SHOWN.into()), &contents(lv, pos)) {
-        let _ = entity.merge_data(
-            &mut *lv.host,
-            mod_api::Compound::from([(super::SHOWN.into(), update)]),
-        );
-    }
+    super::super::drawn::publish(lv, pos, drawn_contents(&contents(lv, pos)));
 }
 
 /// A hopper (or any handler's commit) put into or took from the depot at `pos`: its held
@@ -384,7 +360,9 @@ mod persistence_tests {
         let mut shown = Tag::Int(9914);
         let mut writes = 0;
         for _ in 0..2000 {
-            if let Some(update) = render_update(Some(&shown), &contents) {
+            if let Some(update) =
+                super::super::super::drawn::update(Some(&shown), drawn_contents(&contents))
+            {
                 shown = update;
                 writes += 1;
             }
@@ -395,11 +373,15 @@ mod persistence_tests {
         );
         // Count changes, item replacements and removal still invalidate the drawing.
         contents.stacks[0].2 = 3;
-        shown = render_update(Some(&shown), &contents).expect("count changed");
+        shown = super::super::super::drawn::update(Some(&shown), drawn_contents(&contents))
+            .expect("count changed");
         contents.stacks[0].1 = "minecraft:emerald".into();
-        shown = render_update(Some(&shown), &contents).expect("item changed");
+        shown = super::super::super::drawn::update(Some(&shown), drawn_contents(&contents))
+            .expect("item changed");
         contents.stacks.clear();
-        assert!(render_update(Some(&shown), &contents).is_some());
+        assert!(
+            super::super::super::drawn::update(Some(&shown), drawn_contents(&contents)).is_some()
+        );
     }
 
     #[test]

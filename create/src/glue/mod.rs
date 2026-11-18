@@ -7,6 +7,7 @@ pub mod contraptions;
 pub mod copycat;
 pub mod decor;
 pub mod display;
+pub(crate) mod drawn;
 pub mod equipment;
 pub mod fluids;
 pub mod gauges;
