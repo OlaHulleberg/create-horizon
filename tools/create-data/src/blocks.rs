@@ -3877,6 +3877,8 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
         doc.insert("collision_shapes".into(), crate::shapes::belt_shapes().1);
     }
     if b.name == "factory_gauge" {
+        // FactoryPanelBlockEntity.getShape publishes the active panels.
+        doc.insert("shapes_from_block_entity".into(), json!(true));
         // FactoryPanelBlock.getCollisionShape: empty for entities.
         doc.insert("collision_shapes".into(), json!({ "default": [] }));
     }

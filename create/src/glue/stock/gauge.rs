@@ -24,9 +24,9 @@
 //! panels is satisfied (`shouldBePoweredTristate`). Which panels a link feeds is read from the
 //! panels' `targetedByLinks` (each link's `LinkedGauges` in Create).
 //!
-//! A panel is relocated from its screen's move button (`relocate`, `moveTo`). Left out: the
-//! block's per-panel shape (the declared shape is Create's `FACTORY_PANEL_FALLBACK`, the whole
-//! face; API_GAPS.md).
+//! A panel is relocated from its screen's move button (`relocate`, `moveTo`). The block entity
+//! publishes active-panel outlines (`FactoryPanelBlockEntity.getShape`). Collision is empty
+//! for entities; the SDK cannot distinguish Create's entity-free collision context.
 
 use super::super::items;
 use super::super::server::ServerLevel;
@@ -561,6 +561,22 @@ pub(super) fn send_redraws(lv: &mut ServerLevel<'_>) {
         let Some(entity) = lv.host.block_entity(lv.level, pos) else {
             continue;
         };
+        // FactoryPanelBlockEntity.getShape: union only the active panels' boxes.
+        if let Some((face, facing)) = orientation(lv, pos) {
+            let outline = with(dim, |n| {
+                panels_at(n, pos)
+                    .into_iter()
+                    .map(|slot| fx::panel_box(face, facing, slot))
+                    .collect()
+            });
+            let _ = entity.set_shapes(
+                &mut *lv.host,
+                Some(mod_api::BlockEntityShapes {
+                    outline,
+                    collision: Vec::new(),
+                }),
+            );
+        }
         let data = Compound::from([(PANELS.into(), Tag::List(list))]);
         let _ = entity.merge_data(&mut *lv.host, data);
     }
