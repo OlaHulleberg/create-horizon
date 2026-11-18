@@ -369,6 +369,15 @@ pub trait Subsystem: Sync {
     /// to send) goes now, in the same input as Create's, not at the next client tick.
     fn input_handled(&self, _host: &mut dyn ClientHost) {}
 
+    /// A new or continuing client dig, before prediction.
+    fn client_mining_predict(
+        &self,
+        _host: &dyn ClientHost,
+        _event: &mut mod_api::ClientMiningPredictEvent,
+    ) -> Flow {
+        Flow::Continue
+    }
+
     /// `Hooks::interaction_key_mapping_triggered`, on the client: `Flow::Cancel` when the
     /// click was taken.
     fn interaction_key(

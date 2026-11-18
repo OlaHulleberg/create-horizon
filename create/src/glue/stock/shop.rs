@@ -1337,8 +1337,8 @@ impl BlockEntityPart for ClothEntity {
                 draw.translate([0.0, if i % 2 == 0 { -0.005 } else { 0.0 }, 5.0 / 16.0]);
                 draw.rotate_about([0.0, 1.0, 0.0], -a, [0.0; 3]);
             }
-            // `isGui3d`: an item that places a block stands for a 3D model.
-            let block_item = host.item_block(s.item()).is_some();
+            // TableClothRenderer: ask the resolved model whether it is three-dimensional.
+            let block_item = host.item_uses_block_light(s, ItemDisplayContext::Fixed);
             if !block_item {
                 draw.rotate_about([0.0, 1.0, 0.0], -rot + 180.0, [0.0; 3]);
             }
@@ -1381,7 +1381,7 @@ fn draw_price(
             Dir::East => 270.0,
             _ => 0.0,
         };
-    let solid = host.item_block(price.item()).is_some();
+    let solid = host.item_uses_block_light(price, ItemDisplayContext::Fixed);
     let scale = 0.5 * (if solid { 1.0 } else { 0.5 } + 1.0 / 64.0);
     draw.push();
     draw.translate(slot.map(|v| v as f32));

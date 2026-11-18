@@ -6,7 +6,7 @@
 
 use super::super::states;
 use super::BELT_COLOR;
-use super::items::{is_block_item, stack_of};
+use super::items::stack_of;
 use create_engine::Block;
 use create_engine::arm;
 use create_engine::belt;
@@ -70,8 +70,6 @@ struct Client {
     ejectors: HashMap<[i32; 3], ClientEjector>,
     /// The speeds the kinetic block entities last drew with, for the ticks.
     speeds: HashMap<[i32; 3], f32>,
-    /// Whether an item draws as a block, by id, looked up once.
-    block_items: HashMap<String, bool>,
     /// Client ticks so far (`AnimationTickHolder.ticks`): belts scroll their texture by them.
     ticks: u64,
     /// The belt partials' models, resolved when first drawn (and again once stale).
@@ -103,7 +101,6 @@ pub fn reset_logistics() {
         c.sliding.clear();
         c.belts.clear();
         c.speeds.clear();
-        c.block_items.clear();
         c.dyed.clear();
         c.flaps.clear();
         c.flapped.clear();
@@ -399,17 +396,24 @@ fn speed(pos: [i32; 3]) -> f32 {
     CLIENT.with_borrow(|c| c.speeds.get(&pos).copied().unwrap_or(0.0))
 }
 
-/// Whether `id` (named with its components or not) draws as a block (`isGui3d`): a block's
-/// item, or a package's box.
-fn block_item(host: &dyn Host, id: &str) -> bool {
-    let id = create_engine::arm::item_id(id);
-    let id = create_engine::tank::split_potion_item(id).map_or(id, |(item, _)| item);
-    if let Some(b) = CLIENT.with_borrow(|c| c.block_items.get(id).copied()) {
-        return b;
+/// Model facts needed by logistics item layout (`DepotRenderer`, `BeltRenderer`).
+/// Client rendering resolves the model; server display recording uses display item semantics.
+pub(crate) trait ItemLayout {
+    fn solid(&self, host: &dyn Host, id: &str) -> bool;
+}
+
+struct ClientItemLayout<'a>(&'a dyn ClientHost);
+impl ItemLayout for ClientItemLayout<'_> {
+    fn solid(&self, host: &dyn Host, id: &str) -> bool {
+        stack_of(host, id, 1).is_some_and(|stack| {
+            self.0
+                .item_uses_block_light(&stack, ItemDisplayContext::Fixed)
+        })
     }
-    let b = is_block_item(host, id) || create_engine::package::is_package(id);
-    CLIENT.with_borrow_mut(|c| c.block_items.insert(id.to_owned(), b));
-    b
+}
+
+fn block_item(host: &dyn ClientHost, id: &str) -> bool {
+    ClientItemLayout(host).solid(host, id)
 }
 
 /// `PackageItem.isPackage` of an item named with its components or not.
@@ -1391,7 +1395,7 @@ fn belt_model(host: &dyn ClientHost, file: &'static str, fresh: bool) -> Option<
 /// its copies under it.
 fn draw_belt_items(
     draw: &mut dyn BlockEntityDrawContext,
-    host: &dyn Host,
+    host: &dyn ClientHost,
     c: [i32; 3],
     t: f32,
     eye: Option<[f32; 3]>,
@@ -1403,7 +1407,15 @@ fn draw_belt_items(
     }) else {
         return;
     };
-    draw_belt_contents(draw, host, &contents, &prev, t, eye);
+    draw_belt_contents(
+        draw,
+        host,
+        &ClientItemLayout(host),
+        &contents,
+        &prev,
+        t,
+        eye,
+    );
 }
 
 /// `BeltRenderer.renderItems`: each item where it lies along the belt (from where it was a tick
@@ -1411,6 +1423,7 @@ fn draw_belt_items(
 fn draw_belt_contents(
     draw: &mut dyn BlockEntityDrawContext,
     host: &dyn Host,
+    layout: &dyn ItemLayout,
     contents: &belt::Contents,
     prev: &[f32],
     t: f32,
@@ -1425,7 +1438,7 @@ fn draw_belt_contents(
             it.position
         };
         let place = belt::item_place(&contents.segment, length, at, it.side_offset);
-        let solid = block_item(host, &it.item);
+        let solid = layout.solid(host, &it.item);
         if super::items::upright(host, &it.item) {
             draw_upright_on_belt(draw, host, &place, it, solid, eye);
             continue;
@@ -1525,7 +1538,7 @@ fn upright_copies(
 /// by its angle; each output 0.35 out at 45° steps.
 fn draw_depot(
     draw: &mut dyn BlockEntityDrawContext,
-    host: &dyn Host,
+    host: &dyn ClientHost,
     pos: [i32; 3],
     t: f32,
     eye: Option<[f32; 3]>,
@@ -1535,7 +1548,7 @@ fn draw_depot(
     else {
         return;
     };
-    let upright = draw_depot_stacks(draw, host, &contents, prev, t, eye);
+    let upright = draw_depot_stacks(draw, host, &ClientItemLayout(host), &contents, prev, t, eye);
     // An upright stack faces the camera: drawn again each frame.
     CLIENT.with_borrow_mut(|c| {
         if upright {
@@ -1551,6 +1564,7 @@ fn draw_depot(
 fn draw_depot_stacks(
     draw: &mut dyn BlockEntityDrawContext,
     host: &dyn Host,
+    layout: &dyn ItemLayout,
     contents: &depot::Contents,
     prev: depot::Held,
     t: f32,
@@ -1558,7 +1572,7 @@ fn draw_depot_stacks(
 ) -> bool {
     let mut any_upright = false;
     for (slot, id, count) in &contents.stacks {
-        let solid = block_item(host, id);
+        let solid = layout.solid(host, id);
         if super::items::upright(host, id) {
             any_upright = true;
             // `renderItem` with `renderUpright`: turned by its angle, then to face the camera
@@ -1820,7 +1834,7 @@ fn draw_ejector(
 /// value box's half scale for a flat item and its half scale for a block.
 fn draw_filter(
     draw: &mut dyn BlockEntityDrawContext,
-    host: &dyn Host,
+    host: &dyn ClientHost,
     block: Block,
     info: &create_engine::parts::StateInfo,
     nbt: &Compound,
@@ -1887,7 +1901,7 @@ fn draw_filter(
 /// degrees (`FilteringRenderer`).
 fn draw_filter_stack(
     draw: &mut dyn BlockEntityDrawContext,
-    host: &dyn Host,
+    host: &dyn ClientHost,
     id: &str,
     side: Dir,
     slot: [f64; 3],
@@ -1934,7 +1948,13 @@ pub(crate) fn draw_carried(
 ) {
     match block {
         Block::Depot | Block::WeightedEjector => {
-            draw_riding_items(&mut *event.draw, host, block, &event.entity.nbt);
+            draw_riding_items(
+                &mut *event.draw,
+                host,
+                &ClientItemLayout(host),
+                block,
+                &event.entity.nbt,
+            );
         }
         Block::Chute
         | Block::SmartChute
@@ -1972,7 +1992,7 @@ pub(crate) fn draw_carried(
             if cased && let Some(seg) = info.belt {
                 draw_casing(draw, host, &seg, nbt);
             }
-            draw_riding_items(draw, host, block, nbt);
+            draw_riding_items(draw, host, &ClientItemLayout(host), block, nbt);
         }
         // An arm as it stood when the structure took it (its block entity doesn't tick
         // riding: no turning, no dance).
@@ -2002,12 +2022,13 @@ pub(crate) fn draw_carried(
 pub(crate) fn draw_riding_items(
     draw: &mut dyn BlockEntityDrawContext,
     host: &dyn Host,
+    layout: &dyn ItemLayout,
     block: Block,
     nbt: &Compound,
 ) {
     match block {
         Block::Depot | Block::WeightedEjector => {
-            depot_items(draw, host, nbt);
+            depot_items(draw, host, layout, nbt);
         }
         Block::Chute | Block::SmartChute => {
             if nbt.contains_key(&super::chute::CHUTE_ITEM.into()) {
@@ -2047,7 +2068,7 @@ pub(crate) fn draw_riding_items(
                 let prev: Vec<f32> = contents.items.items.iter().map(|i| i.position).collect();
                 draw.push();
                 draw.translate(o);
-                draw_belt_contents(draw, host, &contents, &prev, 1.0, None);
+                draw_belt_contents(draw, host, layout, &contents, &prev, 1.0, None);
                 draw.pop();
             }
         }
@@ -2055,7 +2076,12 @@ pub(crate) fn draw_riding_items(
     }
 }
 
-fn depot_items(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, nbt: &Compound) {
+fn depot_items(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn Host,
+    layout: &dyn ItemLayout,
+    nbt: &Compound,
+) {
     let Some(Tag::List(items)) = nbt.get(&"Items".into()) else {
         return;
     };
@@ -2091,7 +2117,7 @@ fn depot_items(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, nbt: &Com
         held,
         stacks,
     };
-    draw_depot_stacks(draw, host, &contents, held, 1.0, None);
+    draw_depot_stacks(draw, host, layout, &contents, held, 1.0, None);
 }
 
 /// A riding belt segment's halves and pulley as `BeltRenderer` poses them, standing still and in
@@ -2130,6 +2156,17 @@ pub(crate) fn draw_riding_segment(
 mod tests {
     use super::decompose;
     use create_engine::math::{Mat4, Quat, Vec3};
+
+    #[test]
+    fn client_layout_does_not_infer_package_geometry_without_a_model() {
+        let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+        let host = mod_api::testing::FakeHost::new();
+        let id = "create:cardboard_package_10x8";
+        assert!(create_engine::package::is_package(id));
+        // An unavailable item has no resolved client model, even if its identifier
+        // would be classified as a package for server display recording.
+        assert!(!super::block_item(&host, id));
+    }
 
     /// The decomposed pose put back together moves points where the pose does.
     #[test]

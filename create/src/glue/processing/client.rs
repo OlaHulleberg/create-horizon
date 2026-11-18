@@ -580,7 +580,8 @@ fn draw_deployer(
     };
     // Facing up and still, it shows its item turning on top (`displayMode`).
     let display = s.facing == Dir::Up && rpm == 0.0 && !s.punch;
-    let block = host.item_block(stack.item()).is_some();
+    let block = host.item_block(stack.item()).is_some()
+        && host.item_uses_block_light(&stack, ItemDisplayContext::Fixed);
     draw.push();
     draw.translate([o[0] * at + 0.5, o[1] * at + 0.5, o[2] * at + 0.5]);
     draw.rotate_about([0.0, 1.0, 0.0], horizontal + 180.0, [0.0; 3]);
@@ -964,7 +965,7 @@ fn draw_machine_filter(
     let flipped = host
         .block_state_string(state)
         .is_some_and(|s| s.contains("flipped=true"));
-    let solid = host.item_block(stack.item()).is_some();
+    let solid = host.item_uses_block_light(&stack, ItemDisplayContext::Fixed);
     let scale = 0.5 * (if solid { 1.0 } else { 0.5 } + 1.0 / 64.0);
     for (_, slot, y_rot, x_rot) in super::filtering::drawn(block, info, flipped) {
         draw.push();
@@ -1046,7 +1047,7 @@ fn draw_saw_items(
         let Some(stack) = stacks::stack(host, id, 1) else {
             continue;
         };
-        let block = host.item_block(stack.item()).is_some();
+        let block = host.item_uses_block_light(&stack, ItemDisplayContext::Fixed);
         draw.push();
         draw.translate([0.0, if block { 0.925 } else { 13.0 / 16.0 }, 0.0]);
         if applied && outputs > 1 {

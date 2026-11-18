@@ -32,6 +32,18 @@ pub struct Extra {
     pub pose: Mat4,
 }
 
+/// Server item-display poses have no resource-pack model to resolve. Keep their
+/// item classification separate from the model-dependent client renderer.
+pub(crate) struct DisplayItemLayout;
+impl crate::glue::logistics::client::ItemLayout for DisplayItemLayout {
+    fn solid(&self, host: &dyn mod_api::Host, id: &str) -> bool {
+        let id = create_engine::arm::item_id(id);
+        let id = create_engine::tank::split_potion_item(id).map_or(id, |(item, _)| item);
+        crate::glue::logistics::items::is_block_item(host, id)
+            || create_engine::package::is_package(id)
+    }
+}
+
 /// The displays the carriage block numbered `car` (`car_id`) shows from its block entity data
 /// `entity`.
 pub fn extras(lv: &ServerLevel<'_>, car: u32, entity: &Compound) -> Vec<Extra> {
@@ -54,7 +66,13 @@ pub fn extras(lv: &ServerLevel<'_>, car: u32, entity: &Compound) -> Vec<Extra> {
                         &mut r, block, &info, [0; 3],
                     );
                 }
-                crate::glue::logistics::client::draw_riding_items(&mut r, host, block, entity);
+                crate::glue::logistics::client::draw_riding_items(
+                    &mut r,
+                    host,
+                    &DisplayItemLayout,
+                    block,
+                    entity,
+                );
                 r.out
             }
             Block::Basin | Block::MechanicalCrafter => {

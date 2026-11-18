@@ -69,7 +69,7 @@ impl BlockEntityPart for PlacardEntity {
             .unwrap_or(Dir::North);
         // `PlacardRenderer` halves an item whose model is 3D (`isGui3d`); no API reads that,
         // so an item that places a block stands for it.
-        let block_item = host.item_block(stack.item()).is_some();
+        let block_item = host.item_uses_block_light(&stack, ItemDisplayContext::Fixed);
         let ceiling = face == "ceiling";
         let yaw = if ceiling { 180.0 } else { 0.0 } + 180.0 + decor::horizontal_angle(facing);
         let pitch = match face.as_str() {
