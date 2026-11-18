@@ -73,6 +73,15 @@ pub enum Model {
     },
 }
 
+/// `BearingRenderer`: only the windmill's top is wooden.
+pub fn bearing_top(block: Block, facing: Dir) -> Option<Model> {
+    match block {
+        Block::WindmillBearing => Some(Model::BearingTop(facing)),
+        Block::MechanicalBearing | Block::ClockworkBearing => Some(Model::BearingTopMetal(facing)),
+        _ => None,
+    }
+}
+
 /// `FlywheelBlockEntity.visualSpeed` on a client: the wheel's drawn speed, which starts at 0 and
 /// chases the shaft's (`LerpedFloat.chase(.., 1 / 64f, Chaser.EXP)`, `updateChaseTarget`,
 /// `tickChaser`), so a flywheel spins up and down slowly while its shaft changes at once.
@@ -360,23 +369,6 @@ pub fn draws_from_source(
                 v
             })
             .unwrap_or_default(),
-        // BearingRenderer for a clockwork bearing: the shaft half turning with it, its top
-        // still (the hour hand turns it while the clock runs: the glue draws it with the hand).
-        Block::ClockworkBearing => s
-            .facing
-            .map(|f| {
-                vec![
-                    half(0, f.opposite(), speeds[0]),
-                    Draw {
-                        slot: 1,
-                        model: Model::BearingTopMetal(f),
-                        axis: f.axis(),
-                        rpm: 0.0,
-                        phase: 0.0,
-                    },
-                ]
-            })
-            .unwrap_or_default(),
         // AbstractPulleyRenderer, ElevatorPulleyRenderer: a shaft through the pulley and the
         // coil, still (Create scrolls its texture as the rope runs).
         Block::RopePulley => s
@@ -414,24 +406,21 @@ pub fn draws_from_source(
                 ]
             })
             .unwrap_or_default(),
-        // BearingRenderer: the shaft half out of its back and its top, both turning with it.
-        Block::WindmillBearing | Block::MechanicalBearing => s
+        // BearingRenderer: the half shaft follows the kinetic speed. The top of a carried
+        // bearing is at rest; the glue draws the top of a placed bearing with its contraption.
+        Block::WindmillBearing | Block::MechanicalBearing | Block::ClockworkBearing => s
             .facing
-            .map(|f| {
-                vec![
+            .and_then(|f| {
+                Some(vec![
                     half(0, f.opposite(), speeds[0]),
                     Draw {
                         slot: 1,
-                        model: if block == Block::WindmillBearing {
-                            Model::BearingTop(f)
-                        } else {
-                            Model::BearingTopMetal(f)
-                        },
+                        model: bearing_top(block, f)?,
                         axis: f.axis(),
-                        rpm: speeds[0],
+                        rpm: 0.0,
                         phase: 0.0,
                     },
-                ]
+                ])
             })
             .unwrap_or_default(),
         // EncasedFanRenderer: the shaft half out of its back, and the propeller (facing back too)
@@ -785,6 +774,24 @@ mod tests {
         assert_eq!(d[0].model, Model::CrankBase(Dir::West));
         assert_eq!(d[1].model, Model::CrankHandle(Dir::West));
         assert!(d.iter().all(|x| x.axis == Axis::X && x.rpm == -32.0));
+    }
+
+    #[test]
+    fn a_carried_bearing_keeps_its_top_at_rest_independently_of_its_shaft() {
+        let s = StateInfo {
+            facing: Some(Dir::West),
+            ..StateInfo::default()
+        };
+        for (block, top) in [
+            (Block::WindmillBearing, Model::BearingTop(Dir::West)),
+            (Block::MechanicalBearing, Model::BearingTopMetal(Dir::West)),
+            (Block::ClockworkBearing, Model::BearingTopMetal(Dir::West)),
+        ] {
+            let d = draws(block, &s, [0; 3], [-32.0, 0.0]);
+            assert_eq!(d.len(), 2);
+            assert_eq!((d[0].model, d[0].rpm), (Model::ShaftHalf(Dir::East), -32.0));
+            assert_eq!((d[1].model, d[1].rpm, d[1].phase), (top, 0.0, 0.0));
+        }
     }
 
     #[test]
