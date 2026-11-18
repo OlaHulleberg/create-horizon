@@ -27,15 +27,10 @@
 //! and links, and copycats; not a chest's items), merged into the placed block entity.
 //!
 //! Left out, for want of API:
-//! - A schematic saved by the port holds no item frames or paintings: `LevelRef::entities_in`
-//!   doesn't list them (a box lookup of hanging entities would close it); schematics that hold
-//!   them print them.
 //! - Past `maxSchematics` uploads, the player's oldest is not deleted
 //!   (`tryDeleteOldestSchematic`): a mod's data files can be written but not removed.
 //! - `isRedstoneConductor` is read as a full collision cube (vanilla's default for it); the
 //!   blocks that override it (glass and the like) are not known to the API.
-//! - A schematic's export classes its blocks by their block entity and a full collision cube;
-//!   `isSolidRender` is not in the API.
 //! - Shift-clicking a whole stack into the cannon's or the table's slot of its own (gunpowder,
 //!   a book) only works where the game's routing puts it: `menu_quick_move` cannot empty the
 //!   clicked slot (an `ItemStack` is never empty).
@@ -736,7 +731,7 @@ impl CannonWorld for World<'_, '_> {
         Spot {
             state: intern(state),
             unbreakable: facts.destroy_speed(state) == Some(-1.0),
-            conductor: full_cube(self.lv, state, pos),
+            conductor: self.lv.level.is_redstone_conductor(&*self.lv.host, pos) == Some(true),
             has_block_entity: facts.has_block_entity(state) == Some(true),
         }
     }
@@ -1663,7 +1658,7 @@ fn nbt_file(name: &str) -> String {
 
 /// `SchematicExport.saveSchematic` of the box between two corners: the blocks and the entities
 /// in it (`fillFromWorld` with entities: each block entity's data with its `id`, as
-/// `saveWithId`; item frames and paintings are not found).
+/// `saveWithId`, including item frames and paintings).
 fn export(lv: &mut ServerLevel<'_>, a: [i32; 3], b: [i32; 3]) -> Structure {
     let min = [0, 1, 2].map(|i| a[i].min(b[i]));
     let max = [0, 1, 2].map(|i| a[i].max(b[i]));
@@ -1684,7 +1679,7 @@ fn export(lv: &mut ServerLevel<'_>, a: [i32; 3], b: [i32; 3]) -> Structure {
                 let (name, props) = states::split(&text);
                 let class = if facts.has_block_entity(state) == Some(true) {
                     Class::WithEntity
-                } else if full_cube(lv, state, pos) {
+                } else if facts.is_solid_render(state) == Some(true) {
                     Class::Full
                 } else {
                     Class::Special
