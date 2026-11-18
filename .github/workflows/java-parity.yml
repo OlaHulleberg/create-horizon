@@ -57,6 +57,7 @@ jobs:
           ref: 37ea4afcfe5bf85875d4b0749798a45330070a1f
           path: target/java-parity/reference
           persist-credentials: false
+          sparse-checkout-cone-mode: false
           sparse-checkout: |
             src/main/java
             gradle.properties
