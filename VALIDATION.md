@@ -7,9 +7,8 @@ Checked on 2026-11-18 (Linux x86_64, Rust 1.99.1), pinned to Sunrise
 No SDK mirror or trusted-key override is used. Mixins stays at
 `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`, as the release SDK specifies.
 
-The in-game rows below are historical results from the previous `b77574e` developer
-build; they are unchanged by this pin update. The nightly migration and smoke record
-is in [docs/pin-nightly.md](docs/pin-nightly.md).
+In-game rows up to the pin move were checked on the previous `b77574e` developer build; the nightly smoke check is
+the "Sunrise nightly pin" row.
 
 ## Checks
 
@@ -160,6 +159,7 @@ above:
 | Drawn contents published only when they change (#70) | Pass | The test world that disconnected about 55 s after every load (a settled depot republishing its redraw marker every tick, 940 identical updates before the keep-alive timed out) stays connected past 120 s; the depot's `Shown` snapshot is unchanged between reads; a depot and a belt still redraw when diamonds are swapped for emeralds (agent's instance, 291 s connected) |
 | Valve speed callbacks published before a save (#72) | Pass | Ticks frozen, a fluid valve set `enabled=true` beside a turning creative motor: after one tick its `Pointer` chases target 1.0 at 0.05; saved and reloaded it keeps target 1.0, reaches 1.0 and stays `enabled=true`, as Create's `onSpeedChanged` → `pointer.chase`; create-fuzz: both cases and seeds 7989, 7990, 7993, 10292-10297 match, no seed changed status in 0-1999 |
 | Pipe pressure kept across a reload (#73) | Pass | Two mechanical pumps in series, each turned through a cogwheel by a creative motor, a pipe between: the pipe's connections hold `Pressure [0, 32]` / `[32, 0]`; saved and reloaded they read the same, and still the same 10 s later (before, a reload doubled them); create-fuzz: seeds 13810 and 17330 match, no seed changed status in 0-1999 |
+| Sunrise nightly pin (2d81263) | Pass | Official nightly client, fresh world: a creative motor turns a shaft at 16 rpm, a belt carries a diamond onto a depot, a pump fills a fluid tank to 8000 mB, a valve opens (pointer 1); saved and reloaded, all four keep their state and the tank keeps filling |
 | Kinetic state saved and loaded (#10) | Pass | Two member-motor pairs keep their roles over two save/reload cycles; a world saved before #10 loads with both pairs intact and keeps them after saving again |
 
 Known differences left: the category editor's inventory shows the inventory as it was at the last change made in
