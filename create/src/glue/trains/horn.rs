@@ -4,9 +4,6 @@
 //! `TRAIN_WHISTLE`, makes the `resonate_15` game event and tells every client, which plays the
 //! manual whistle (`whistle_train_manual`, or `_low` for a large whistle) at the train's nearest
 //! carriage at the whistle's pitch, fading in and out, with its end sound as it stops.
-//!
-//! The sound stays where it started for as long as it plays: the API has no way to move a
-//! playing sound (`API_GAPS.md`, `SoundInstance.getX/Y/Z` read each tick).
 
 use super::super::net;
 use super::super::server::ServerLevel;
@@ -224,6 +221,9 @@ pub fn client_tick(host: &mut dyn ClientHost) {
         let volume = 1.0 - fadeout - fadein;
         match h.sound {
             Some(s) => {
+                // CarriageSounds.tick: follow the nearest carriage and current honk pitch.
+                s.move_to(&*host, at);
+                s.set_pitch(&*host, pitch);
                 s.fade(&*host, volume, 1);
             }
             None => {

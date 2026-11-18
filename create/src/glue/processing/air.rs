@@ -119,16 +119,15 @@ const WIND_START: f32 = 0.01;
 /// `AirCurrent.Client.enableClientPlayerSound`: a fan pushed the player (to `motion`); the wind,
 /// the elytra's (`SoundEvents.ELYTRA_FLYING`, looping, at the listener, on the block source),
 /// starts if it isn't playing, at a pitch of half the player's speed (0.5 to 2), and grows a
-/// step toward `max_volume`. A playing sound's pitch can't be changed (`API_GAPS.md`): it keeps
-/// the pitch it started with.
+/// step toward `max_volume`, updating its pitch on every push.
 fn enable_wind(host: &dyn ClientHost, motion: [f64; 3], max_volume: f32) {
     IN_CURRENT.set(true);
     let mut wind = WIND
         .get()
         .filter(|(s, _)| s.state(host) != Some(SoundState::Stopped));
+    let speed = motion.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let pitch = (speed * 0.5).clamp(0.5, 2.0) as f32;
     if wind.is_none() {
-        let speed = motion.iter().map(|v| v * v).sum::<f64>().sqrt();
-        let pitch = (speed * 0.5).clamp(0.5, 2.0) as f32;
         let mut play = SoundPlay::ui("minecraft:item.elytra.flying")
             .with_volume(WIND_START)
             .with_pitch(pitch)
@@ -137,6 +136,7 @@ fn enable_wind(host: &dyn ClientHost, motion: [f64; 3], max_volume: f32) {
         wind = host.play_local_sound(&play, 0).map(|s| (s, WIND_START));
     }
     if let Some((sound, volume)) = wind {
+        sound.set_pitch(host, pitch);
         let next = max_volume.min(volume + WIND_STEP);
         if next != volume {
             sound.fade(host, next, 1);
