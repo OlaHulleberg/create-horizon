@@ -230,6 +230,9 @@ pub(crate) fn use_valve_handle(
                 let _ = entity.merge_data(&mut *lv.host, kept);
             }
         }
+        // ValveHandleBlock.clicked keeps the entity; publish its cleared kinetic
+        // fields and the shafts' live state before a same-tick save.
+        super::persist::publish(lv);
         return Some(InteractionResult::Success);
     }
     let dim = lv.dim;

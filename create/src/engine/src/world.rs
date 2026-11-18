@@ -6360,6 +6360,85 @@ mod tests {
         states::clear_range();
     }
 
+    fn assert_recoloured_valve_reload(backwards: bool) {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        states::set_range(10, 3);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            [
+                ("create:shaft", [("axis", "y")].into_iter()),
+                ("create:copper_valve_handle", [("facing", "up")].into_iter()),
+                ("create:red_valve_handle", [("facing", "up")].into_iter()),
+            ]
+            .into_iter(),
+        ));
+        let positions = [[0, 7, 0], [0, 8, 0], [0, 6, 0]];
+        for (p, state) in positions.into_iter().zip([10, 11, 10]) {
+            w.block_changed(0, p, 0, state);
+            w.tick(0, &mut Vec::new());
+        }
+        assert!(w.use_valve(0, positions[1], backwards, -180));
+        w.tick_cranks(0);
+        w.tick(0, &mut Vec::new());
+        w.block_changed(0, positions[1], 11, 12);
+        let handle = w.saved_handle(0, positions[1]).unwrap();
+        let saved = positions.map(|p| w.dims[0].kinetics.saved_state(p, 0).unwrap());
+        // KineticBlockEntity.write after clearKineticInformation keeps Sequence,
+        // but writes Speed:0 and no Source/Network on the recoloured entity.
+        assert_eq!(saved[1].speed, 0.0);
+        assert_eq!(saved[1].source, None);
+        assert_eq!(saved[1].network, None);
+        assert!(saved[1].sequence.is_some());
+        w.column_unloaded(0, 0, 0);
+        for ((p, state), kinetic) in positions.into_iter().zip([10, 12, 10]).zip(saved) {
+            w.block_loaded(0, p, state);
+            if p == positions[1] {
+                w.restore_handle(0, p, handle);
+            }
+            assert!(w.dims[0].kinetics.restore_state(p, 0, kinetic));
+        }
+        w.tick_cranks(0);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(
+            w.dims[0].kinetics.sequence_limit(positions[2], 0, false),
+            Some(180.0)
+        );
+        // Java issue #69 checkpoint 223: the handle is the root at +/-32 RPM.
+        assert_eq!(
+            w.speed(0, positions[0]),
+            Some(if backwards { 32.0 } else { -32.0 })
+        );
+        assert_eq!(
+            w.dims[0]
+                .kinetics
+                .saved_state(positions[1], 0)
+                .unwrap()
+                .source,
+            None
+        );
+        assert_eq!(
+            w.dims[0]
+                .kinetics
+                .saved_state(positions[0], 0)
+                .unwrap()
+                .source
+                .unwrap()
+                .pos,
+            positions[1]
+        );
+        states::clear_range();
+    }
+
+    #[test]
+    fn recoloured_valve_reload_restores_forward_source_tree() {
+        assert_recoloured_valve_reload(false);
+    }
+
+    #[test]
+    fn recoloured_valve_reload_restores_reverse_source_tree() {
+        assert_recoloured_valve_reload(true);
+    }
+
     #[test]
     fn valve_same_tick_reload_keeps_owned_sequence() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());

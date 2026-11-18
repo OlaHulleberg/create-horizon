@@ -721,29 +721,30 @@ impl Kinetics {
                 if !self.nodes[id as usize].live || self.nodes[id as usize].stamp != stamp {
                     continue;
                 }
-                let source = self.nodes[id as usize].state.source;
-                // KineticBlockEntity.validateKinetics reads the source's theoretical speed.
-                if source.is_some()
-                    && (self.nodes[id as usize].state.net.is_none()
-                        || self.resolve_source(source).is_some_and(|i| {
-                            !self.nodes[i as usize].live
-                                || self.nodes[i as usize].state.theoretical == 0.0
-                        }))
-                {
-                    self.remove_source(id);
-                    self.dirty.push(id);
-                    let mut events = Vec::new();
-                    self.handle_removed(id, &mut events);
-                    self.pending_events.extend(events);
-                } else if source.is_none()
-                    && self.nodes[id as usize].part.generated == 0.0
-                    && self.nodes[id as usize].state.theoretical != 0.0
-                {
-                    self.change_speed(id, 0.0);
-                    self.dirty.push(id);
-                }
+                let mut events = Vec::new();
+                self.validate_kinetics(id, &mut events);
+                self.pending_events.extend(events);
                 self.scheduler.validate_later(self.now, id, stamp);
             }
+        }
+    }
+
+    /// KineticBlockEntity.validateKinetics, including its sourceless-generator rule.
+    fn validate_kinetics(&mut self, id: u32, events: &mut Vec<Event>) {
+        let source = self.nodes[id as usize].state.source;
+        if source.is_some() {
+            if self.nodes[id as usize].state.net.is_none() {
+                self.remove_source(id);
+            } else if self.resolve_source(source).is_some_and(|i| {
+                !self.nodes[i as usize].live || self.nodes[i as usize].state.theoretical == 0.0
+            }) {
+                self.remove_source(id);
+                self.handle_removed(id, events);
+            }
+        } else if self.nodes[id as usize].part.generated == 0.0
+            && self.nodes[id as usize].state.theoretical != 0.0
+        {
+            self.change_speed(id, 0.0);
         }
     }
 
@@ -1418,6 +1419,12 @@ impl Kinetics {
         {
             self.update_generated_rotation(id, events);
         }
+        // KineticBlockEntity.tick validates on its first callback: the Java
+        // constructor leaves validationCountdown at zero. Reuse Lifecycle so
+        // tick_base_through and solve cannot repeat initialization in this pass.
+        if self.nodes[id as usize].state.lifecycle.is_new() {
+            self.validate_kinetics(id, events);
+        }
         if self.nodes[id as usize].state.lifecycle.is_new() {
             self.scheduler
                 .validate_later(tick, id, self.nodes[id as usize].stamp);
@@ -1435,6 +1442,12 @@ impl Kinetics {
                 }
             }
             self.sync_network(sync);
+        }
+        // GeneratingKineticBlockEntity.tick follows the base callback, including
+        // its networkDirty update, before the registration walk visits the next entity.
+        if self.nodes[id as usize].state.reactivate_source {
+            self.update_generated_rotation(id, events);
+            self.nodes[id as usize].state.reactivate_source = false;
         }
         // ChainGearshiftBlockEntity.tick runs the base tick before analogSignalChanged.
         if let Some(modifier) = self.nodes[id as usize].state.chain_signal.take() {
@@ -1480,14 +1493,13 @@ impl Kinetics {
                 self.tick_base(id, self.now, events);
             }
         }
-        // Scheduled block attachments precede GeneratingKineticBlockEntity.tick.
-        for (id, stamp) in std::mem::take(&mut self.reactivation_due) {
+        // Keep only outstanding tickets, without allocating or visiting other nodes.
+        // A source dirtied after tick_base_through must keep the next pass active:
+        // its Lifecycle guard correctly prevents another callback in this pass.
+        self.reactivation_due.retain(|&(id, stamp)| {
             let n = &self.nodes[id as usize];
-            if n.live && n.stamp == stamp && n.state.reactivate_source {
-                self.nodes[id as usize].state.reactivate_source = false;
-                self.update_generated_rotation(id, events);
-            }
-        }
+            n.live && n.stamp == stamp && n.state.reactivate_source
+        });
         self.dirty.clear();
         let mut stats = SolveStats::default();
         self.base_pass += 1;
@@ -1587,6 +1599,24 @@ fn controls(controller: &Part, cog: &Part) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_changed_after_base_callback_waits_for_next_pass() {
+        let mut k = Kinetics::new();
+        let pos = [0, 0, 0];
+        k.set(pos, 0, motor(Dir::East, 16.0));
+        k.tick_base_through(pos);
+        assert_eq!(k.speed(pos, 0), Some(16.0));
+        // KineticBlockEntity.switchToBlockState schedules generator reactivation.
+        // Its base callback already ran, so Java waits until the next entity tick.
+        k.switch_block_state(pos, false, true);
+        k.advance();
+        solve(&mut k);
+        assert_eq!(k.speed(pos, 0), Some(0.0));
+        k.advance();
+        solve(&mut k);
+        assert_eq!(k.speed(pos, 0), Some(16.0));
+    }
 
     #[test]
     fn network_dirty_membership_is_cancelled_before_slot_reuse() {
