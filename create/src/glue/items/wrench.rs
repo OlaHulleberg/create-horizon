@@ -96,6 +96,13 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
         return Some(InteractionResult::Fail);
     }
     if let Some(next) = turned(&lv, pos, clicked) {
+        // IWrenchable.updateAfterWrenched fits the rotated state before switching it.
+        let Ok(next) = lv
+            .level
+            .update_from_neighbour_shapes(&mut *lv.host, pos, next)
+        else {
+            return Some(InteractionResult::Pass);
+        };
         switch_state(&mut lv, pos, next);
         rotate_sound(&mut lv, pos);
         if matches!(block, Block::RedstoneContact | Block::ElevatorContact) {
