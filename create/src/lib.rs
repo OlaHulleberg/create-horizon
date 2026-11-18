@@ -261,6 +261,23 @@ impl Hooks for Create {
         glue::equipment::grip_pose(host, event);
     }
 
+    fn render_frame_pre(
+        &self,
+        _host: &mut dyn ClientHost,
+        _event: &mut mod_api::RenderFramePreEvent,
+    ) {
+        glue::equipment::grip_frame();
+    }
+
+    fn render_hand(
+        &self,
+        _host: &dyn ClientHost,
+        event: &mut mod_api::RenderHandEvent<'_, '_>,
+    ) -> Flow {
+        glue::equipment::grip_hand(event.render);
+        Flow::Continue
+    }
+
     fn register_special_model_renderer(
         &self,
         _context: &RegistrationContext,
@@ -426,9 +443,8 @@ impl Hooks for Create {
     fn mouse_button_post(
         &self,
         host: &mut dyn ClientHost,
-        event: &mut mod_api::MouseButtonPostEvent,
+        _event: &mut mod_api::MouseButtonPostEvent,
     ) {
-        glue::equipment::grip_swing(host, event);
         for s in SUBSYSTEMS {
             s.input_handled(host);
         }
