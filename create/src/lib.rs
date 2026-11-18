@@ -119,17 +119,18 @@ impl Hooks for Create {
         glue::logistics::block_step_on(event);
     }
 
-    /// Hot: every committed block change on the server. Two lookups, then return, for any
-    /// change that is not Create's.
+    /// Every committed server block change: vanilla changes notify adjacent
+    /// fluid pipes; Create changes also reach the other subsystems.
     fn block_changed(&self, _level: &dyn LevelHost, event: &mut BlockChangedEvent) {
         let (old, new) = (states::id_or_none(event.old), states::id_or_none(event.new));
-        if old == 0 && new == 0 {
-            return;
-        }
         let Some(dim) = world::level_index(event.dimension.key().id()) else {
             return;
         };
         let pos = [event.pos.x, event.pos.y, event.pos.z];
+        if old == 0 && new == 0 {
+            world::with_world(|w| w.fluid_neighbour_changed(dim, pos));
+            return;
+        }
         for s in SUBSYSTEMS {
             s.block_changed(dim, pos, old, new);
         }
@@ -143,6 +144,21 @@ impl Hooks for Create {
             Flow::Cancel
         } else {
             Flow::Continue
+        }
+    }
+
+    fn level_tick_pre(&self, host: HostSide, event: &mut mod_api::LevelTickPreEvent) {
+        let HostSide::Server(host) = host else {
+            return;
+        };
+        if !world::running() {
+            return;
+        }
+        let Some(dimension) = event.level.dimension().id(&*host) else {
+            return;
+        };
+        if let Some(dim) = world::level_index(&dimension) {
+            world::with_world(|w| w.dims[dim].fluid_transport.begin_tick());
         }
     }
 

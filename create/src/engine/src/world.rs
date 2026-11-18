@@ -1360,6 +1360,25 @@ impl CreateWorld {
             .switch_block_state(pos, equivalent, is_generating(a));
     }
 
+    /// A host block change outside Create's state table still notifies adjacent
+    /// pipes. Admission uses the changed block's current state during preparation.
+    pub fn fluid_neighbour_changed(&mut self, dim: usize, pos: [i32; 3]) {
+        if crate::kinetics::Dir::ALL.into_iter().any(|side| {
+            let o = side.offset();
+            let p = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+            self.dims[dim]
+                .states
+                .get(&p)
+                .and_then(|state| self.table.get(*state))
+                .is_some_and(|(block, _)| is_fluid_block(block))
+        }) {
+            self.dims[dim]
+                .fluid_transport
+                .changed
+                .push(crate::fluids::runtime::Change::Block(pos));
+        }
+    }
+
     /// A committed block change. The first lines are the hot path: two
     /// range tests that miss for every non-Create block.
     #[inline]
@@ -4834,7 +4853,11 @@ impl CreateWorld {
 
     /// KineticBlockEntity.tick precedes its FluidTransportBehaviour tick.
     pub fn fluid_transport_base_tick(&mut self, dim: usize, pos: [i32; 3]) {
-        self.dims[dim].kinetics.tick_registered_base_through(pos);
+        let d = &mut self.dims[dim];
+        let mut prefix = d.block_entities.walk_through(View::All, pos);
+        while let Some(p) = prefix.next(&d.block_entities) {
+            d.kinetics.tick_registered_base(p);
+        }
     }
 
     /// Pipe behaviours tick in Level.blockEntityTickers registration order.
@@ -7071,6 +7094,50 @@ mod tests {
         assert_eq!(w.dims[0].kinetics.take_saved_changes(), [pos].into());
         assert!(w.tick_fluid_entities(0, |_| Some(true)).is_empty());
         assert!(w.dims[0].kinetics.take_saved_changes().is_empty());
+        states::clear_range();
+    }
+
+    #[test]
+    fn ordinary_pipe_turn_runs_the_earlier_kinetic_base_prefix() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        states::set_range(10, 3);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            [
+                ("create:creative_motor", vec![("facing", "east")]),
+                ("create:shaft", vec![("axis", "x")]),
+                (
+                    "create:fluid_pipe",
+                    vec![("east", "true"), ("west", "true")],
+                ),
+            ]
+            .into_iter()
+            .map(|(n, p)| (n, p.into_iter())),
+        ));
+        let drive = [1, 0, 0];
+        let pipe = [9, 0, 0];
+        w.block_changed(0, [0, 0, 0], 0, 10);
+        w.block_changed(0, drive, 0, 11);
+        w.block_changed(0, pipe, 0, 12);
+        w.set_settings(
+            0,
+            [0, 0, 0],
+            10,
+            Settings {
+                motor_rpm: 64.,
+                ..Settings::default()
+            },
+        );
+        w.tick(0, &mut Vec::new());
+        w.dims[0].kinetics.change_block_state(
+            drive,
+            0,
+            crate::kinetics::Part::shaft(crate::kinetics::Axis::X),
+            false,
+        );
+        assert_eq!(w.speed(0, drive), Some(0.));
+        w.fluid_transport_base_tick(0, pipe);
+        assert_eq!(w.speed(0, drive), Some(64.));
         states::clear_range();
     }
 

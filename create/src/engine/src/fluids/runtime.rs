@@ -107,6 +107,7 @@ pub struct Transport {
     pub pipes: HashMap<Pos, FluidTransportBehaviour>,
     pub pumps: HashMap<Pos, Pump>,
     pub changed: Vec<Change>,
+    scheduled: Vec<Change>,
 }
 pub fn sides(cell: Cell) -> u8 {
     match cell {
@@ -209,12 +210,34 @@ impl Transport {
             }
         }
     }
+    /// FluidPipeBlock.neighborChanged/onPlace schedule a block tick with delay
+    /// one. Freeze the due callbacks before this level's scheduled fluid ticks;
+    /// block changes made during those ticks belong to the next level tick.
+    pub fn begin_tick(&mut self) {
+        self.changed.retain(|change| {
+            if matches!(change, Change::Block(_)) {
+                self.scheduled.push(*change);
+                false
+            } else {
+                true
+            }
+        });
+    }
+
     pub fn prepare(&mut self, host: &impl Host) {
         self.pipes
             .retain(|p, _| sides(host.cell(*p, Dir::Down)) != 0);
         self.pumps
             .retain(|p, _| matches!(host.cell(*p, Dir::Down), Cell::Pump(_)));
-        let changed = std::mem::take(&mut self.changed);
+        let mut changed = std::mem::take(&mut self.scheduled);
+        self.changed.retain(|change| {
+            if matches!(change, Change::Pipe(_)) {
+                changed.push(*change);
+                false
+            } else {
+                true
+            }
+        });
         for change in changed {
             let pos = match change {
                 Change::Pipe(p) | Change::Block(p) => p,
@@ -409,20 +432,35 @@ impl Transport {
         };
         self.connection_mut(face).unwrap().set_source(source);
     }
-    pub fn tick_pipe(&mut self, host: &mut impl Host, pos: Pos) -> Option<(Fluid, Fluid)> {
-        if let Cell::Pump(f) = host.cell(pos, Dir::Down)
-            && self
-                .pumps
-                .get(&pos)
-                .is_some_and(|p| p.speed.abs() != host.speed(pos).abs())
-        {
-            self.propagate_changed_pipe(host, step(pos, f));
-            self.propagate_changed_pipe(host, step(pos, f.opposite()));
-            self.pipes
-                .get_mut(&pos)?
-                .wipe_pressure(sides(Cell::Pump(f)));
-            self.pumps.get_mut(&pos)?.pending = 3;
+    /// PumpBlockEntity.onSpeedChanged invokes updatePressureChange immediately,
+    /// including when an earlier kinetic entity attaches before this pipe's turn.
+    fn refresh_pump_pressure(&mut self, host: &impl Host) {
+        let changed: Vec<_> = self
+            .pumps
+            .iter()
+            .filter_map(|(pos, pump)| {
+                let speed = host.speed(*pos).abs();
+                (pump.speed.abs() != speed).then_some((*pos, speed))
+            })
+            .collect();
+        for (pos, speed) in changed {
+            let Cell::Pump(facing) = host.cell(pos, Dir::Down) else {
+                continue;
+            };
+            self.propagate_changed_pipe(host, step(pos, facing));
+            self.propagate_changed_pipe(host, step(pos, facing.opposite()));
+            if let Some(pipe) = self.pipes.get_mut(&pos) {
+                pipe.wipe_pressure(sides(Cell::Pump(facing)));
+            }
+            if let Some(pump) = self.pumps.get_mut(&pos) {
+                pump.pending = 3;
+                pump.speed = speed;
+            }
         }
+    }
+
+    pub fn tick_pipe(&mut self, host: &mut impl Host, pos: Pos) -> Option<(Fluid, Fluid)> {
+        self.refresh_pump_pressure(host);
         let collision = self.tick_behaviour(host, pos);
         if let Cell::Pump(f) = host.cell(pos, Dir::Down) {
             let speed = host.speed(pos).abs();
@@ -758,6 +796,7 @@ mod tests {
         cells: HashMap<Pos, Cell>,
         tanks: HashMap<Pos, (Fluid, u32)>,
         kept: u32,
+        rpm: Option<f32>,
     }
     impl Host for World {
         fn cell(&self, p: Pos, _: Dir) -> Cell {
@@ -767,7 +806,7 @@ mod tests {
             0
         }
         fn speed(&self, _: Pos) -> f32 {
-            32.
+            self.rpm.unwrap_or(32.)
         }
         fn tank_fluids(&self, face: Face) -> Vec<Fluid> {
             self.tanks
@@ -823,6 +862,56 @@ mod tests {
         transport
     }
     #[test]
+    fn pump_speed_callbacks_wipe_pressure_before_an_earlier_pipe_turn() {
+        let mut world = World::default();
+        world.cells.insert([0, 0, 0], Cell::Pump(Dir::East));
+        world
+            .cells
+            .insert([-1, 0, 0], Cell::Pipe(Dir::East.bit() | Dir::West.bit()));
+        world.cells.insert([-2, 0, 0], Cell::Open);
+        let mut transport = register(&world);
+        transport.distribute_pressure_to(&world, [0, 0, 0], Dir::West, true);
+        transport.pumps.get_mut(&[0, 0, 0]).unwrap().speed = 32.;
+        let face = Face {
+            pos: [-1, 0, 0],
+            side: Dir::West,
+        };
+        assert_eq!(transport.connection(face).unwrap().pressure(), [32., 0.]);
+        world.rpm = Some(0.);
+        transport.tick_pipe(&mut world, face.pos);
+        assert_eq!(transport.connection(face).unwrap().pressure(), [0., 0.]);
+        assert_eq!(transport.pumps[&[0, 0, 0]].pending, 3);
+    }
+
+    #[test]
+    fn scheduled_fluid_changes_invalidate_on_the_next_block_tick() {
+        let mut world = World::default();
+        world
+            .cells
+            .insert([0, 0, 0], Cell::Pipe(Dir::East.bit() | Dir::West.bit()));
+        let mut transport = register(&world);
+        let face = Face {
+            pos: [0, 0, 0],
+            side: Dir::West,
+        };
+        transport
+            .connection_mut(face)
+            .unwrap()
+            .add_pressure(true, 32.);
+        transport.pipes.get_mut(&face.pos).unwrap().phase = UpdatePhase::Idle;
+        transport.begin_tick();
+        // A LiquidBlock's scheduled tick changes it to air during this tick.
+        transport.changed.push(Change::Block([-1, 0, 0]));
+        transport.prepare(&world);
+        assert_eq!(transport.connection(face).unwrap().pressure(), [32., 0.]);
+        assert_eq!(transport.pipes[&face.pos].phase, UpdatePhase::Idle);
+        transport.begin_tick();
+        transport.prepare(&world);
+        assert_eq!(transport.connection(face).unwrap().pressure(), [0., 0.]);
+        assert_eq!(transport.pipes[&face.pos].phase, UpdatePhase::WaitForPumps);
+    }
+
+    #[test]
     fn a_valves_shaft_neighbour_does_not_invalidate_its_fluid_axis() {
         let mut world = World::default();
         world
@@ -838,6 +927,7 @@ mod tests {
             .unwrap()
             .add_pressure(true, 32.);
         transport.changed.push(Change::Block([0, 1, 0]));
+        transport.begin_tick();
         transport.prepare(&world);
         assert_eq!(transport.pipes[&[0, 0, 0]].phase, UpdatePhase::Idle);
         assert_eq!(
