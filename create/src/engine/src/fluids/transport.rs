@@ -5,14 +5,51 @@
 use crate::kinetics::Dir;
 use crate::open_end::OpenEnd;
 use crate::tank::Fluid;
+use std::{cell::RefCell, rc::Rc};
 
 /// `FlowSource`: only open endpoints carry persistent state.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Source {
-    Open(OpenEnd),
+    Open(OpenSource),
     Handler,
     OtherPipe,
     Blocked,
+}
+
+/// The same OpenEndedPipe can be retained by previousSource and a FluidNetwork.
+/// Sharing its tank preserves Java's source identity through pressure resets.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OpenSource(Rc<RefCell<OpenEnd>>);
+impl OpenSource {
+    pub fn state(&self) -> OpenEnd {
+        *self.0.borrow()
+    }
+    pub fn identity(&self) -> usize {
+        Rc::as_ptr(&self.0) as usize
+    }
+    pub fn drain(
+        &self,
+        space: &mut impl crate::open_end::Space,
+        n: u32,
+        only: Option<Fluid>,
+        execute: bool,
+    ) -> Option<(Fluid, u32)> {
+        self.0.borrow_mut().drain(space, n, only, execute)
+    }
+    pub fn fill(
+        &self,
+        space: &mut impl crate::open_end::Space,
+        fluid: Fluid,
+        n: u32,
+        execute: bool,
+    ) -> u32 {
+        self.0.borrow_mut().fill(space, fluid, n, execute)
+    }
+}
+impl Source {
+    pub fn open(end: OpenEnd) -> Self {
+        Self::Open(OpenSource(Rc::new(RefCell::new(end))))
+    }
 }
 
 /// `PipeConnection.Flow`; progress belongs to this half-pipe, not to a pump clock.
@@ -55,10 +92,30 @@ impl PipeConnection {
     /// Open-ended source retained across wipePressure for reuse. Observers must
     /// count this tank even during WAIT_FOR_PUMPS, as Java's previousSource does.
     pub fn open_end(&self) -> Option<OpenEnd> {
-        match self.source.or(self.previous_source) {
-            Some(Source::Open(e)) => Some(e),
-            _ => None,
+        self.open_ends().into_iter().next()
+    }
+
+    /// Deduplicate source, previousSource and the network's cached handler by
+    /// identity, as a Java observation must do for shared OpenEndedPipe objects.
+    pub fn open_ends(&self) -> Vec<OpenEnd> {
+        let mut seen = Vec::new();
+        let mut out = Vec::new();
+        for source in [
+            self.source.as_ref(),
+            self.previous_source.as_ref(),
+            self.network.as_ref().and_then(|n| n.cached_source()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Source::Open(open) = source
+                && !seen.contains(&open.identity())
+            {
+                seen.push(open.identity());
+                out.push(open.state());
+            }
         }
+        out
     }
 
     pub fn set_pressure(&mut self, pressure: [f32; 2]) {
@@ -90,14 +147,14 @@ impl PipeConnection {
             n.reset();
         }
         if self.source.is_some() {
-            self.previous_source = self.source;
+            self.previous_source = self.source.clone();
         }
         self.source = None;
     }
 
     /// `determineSource` reuses a previous open end when this side is still open.
     pub fn set_source(&mut self, source: Source) {
-        self.source = Some(match (source, self.previous_source) {
+        self.source = Some(match (source, self.previous_source.clone()) {
             (Source::Open(_), Some(previous @ Source::Open(_))) => previous,
             (source, _) => source,
         });
@@ -192,8 +249,8 @@ impl PipeConnection {
     pub fn write(&self) -> SavedConnection {
         SavedConnection {
             pressure: self.has_pressure().then_some(self.pressure),
-            open_end: match self.source {
-                Some(Source::Open(end)) => Some(end),
+            open_end: match &self.source {
+                Some(Source::Open(end)) => Some(end.state()),
                 _ => None,
             },
             flow: self.flow.map(|f| SavedFlow {
@@ -207,7 +264,7 @@ impl PipeConnection {
     /// `deserializeNBT` clears absent fields and never restores runtime sources.
     pub fn read(&mut self, saved: SavedConnection) {
         self.pressure = saved.pressure.unwrap_or_default();
-        self.source = saved.open_end.map(Source::Open);
+        self.source = saved.open_end.map(Source::open);
         self.flow = saved.flow.map(|f| Flow {
             fluid: f.fluid,
             inbound: f.inbound,
@@ -272,49 +329,6 @@ impl FluidTransportBehaviour {
         }
     }
 
-    /// Layer II of `FluidTransportBehaviour.tick`. Source discovery must precede
-    /// this call. External inputs are already filtered by canPullFluidFrom.
-    /// Returns the two colliding fluids for the world's reaction handler.
-    pub fn tick(&mut self, external: impl Fn(Dir) -> Option<Fluid>) -> Option<(Fluid, Fluid)> {
-        if self.phase == UpdatePhase::WaitForPumps {
-            self.phase = UpdatePhase::FlipFlows;
-            return None;
-        }
-        for (_, c) in &mut self.interfaces {
-            c.flip_flows();
-        }
-        if self.phase == UpdatePhase::FlipFlows {
-            self.phase = UpdatePhase::Idle;
-            return None;
-        }
-        let mut available = None;
-        let mut single = None;
-        for (side, c) in &self.interfaces {
-            if let Some(fluid) = c.provided_fluid(true) {
-                match available {
-                    None => {
-                        available = Some(fluid);
-                        single = Some(*side);
-                    }
-                    Some(previous) if previous == fluid => single = None,
-                    Some(previous) => return Some((previous, fluid)),
-                }
-            }
-        }
-        for (side, c) in &mut self.interfaces {
-            let internal = if single == Some(*side) {
-                None
-            } else {
-                available
-            };
-            c.manage_flows(internal, external(*side));
-        }
-        for (_, c) in &mut self.interfaces {
-            c.tick_flow_progress();
-        }
-        None
-    }
-
     pub fn write(&self) -> Vec<(Dir, SavedConnection)> {
         self.interfaces
             .iter()
@@ -347,31 +361,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn behaviour_waits_for_pumps_and_does_not_feed_a_lone_input_to_itself() {
-        let mut b = FluidTransportBehaviour::new(Dir::East.bit() | Dir::West.bit());
-        for (side, c) in &mut b.interfaces {
-            c.set_source(Source::OtherPipe);
-            c.add_pressure(*side == Dir::West, 128.0);
-        }
-        let external = |side| (side == Dir::West).then_some(Fluid::Water);
-        b.tick(external);
-        assert!(b.interfaces.iter().all(|(_, c)| c.flow.is_none()));
-        b.tick(external);
-        assert!(b.interfaces.iter().all(|(_, c)| c.flow.is_none()));
-        b.tick(external);
-        assert_eq!(
-            b.connection(Dir::West).unwrap().provided_fluid(true),
-            Some(Fluid::Water)
-        );
-        assert!(b.connection(Dir::East).unwrap().flow.is_none());
-        b.tick(external);
-        assert_eq!(
-            b.connection(Dir::East).unwrap().provided_fluid(false),
-            Some(Fluid::Water)
-        );
-    }
-
-    #[test]
     fn pressure_accumulates_and_changes_speed_mid_flow() {
         let mut c = PipeConnection::default();
         c.set_source(Source::Handler);
@@ -395,14 +384,14 @@ mod tests {
             tank: Some((Fluid::Water, 500)),
             pulling: true,
         };
-        c.set_source(Source::Open(end));
+        c.set_source(Source::open(end));
         c.add_pressure(true, 32.0);
         c.manage_flows(None, Some(Fluid::Water));
         c.wipe_pressure();
         assert_eq!(c.pressure(), [0.0; 2]);
         assert!(c.flow.is_some());
-        c.set_source(Source::Open(OpenEnd::default()));
-        assert_eq!(c.source, Some(Source::Open(end)));
+        c.set_source(Source::open(OpenEnd::default()));
+        assert_eq!(c.source, Some(Source::open(end)));
         assert!(c.manage_flows(None, Some(Fluid::Water)));
         assert!(c.flow.is_none());
     }

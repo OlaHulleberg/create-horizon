@@ -37,7 +37,18 @@ pub fn fill(tanks: &mut [Option<(Fluid, u32)>; 2], fluid: Fluid, amount: u32) ->
 
 /// Takes up to `amount` from the first non-empty tank: the fluid and how much.
 pub fn drain(tanks: &mut [Option<(Fluid, u32)>; 2], amount: u32) -> Option<(Fluid, u32)> {
-    let i = tanks.iter().position(Option::is_some)?;
+    drain_matching(tanks, amount, None)
+}
+
+/// Fluid capability drain with an optional requested fluid (FlowSource's filter fallback).
+pub fn drain_matching(
+    tanks: &mut [Option<(Fluid, u32)>; 2],
+    amount: u32,
+    only: Option<Fluid>,
+) -> Option<(Fluid, u32)> {
+    let i = tanks
+        .iter()
+        .position(|t| t.is_some_and(|(f, _)| only.is_none_or(|want| want == f)))?;
     let (fluid, have) = tanks[i]?;
     let out = amount.min(have);
     tanks[i] = (have > out).then_some((fluid, have - out));
@@ -509,5 +520,22 @@ mod tests {
             }
         }
         panic!("the cycle never ended");
+    }
+}
+
+#[cfg(test)]
+mod flow_source_tests {
+    use super::*;
+    #[test]
+    fn source_filter_can_extract_the_second_output_fluid() {
+        let mut outputs = [Some((Fluid::Water, 500)), Some((Fluid::Lava, 250))];
+        assert_eq!(
+            drain_matching(&mut outputs, 16, Some(Fluid::Lava)),
+            Some((Fluid::Lava, 16))
+        );
+        assert_eq!(
+            outputs,
+            [Some((Fluid::Water, 500)), Some((Fluid::Lava, 234))]
+        );
     }
 }

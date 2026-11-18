@@ -290,7 +290,7 @@ fn encase(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block) {
         .map(|d| (dir_name(d), flag(sides & d.bit() != 0)))
         .collect();
     if let Some(next) = state_with(lv, "create:encased_fluid_pipe", &props) {
-        lv.set_state(pos, next, super::all());
+        super::pipes::replace_pipe_state(lv, pos, next);
     }
     let at = pos.map(|v| f64::from(v) + 0.5);
     lv.level.play_sound(

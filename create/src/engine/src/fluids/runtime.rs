@@ -28,6 +28,7 @@ pub trait Host {
         true
     }
     fn speed(&self, pos: Pos) -> f32;
+    fn time(&self) -> i64;
     fn offer(
         &mut self,
         face: Face,
@@ -35,7 +36,7 @@ pub trait Host {
         amount: u32,
         fluid: Option<Fluid>,
     ) -> Option<(Fluid, u32)>;
-    fn drain(&mut self, face: Face, source: &mut Source, fluid: Fluid, amount: u32);
+    fn drain(&mut self, face: Face, source: &mut Source, fluid: Fluid, amount: u32) -> u32;
     fn fill(
         &mut self,
         face: Face,
@@ -361,6 +362,26 @@ impl Transport {
                 .wipe_pressure(sides(Cell::Pump(f)));
             self.pumps.get_mut(&pos)?.pending = 3;
         }
+        let collision = self.tick_behaviour(host, pos);
+        if let Cell::Pump(f) = host.cell(pos, Dir::Down) {
+            let speed = host.speed(pos).abs();
+            for (d, c) in &mut self.pipes.get_mut(&pos)?.interfaces {
+                c.set_pressure(if *d == f { [0., speed] } else { [speed, 0.] });
+            }
+            let p = self.pumps.entry(pos).or_default();
+            let pending = p.pending;
+            p.pending = 0;
+            p.speed = speed;
+            for (flag, side, pull) in [(1, f, false), (2, f.opposite(), true)] {
+                if pending & flag != 0 {
+                    self.distribute_pressure_to(host, pos, side, pull);
+                }
+            }
+        }
+        collision
+    }
+
+    fn tick_behaviour(&mut self, host: &mut impl Host, pos: Pos) -> Option<(Fluid, Fluid)> {
         let phase = self.pipes.get(&pos)?.phase;
         if phase == UpdatePhase::WaitForPumps {
             self.pipes.get_mut(&pos)?.phase = UpdatePhase::FlipFlows;
@@ -402,7 +423,7 @@ impl Transport {
                         connection.flow.map_or(connection.pressure()[0] != 0., |f| {
                             f.inbound || connection.compare_pressure() < 0.
                         });
-                    let source = self.connection(face)?.source;
+                    let source = self.connection(face)?.source.clone();
                     let external = if !needs_external {
                         None
                     } else {
@@ -411,7 +432,11 @@ impl Transport {
                                 .connection(face.opposite())
                                 .and_then(|c| c.provided_fluid(false)),
                             Some(mut source @ (Source::Handler | Source::Open(_))) => {
-                                let fluid = host.offer(face, &mut source, 1, None).map(|(f, _)| f);
+                                let only = match host.cell(pos, face.side) {
+                                    Cell::Axis(_, Gate::Only(f)) => Some(f),
+                                    _ => None,
+                                };
+                                let fluid = host.offer(face, &mut source, 1, only).map(|(f, _)| f);
                                 self.connection_mut(face)?.source = Some(source);
                                 fluid
                             }
@@ -424,17 +449,20 @@ impl Transport {
                         _ => true,
                     };
                     let before = self.connection(face)?.flow;
-                    self.connection_mut(face)?
+                    let changed = self
+                        .connection_mut(face)?
                         .manage_flows(internal, external.filter(|_| allowed));
                     let after = self.connection(face)?.flow;
-                    if before.is_some_and(|f| after.is_some_and(|a| a.inbound != f.inbound)) {
+                    if changed && before.is_some() && after.is_some() {
                         self.reset_affected_networks(face);
                     }
                     let c = self.connection_mut(face)?;
                     let endpoint = matches!(c.source, Some(Source::Handler | Source::Open(_)));
-                    if c.flow.is_some_and(|f| f.inbound) && endpoint {
-                        let mut network =
-                            c.network.take().unwrap_or_else(|| FluidNetwork::new(face));
+                    if !changed && c.flow.is_some_and(|f| f.inbound) && endpoint {
+                        let mut network = c
+                            .network
+                            .take()
+                            .unwrap_or_else(|| FluidNetwork::new(face, c.source.clone().unwrap()));
                         network.tick(self, host);
                         self.connection_mut(face)?.network = Some(network);
                     } else {
@@ -443,21 +471,6 @@ impl Transport {
                 }
                 for face in faces {
                     self.connection_mut(face)?.tick_flow_progress();
-                }
-            }
-        }
-        if let Cell::Pump(f) = host.cell(pos, Dir::Down) {
-            let speed = host.speed(pos).abs();
-            for (d, c) in &mut self.pipes.get_mut(&pos)?.interfaces {
-                c.set_pressure(if *d == f { [0., speed] } else { [speed, 0.] });
-            }
-            let p = self.pumps.entry(pos).or_default();
-            let pending = p.pending;
-            p.pending = 0;
-            p.speed = speed;
-            for (flag, side, pull) in [(1, f, false), (2, f.opposite(), true)] {
-                if pending & flag != 0 {
-                    self.distribute_pressure_to(host, pos, side, pull);
                 }
             }
         }
@@ -474,11 +487,13 @@ pub struct FluidNetwork {
     frontier: Vec<Face>,
     visited: HashSet<Pos>,
     fluid: Option<Fluid>,
-    targets: Vec<Face>,
+    targets: Vec<(Face, Source)>,
+    source_supplier: Source,
+    source: Option<Source>,
     transfer_speed: u32,
 }
 impl FluidNetwork {
-    pub fn new(start: Face) -> Self {
+    pub fn new(start: Face, source_supplier: Source) -> Self {
         let mut n = Self {
             start,
             pause: 0,
@@ -488,9 +503,14 @@ impl FluidNetwork {
             fluid: None,
             targets: Vec::new(),
             transfer_speed: 0,
+            source_supplier,
+            source: None,
         };
         n.reset();
         n
+    }
+    pub fn cached_source(&self) -> Option<&Source> {
+        self.source.as_ref()
     }
     pub fn reset(&mut self) {
         self.pause = 2;
@@ -576,13 +596,13 @@ impl FluidNetwork {
                         continue;
                     }
                     world.determine_source(host, adjacent);
-                    let source = world.connection(adjacent).and_then(|c| c.source);
+                    let source = world.connection(adjacent).and_then(|c| c.source.clone());
                     if source.is_none() {
                         remove = false;
                         continue;
                     }
                     if matches!(source, Some(Source::Handler | Source::Open(_))) {
-                        self.targets.push(adjacent);
+                        self.targets.push((adjacent, source.unwrap()));
                         continue;
                     }
                     if self.visited.insert(adjacent.connected()) {
@@ -598,72 +618,71 @@ impl FluidNetwork {
                 break;
             }
         }
+        if self.source.is_none() {
+            self.source = Some(self.source_supplier.clone());
+        }
         if !self.frontier.is_empty() {
             host.keep_alive(self.start);
+        }
+        if self.targets.is_empty() {
+            return;
+        }
+        if host.time() % 40 == 0 {
+            for (face, source) in &mut self.targets {
+                if let Some(current) = world.connection(*face).and_then(|c| c.source.clone())
+                    && matches!(&current, Source::Handler | Source::Open(_))
+                {
+                    *source = current;
+                }
+            }
         }
         let Some(fluid) = self.fluid else {
             return;
         };
-        if self.targets.is_empty() {
-            return;
-        }
-        let Some(mut source) = world.connection(self.start).and_then(|c| c.source) else {
-            return;
-        };
-        let Some((offered, n)) =
-            host.offer(self.start, &mut source, self.transfer_speed, Some(fluid))
+        let source = self.source.as_mut().unwrap();
+        let Some((offered, n)) = host.offer(self.start, source, self.transfer_speed, Some(fluid))
         else {
             return;
         };
-        world.connection_mut(self.start).unwrap().source = Some(source);
         if offered != fluid {
             return;
         }
         let mut amount = n;
         for execute in [false, true] {
-            let mut left = amount;
+            let mut left = if execute {
+                host.drain(self.start, source, fluid, amount)
+            } else {
+                amount
+            };
             let mut outputs = self.targets.clone();
             #[derive(Clone, Copy, PartialEq, Eq, Hash)]
             enum Capability {
-                Open(Face),
+                Open(usize),
                 Handler(Pos),
             }
             let mut accumulated = HashMap::<Capability, u32>::new();
             while !outputs.is_empty() && left > 0 {
                 let divided = left / outputs.len() as u32;
                 let mut remainder = left % outputs.len() as u32;
-                outputs.retain(|face| {
+                outputs.retain_mut(|(face, target)| {
                     let give = divided + u32::from(remainder > 0);
                     remainder = remainder.saturating_sub(1);
-                    let Some(mut source) = world.connection(*face).and_then(|c| c.source) else {
-                        return false;
-                    };
-                    let identity = if matches!(source, Source::Open(_)) {
-                        Capability::Open(*face)
-                    } else {
-                        Capability::Handler(host.identity(*face))
+                    let identity = match target {
+                        Source::Open(open) => Capability::Open(open.identity()),
+                        _ => Capability::Handler(host.identity(*face)),
                     };
                     let previous = if execute {
                         0
                     } else {
                         *accumulated.get(&identity).unwrap_or(&0)
                     };
-                    let filled = host.fill(*face, &mut source, fluid, give + previous, execute);
-                    if let Some(c) = world.connection_mut(*face) {
-                        c.source = Some(source);
-                    }
+                    let filled = host.fill(*face, target, fluid, give + previous, execute);
                     accumulated.insert(identity, filled);
                     left = left.saturating_sub(filled.saturating_sub(previous));
                     filled >= give + previous
                 });
             }
-            if execute {
-                if let Some(c) = world.connection_mut(self.start)
-                    && let Some(s) = &mut c.source
-                {
-                    host.drain(self.start, s, fluid, amount);
-                }
-            } else {
+            if !execute {
                 amount -= left;
             }
         }
@@ -683,6 +702,9 @@ mod tests {
         fn cell(&self, p: Pos, _: Dir) -> Cell {
             self.cells.get(&p).copied().unwrap_or(Cell::Solid)
         }
+        fn time(&self) -> i64 {
+            0
+        }
         fn speed(&self, _: Pos) -> f32 {
             32.
         }
@@ -699,8 +721,11 @@ mod tests {
                 .filter(|(f, n)| *n > 0 && fluid.is_none_or(|wanted| wanted == *f))
                 .map(|(f, k)| (f, k.min(n)))
         }
-        fn drain(&mut self, f: Face, _: &mut Source, _: Fluid, n: u32) {
-            self.tanks.get_mut(&f.connected()).unwrap().1 -= n;
+        fn drain(&mut self, f: Face, _: &mut Source, _: Fluid, n: u32) -> u32 {
+            let tank = self.tanks.get_mut(&f.connected()).unwrap();
+            let took = n.min(tank.1);
+            tank.1 -= took;
+            took
         }
         fn fill(&mut self, f: Face, _: &mut Source, fluid: Fluid, n: u32, execute: bool) -> u32 {
             let t = self.tanks.entry(f.connected()).or_insert((fluid, 0));
@@ -721,6 +746,113 @@ mod tests {
         }
         transport
     }
+    #[test]
+    fn a_lone_input_cannot_supply_its_own_outward_flow() {
+        let mut host = World::default();
+        host.cells.extend([
+            ([-1, 0, 0], Cell::Tank),
+            ([0, 0, 0], Cell::Pipe(Dir::West.bit())),
+        ]);
+        host.tanks.insert([-1, 0, 0], (Fluid::Water, 1000));
+        let mut transport = register(&host);
+        let pipe = transport.pipes.get_mut(&[0, 0, 0]).unwrap();
+        pipe.phase = UpdatePhase::Idle;
+        let c = pipe.connection(Dir::West).unwrap();
+        c.set_pressure([32., 64.]);
+        c.flow = Some(super::super::transport::Flow {
+            fluid: Fluid::Water,
+            inbound: true,
+            progress: 1.,
+            complete: true,
+        });
+        transport.tick_pipe(&mut host, [0, 0, 0]);
+        assert!(
+            transport
+                .connection(Face {
+                    pos: [0, 0, 0],
+                    side: Dir::West
+                })
+                .unwrap()
+                .flow
+                .unwrap()
+                .inbound
+        );
+    }
+
+    #[test]
+    fn network_source_and_previous_source_share_one_open_tank_across_resets() {
+        let face = Face {
+            pos: [0, 0, 0],
+            side: Dir::West,
+        };
+        let mut c = super::super::transport::PipeConnection::default();
+        c.set_source(Source::open(crate::open_end::OpenEnd {
+            tank: Some((Fluid::Water, 984)),
+            pulling: true,
+        }));
+        let mut network = FluidNetwork::new(face, c.source.clone().unwrap());
+        network.source = Some(network.source_supplier.clone());
+        c.network = Some(network);
+        c.wipe_pressure();
+        c.set_source(Source::Open(Default::default()));
+        let Some(Source::Open(open)) = &c.source else {
+            panic!()
+        };
+        let Some(Source::Open(cached)) = c.network.as_ref().unwrap().cached_source() else {
+            panic!()
+        };
+        assert_eq!(open.identity(), cached.identity());
+        assert_eq!(c.open_ends().len(), 1);
+        c.set_source(Source::Handler);
+        c.wipe_pressure();
+        // previousSource now refers to the handler; the network alone retains
+        // the old OpenEndedPipe, exactly as FluidNetwork.reset in Java does.
+        assert_eq!(
+            c.open_ends(),
+            vec![crate::open_end::OpenEnd {
+                tank: Some((Fluid::Water, 984)),
+                pulling: true
+            }]
+        );
+    }
+
+    #[test]
+    fn pump_refreshes_its_pressure_even_when_its_flows_collide() {
+        let mut world = World::default();
+        world.cells.extend([
+            ([-1, 0, 0], Cell::Tank),
+            ([0, 0, 0], Cell::Pump(Dir::East)),
+            ([1, 0, 0], Cell::Tank),
+        ]);
+        let mut transport = register(&world);
+        transport.pumps.get_mut(&[0, 0, 0]).unwrap().speed = 32.;
+        let pipe = transport.pipes.get_mut(&[0, 0, 0]).unwrap();
+        pipe.phase = UpdatePhase::Idle;
+        for (side, c) in &mut pipe.interfaces {
+            c.flow = Some(super::super::transport::Flow {
+                fluid: if *side == Dir::East {
+                    Fluid::Lava
+                } else {
+                    Fluid::Water
+                },
+                inbound: true,
+                progress: 1.,
+                complete: true,
+            });
+        }
+        assert!(transport.tick_pipe(&mut world, [0, 0, 0]).is_some());
+        assert_eq!(
+            transport
+                .connection(Face {
+                    pos: [0, 0, 0],
+                    side: Dir::East
+                })
+                .unwrap()
+                .pressure(),
+            [0., 32.]
+        );
+    }
+
     #[test]
     fn two_pumps_add_sixty_four_pressure_to_the_shared_pipe() {
         // Java issue #62: each 32 RPM pump contributes 32 to the same channels.

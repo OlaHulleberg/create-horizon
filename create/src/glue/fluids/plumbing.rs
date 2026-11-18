@@ -57,10 +57,11 @@ pub(super) fn source(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
     amount: u32,
+    only: Option<Fluid>,
 ) -> Option<Option<(Fluid, u32)>> {
     let dim = lv.dim;
     // A portable fluid interface gives what its contraption's tanks hold.
-    if let Some(offer) = crate::glue::contraptions::actors::pfi_offer(lv, pos, amount) {
+    if let Some(offer) = crate::glue::contraptions::actors::pfi_offer(lv, pos, amount, only) {
         return Some(offer);
     }
     // CreativeSmartFluidTank.drain: always full of its fluid, never emptied.
@@ -76,16 +77,26 @@ pub(super) fn source(
 
 /// What came out of a creative tank or hose pulley the pump drew from (the hose pulls for
 /// real).
-pub(super) fn take(lv: &mut ServerLevel<'_>, pos: [i32; 3], moved: u32) {
+pub(super) fn take(lv: &mut ServerLevel<'_>, pos: [i32; 3], moved: u32, fluid: Fluid) -> u32 {
     let dim = lv.dim;
-    crate::glue::contraptions::actors::pfi_drain(lv, pos, moved);
+    if with_world(|w| w.dims[dim].plumbing.creative_fluid(pos))
+        .flatten()
+        .flatten()
+        == Some(fluid)
+    {
+        return moved;
+    }
+    let portable = crate::glue::contraptions::actors::pfi_drain(lv, pos, moved, fluid);
     let Some(mut hose) = with_world(|w| w.dims[dim].plumbing.hoses.remove(&pos)).flatten() else {
-        return;
+        return portable;
     };
     let now = lv.game_time();
-    hose.drain(&mut HoseLevel(lv), pos, moved, false, now);
+    let took = hose
+        .drain(&mut HoseLevel(lv), pos, moved, false, now)
+        .map_or(0, |(_, n)| n);
     put_hose(dim, pos, hose);
     with_world(|w| w.mark_unsaved(dim, pos));
+    took
 }
 
 /// A pump's end that is a creative tank (it takes everything, `CreativeSmartFluidTank.fill`)
@@ -486,7 +497,7 @@ pub(super) fn wrench_pipe(
                 ("waterlogged", flag(info.waterlogged)),
             ];
             if let Some(next) = state_with(lv, "create:glass_fluid_pipe", &props) {
-                lv.set_state(pos, next, all());
+                super::pipes::replace_pipe_state(lv, pos, next);
             }
             true
         }
@@ -502,7 +513,7 @@ pub(super) fn wrench_pipe(
                 .chain([("waterlogged", flag(info.waterlogged))])
                 .collect();
             if let Some(next) = state_with(lv, "create:fluid_pipe", &props) {
-                lv.set_state(pos, next, all());
+                super::pipes::replace_pipe_state(lv, pos, next);
                 connect_pipe(lv, pos, Some(Dir::from_axis(axis, true)));
             }
             true

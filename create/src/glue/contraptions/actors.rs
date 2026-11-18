@@ -2692,6 +2692,7 @@ pub fn pfi_offer(
     lv: &ServerLevel<'_>,
     pos: [i32; 3],
     amount: u32,
+    only: Option<create_engine::tank::Fluid>,
 ) -> Option<Option<(create_engine::tank::Fluid, u32)>> {
     if lv.create_block(pos) != Some(Block::PortableFluidInterface) {
         return None;
@@ -2700,7 +2701,9 @@ pub fn pfi_offer(
         return Some(None);
     };
     let offer = with_carried_tanks(lv.dim, key, |tanks| {
-        let fluid = tanks.iter().find_map(|t| t.tank.fluid)?;
+        let fluid = tanks
+            .iter()
+            .find_map(|t| t.tank.fluid.filter(|f| only.is_none_or(|want| want == *f)))?;
         let have: u32 = tanks
             .iter()
             .filter(|t| t.tank.fluid == Some(fluid))
@@ -2722,15 +2725,17 @@ pub fn pfi_keep_flow(lv: &ServerLevel<'_>, pos: [i32; 3]) {
 
 /// What a pump drew from a portable fluid interface leaves the contraption's tanks
 /// (`InterfaceFluidHandler.drain`): `amount` of their first fluid, tank by tank.
-pub fn pfi_drain(lv: &ServerLevel<'_>, pos: [i32; 3], amount: u32) {
+pub fn pfi_drain(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+    amount: u32,
+    fluid: create_engine::tank::Fluid,
+) -> u32 {
     let Some(key) = interface_connected(lv, pos, Block::PortableFluidInterface) else {
-        return;
+        return 0;
     };
     let mut left = amount;
     with_carried_tanks(lv.dim, key, |tanks| {
-        let Some(fluid) = tanks.iter().find_map(|t| t.tank.fluid) else {
-            return;
-        };
         for t in tanks.iter_mut().filter(|t| t.tank.fluid == Some(fluid)) {
             if left == 0 {
                 break;
@@ -2741,6 +2746,7 @@ pub fn pfi_drain(lv: &ServerLevel<'_>, pos: [i32; 3], amount: u32) {
     if left < amount {
         psi_transferred(lv.dim, pos);
     }
+    amount - left
 }
 
 /// A pump filling a portable fluid interface (`InterfaceFluidHandler.fill`): into the tanks of

@@ -131,6 +131,16 @@ pub(super) fn connect_pipe(lv: &mut ServerLevel<'_>, pos: [i32; 3], preferred: O
     }
 }
 
+/// FluidTransportBehaviour.cacheFlows/loadFlows around a pipe representation change.
+pub(super) fn replace_pipe_state(lv: &mut ServerLevel<'_>, pos: [i32; 3], state: BlockState) {
+    let dim = lv.dim;
+    let previous = with_world(|w| w.dims[dim].fluid_transport.pipes.remove(&pos)).flatten();
+    lv.set_state(pos, state, all());
+    if let Some(previous) = previous {
+        with_world(|w| w.dims[dim].fluid_transport.pipes.insert(pos, previous));
+    }
+}
+
 /// Read geometry and capabilities, then tick the engine's connection-owned model.
 pub(super) fn tick_pipes(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
@@ -179,6 +189,9 @@ use create_engine::fluids::{
     transport::Source,
 };
 impl Host for TransportHost<'_, '_> {
+    fn time(&self) -> i64 {
+        self.0.game_time()
+    }
     fn cell(&self, p: [i32; 3], d: Dir) -> Cell {
         pipe_cell_toward(self.0, p, Some(d))
     }
@@ -216,11 +229,11 @@ impl Host for TransportHost<'_, '_> {
         if !matches!(source, Source::Handler) {
             return None;
         }
-        let offer = if let Some(offer) = plumbing::source(lv, pos, n) {
+        let offer = if let Some(offer) = plumbing::source(lv, pos, n, fluid) {
             offer
         } else if info_at(lv, pos).map(|(b, _)| b) == Some(Block::Basin) {
             let mut t = processing::basin_tanks(dim, pos);
-            create_engine::basin::drain(&mut t.output, n)
+            create_engine::basin::drain_matching(&mut t.output, n, fluid)
         } else {
             with_world(|w| {
                 if w.is_boiler(dim, pos) {
@@ -236,40 +249,45 @@ impl Host for TransportHost<'_, '_> {
         };
         offer.filter(|(f, _)| fluid.is_none_or(|wanted| wanted == *f))
     }
-    fn drain(&mut self, face: Face, source: &mut Source, fluid: Fluid, n: u32) {
+    fn drain(&mut self, face: Face, source: &mut Source, fluid: Fluid, n: u32) -> u32 {
         let lv = &mut *self.0;
         let dim = lv.dim;
         let pos = face.connected();
         if let Source::Open(open) = source {
-            open.drain(
-                &mut super::open_end::Front {
-                    lv,
-                    pos,
-                    down: face.side == Dir::Down,
-                    pipe: face.pos,
-                },
-                n,
-                Some(fluid),
-                true,
-            );
-            return;
+            return open
+                .drain(
+                    &mut super::open_end::Front {
+                        lv,
+                        pos,
+                        down: face.side == Dir::Down,
+                        pipe: face.pos,
+                    },
+                    n,
+                    Some(fluid),
+                    true,
+                )
+                .map_or(0, |(_, n)| n);
         }
-        if plumbing::source(lv, pos, n).is_some() {
-            plumbing::take(lv, pos, n);
-        } else if info_at(lv, pos).map(|(b, _)| b) == Some(Block::Basin) {
+        if plumbing::source(lv, pos, n, Some(fluid)).is_some() {
+            return plumbing::take(lv, pos, n, fluid);
+        }
+        if info_at(lv, pos).map(|(b, _)| b) == Some(Block::Basin) {
             let mut t = processing::basin_tanks(dim, pos);
-            create_engine::basin::drain(&mut t.output, n);
+            let took = create_engine::basin::drain_matching(&mut t.output, n, Some(fluid))
+                .map_or(0, |(_, n)| n);
             with_world(|w| w.set_basin_fluids(dim, pos, t));
-        } else {
-            with_world(|w| {
-                if let Some(d) = w.dims[dim].drains.get_mut(&pos) {
-                    create_engine::drain::drain(d, n);
-                    w.dims[dim].analog_checks.push(pos);
-                } else {
-                    w.drain_tank(dim, pos, n);
-                }
-            });
+            return took;
         }
+        with_world(|w| {
+            if let Some(d) = w.dims[dim].drains.get_mut(&pos) {
+                let took = create_engine::drain::drain(d, n).map_or(0, |(_, n)| n);
+                w.dims[dim].analog_checks.push(pos);
+                took
+            } else {
+                w.drain_tank(dim, pos, n).map_or(0, |(_, n)| n)
+            }
+        })
+        .unwrap_or(0)
     }
     fn fill(
         &mut self,
@@ -405,6 +423,9 @@ pub(super) fn chunk_load(dim: usize, data: &Compound) {
             }
         }
     }
+    if data.contains_key(&"Connections".into()) {
+        return;
+    }
     if let Some(Tag::IntArray(records)) = data.get(&"open_ends".into()) {
         let keys = super::fluid_keys(data, "open_ends");
         for c in records.as_chunks::<7>().0 {
@@ -422,7 +443,7 @@ pub(super) fn chunk_load(dim: usize, data: &Compound) {
                         create_engine::fluids::transport::FluidTransportBehaviour::new(side.bit())
                     });
                 if let Some(connection) = pipe.connection(side) {
-                    connection.set_source(Source::Open(create_engine::open_end::OpenEnd {
+                    connection.set_source(Source::open(create_engine::open_end::OpenEnd {
                         tank,
                         pulling: c[6] != 0,
                     }));

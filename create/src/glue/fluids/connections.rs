@@ -137,7 +137,7 @@ mod tests {
         let c = pipe.connection(Dir::West).unwrap();
         c.add_pressure(true, 32.);
         c.add_pressure(false, 16.);
-        c.set_source(Source::Open(OpenEnd {
+        c.set_source(Source::open(OpenEnd {
             tank: Some((Fluid::Water, 984)),
             pulling: true,
         }));
