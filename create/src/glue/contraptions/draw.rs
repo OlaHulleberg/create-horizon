@@ -169,9 +169,9 @@ fn holds_structure(data: &Compound) -> bool {
 // ---------------------------------------------------------------------------------------------
 // Server: writing a structure into its anchor
 
-/// `blocks` (offsets from `place`, in whole blocks from the anchor) with their states, the
-/// light each is drawn with, and what the block entity of each shows (`Contraption.updateTags`:
-/// what contraption `key` carries for it, by the same offset).
+/// `blocks` (offsets in whole blocks from the anchor) with their states, and what the block
+/// entity of each shows (`Contraption.updateTags`: what contraption `key` carries for it, by the
+/// same offset). Clients light them where they are drawn.
 fn blocks_tags(
     c: &mut Compound,
     suffix: &str,
@@ -260,19 +260,17 @@ impl WorldPose {
     }
 
     /// The packed light at the block at `local`'s cell (16 times sky light in bits 0..8, 16 times
-    /// block light in bits 8..16, as the draw context takes it). A layer the client has no
-    /// answer for (an unloaded cell) keeps `fallback`'s.
-    fn light(self, host: &dyn ClientHost, local: [f32; 3], fallback: u32) -> u32 {
-        let Some(level) = host.level(host.dimension()) else {
-            return fallback;
-        };
+    /// block light in bits 8..16, as the draw context takes it), the cell found as
+    /// `BlockEntityRenderHelper.getLightPos` does. A cell the client holds no chunk for reads as
+    /// the game's light query does there: full sky, no block light.
+    fn light(self, host: &dyn ClientHost, local: [f32; 3]) -> u32 {
         let at = self.cell(local);
-        let read = |layer, shift: u32| {
-            level
-                .brightness(host, layer, at)
-                .map_or(fallback >> shift & 0xff, |v| v.clamp(0, 15) as u32 * 16)
+        let level = host.level(host.dimension());
+        let read = |layer, unloaded: i32| {
+            let v = level.as_ref().and_then(|l| l.brightness(host, layer, at));
+            v.unwrap_or(unloaded).clamp(0, 15) as u32 * 16
         };
-        read(mod_api::LightLayer::Sky, 0) | read(mod_api::LightLayer::Block, 8) << 8
+        read(mod_api::LightLayer::Sky, 15) | read(mod_api::LightLayer::Block, 0) << 8
     }
 }
 
@@ -786,7 +784,7 @@ fn draw_blocks(
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
         if let Lighting::Sampled(pose) = lighting {
-            draw.set_light(pose.light(host, b.at, own));
+            draw.set_light(pose.light(host, b.at));
         }
         draw.push();
         draw.translate(b.at);
