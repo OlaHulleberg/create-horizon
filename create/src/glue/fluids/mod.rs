@@ -56,7 +56,7 @@ mod open_end;
 pub(crate) use open_end::drink_potion;
 pub(crate) mod pipes;
 mod place;
-mod plumbing;
+pub(crate) mod plumbing;
 mod rims;
 mod spouted;
 
@@ -319,7 +319,6 @@ impl Subsystem for Fluids {
         place::tick_layers(lv);
         pipes::tick_boilers(lv);
         plumbing::tick(lv);
-        pipes::tick_tank_states(lv);
         rims::tick(lv);
         engine::tick(lv);
     }

@@ -48,7 +48,7 @@ ambience), packages, stock, schematics, decor, copycats, items and equipment, ad
 2. **Changes.** Each subsystem hears block changes (`block_changed`), the kinetic world first.
 3. **Level tick.** `SUBSYSTEMS` run in order: inputs (redstone, cranks), machines, fluids, trains, logistics, then
    the kinetic solve, then what reads its result (gauges, comparators). Within logistics,
-   depots, belt controllers, spouts, item drains and pumps share the level registration order:
+   depots, belt controllers, tanks, valves, spouts, item drains and pumps share the level registration order:
    each transfer and processing callback is applied before visiting the next entity.
    Depots dispatch received items before held items, retaining the callback's lock. New belt chains attach kinetics before their inventory tick.
 4. **Clients.** The server writes what clients draw into block entity data (synced keys) or sends it on

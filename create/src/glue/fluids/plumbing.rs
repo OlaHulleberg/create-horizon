@@ -255,43 +255,19 @@ impl create_engine::hose::Level for HoseLevel<'_, '_> {
 /// given a speed or busy, whistles and their extensions, and what clients must see again.
 /// Nothing runs without any.
 pub(super) fn tick(lv: &mut ServerLevel<'_>) {
-    tick_valves(lv);
     tick_hoses(lv);
     tick_whistles(lv);
     send_changes(lv);
 }
 
-fn tick_valves(lv: &mut ServerLevel<'_>) {
-    let dim = lv.dim;
-    let valves = with_world(|w| {
-        w.dims[dim]
-            .plumbing
-            .valves
-            .keys()
-            .copied()
-            .collect::<Vec<_>>()
-    })
-    .unwrap_or_default();
-    // Each valve's `enabled`, read before the engine steps them.
-    let open: Vec<([i32; 3], Option<bool>)> = valves
-        .iter()
-        .map(|&p| {
-            let enabled = info_at(lv, p)
-                .filter(|(b, _)| *b == Block::FluidValve)
-                .map(|(_, i)| i.enabled);
-            (p, enabled)
-        })
-        .collect();
-    let changes = with_world(|w| {
-        w.tick_fluid_entities(dim, |p| {
-            open.iter().find(|(q, _)| *q == p).and_then(|(_, e)| *e)
-        })
-    })
-    .unwrap_or_default();
-    for (pos, open) in changes {
-        // `switchToBlockState`: the pipes see it open or shut (`propagateChangedPipe`).
+pub(crate) fn tick_entity(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let enabled = info_at(lv, pos)
+        .filter(|(b, _)| *b == Block::FluidValve)
+        .map(|(_, i)| i.enabled);
+    if let Some(open) = with_world(|w| w.tick_fluid_entity(lv.dim, pos, enabled)).flatten() {
         crate::glue::items::wrench::switch_property(lv, pos, "enabled", flag(open));
     }
+    super::pipes::tick_tank_states(lv);
 }
 
 fn tick_hoses(lv: &mut ServerLevel<'_>) {

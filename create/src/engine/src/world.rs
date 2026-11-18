@@ -14,7 +14,7 @@ fn entity_view(block: Block) -> Option<View> {
         Block::Depot | Block::Belt | Block::Spout | Block::ItemDrain | Block::MechanicalPump => {
             Some(View::Transport)
         }
-        Block::FluidValve | Block::FluidTank | Block::CreativeFluidTank => Some(View::Fluid),
+        Block::FluidValve | Block::FluidTank | Block::CreativeFluidTank => Some(View::Transport),
         _ => None,
     }
 }
@@ -769,6 +769,7 @@ pub struct Belt {
 /// Work at a level block entity's turn, rather than a subsystem phase.
 #[derive(Debug, PartialEq)]
 pub enum TransportTick {
+    Fluid([i32; 3]),
     Spout([i32; 3]),
     Drain([i32; 3]),
     Pump([i32; 3]),
@@ -800,6 +801,9 @@ impl TransportTicks {
     pub fn next(&mut self, world: &mut CreateWorld) -> Option<TransportTick> {
         while let Some(p) = self.entities.next(&world.dims[self.dim].block_entities) {
             match world.block_at(self.dim, p) {
+                Some(Block::FluidValve | Block::FluidTank | Block::CreativeFluidTank) => {
+                    return Some(TransportTick::Fluid(p));
+                }
                 Some(Block::Spout) => return Some(TransportTick::Spout(p)),
                 Some(Block::ItemDrain) => return Some(TransportTick::Drain(p)),
                 Some(Block::MechanicalPump) => return Some(TransportTick::Pump(p)),
@@ -4760,31 +4764,47 @@ impl CreateWorld {
         dim: usize,
         open: impl Fn([i32; 3]) -> Option<bool>,
     ) -> Vec<([i32; 3], bool)> {
-        let mut positions = self.dims[dim].block_entities.walk(View::Fluid);
+        let mut positions = self.dims[dim].block_entities.walk(View::Transport);
         let mut out = Vec::new();
         while let Some(pos) = positions.next(&self.dims[dim].block_entities) {
-            let d = &mut self.dims[dim];
-            if d.plumbing.valves.contains_key(&pos) {
-                d.kinetics.tick_base_through(pos);
-            }
-            for (p, speed) in d.kinetics.take_speed_notifications() {
-                if let Some(pointer) = d.plumbing.valves.get_mut(&p) {
-                    pointer.speed_changed(speed);
-                    d.kinetics.mark_saved_changed(p);
-                }
-            }
-            d.tanks.tick(pos);
-            d.creative_tanks.tick(pos);
-            if let Some(pointer) = d.plumbing.valves.get_mut(&pos)
-                && let Some(enabled) = open(pos)
+            if matches!(
+                self.block_at(dim, pos),
+                Some(Block::FluidValve | Block::FluidTank | Block::CreativeFluidTank)
+            ) && let Some(next) = self.tick_fluid_entity(dim, pos, open(pos))
             {
-                let before = *pointer;
-                if let Some(next) = pointer.tick(enabled) {
-                    out.push((pos, next));
-                }
-                if *pointer != before {
-                    d.kinetics.mark_saved_changed(pos);
-                }
+                out.push((pos, next));
+            }
+        }
+        out
+    }
+
+    /// One FluidValveBlockEntity/FluidTankBlockEntity turn, interleaved with transfers.
+    pub fn tick_fluid_entity(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        open: Option<bool>,
+    ) -> Option<bool> {
+        let d = &mut self.dims[dim];
+        if d.plumbing.valves.contains_key(&pos) {
+            d.kinetics.tick_base_through(pos);
+        }
+        for (p, speed) in d.kinetics.take_speed_notifications() {
+            if let Some(pointer) = d.plumbing.valves.get_mut(&p) {
+                pointer.speed_changed(speed);
+                d.kinetics.mark_saved_changed(p);
+            }
+        }
+        d.tanks.tick(pos);
+        d.creative_tanks.tick(pos);
+        let mut out = None;
+        if let Some(pointer) = d.plumbing.valves.get_mut(&pos)
+            && let Some(enabled) = open
+        {
+            let before = *pointer;
+            out = pointer.tick(enabled);
+            if *pointer != before {
+                d.kinetics.mark_saved_changed(pos);
             }
         }
         self.tanks_touched(dim, true);
@@ -5164,13 +5184,15 @@ mod tests {
             "create:item_drain",
             "create:mechanical_pump",
             "create:depot",
+            "create:fluid_tank",
+            "create:fluid_valve",
         ];
-        states::set_range(10, 4);
+        states::set_range(10, 6);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|n| (*n, std::iter::empty())),
         ));
-        for n in 0..4 {
+        for n in 0..6 {
             w.block_changed(0, [n, 8, 0], 0, 10 + n as u32);
         }
         let mut turns = w.transport_ticks(0);
@@ -5178,6 +5200,8 @@ mod tests {
         assert_eq!(turns.next(&mut w), Some(TransportTick::Drain([1, 8, 0])));
         assert_eq!(turns.next(&mut w), Some(TransportTick::Pump([2, 8, 0])));
         assert_eq!(turns.next(&mut w), Some(TransportTick::Depot([3, 8, 0])));
+        assert_eq!(turns.next(&mut w), Some(TransportTick::Fluid([4, 8, 0])));
+        assert_eq!(turns.next(&mut w), Some(TransportTick::Fluid([5, 8, 0])));
         assert_eq!(turns.next(&mut w), None);
     }
 

@@ -734,6 +734,10 @@ pub fn tick_transport(lv: &mut ServerLevel<'_>) {
     };
     while let Some(turn) = with_world(|w| phase.next(w)).flatten() {
         let c = match turn {
+            create_engine::world::TransportTick::Fluid(p) => {
+                crate::glue::fluids::plumbing::tick_entity(lv, p);
+                continue;
+            }
             create_engine::world::TransportTick::Spout(p) => {
                 with_world(|w| {
                     if let Some(s) = w.dims[dim].spouts.get_mut(&p) {

@@ -1,4 +1,4 @@
-//! Level.blockEntityTickers registration order, with indexed transport and fluid views.
+//! Level.blockEntityTickers registration order, with one indexed transport/fluid view.
 //! Hash lookups and doubly linked slots make registration/removal O(1) on average;
 //! column unload visits only that column. Walks borrow no world and copy no entries.
 use std::collections::{HashMap, HashSet};
@@ -9,9 +9,8 @@ type Pos = [i32; 3];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum View {
     All,
-    /// Belts, depots, spouts, item drains and pumps share their transfer turns.
+    /// Belts, depots, tanks, valves, spouts, drains and pumps share their turns.
     Transport,
-    Fluid,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -25,7 +24,7 @@ struct Slot {
     sequence: u64,
     live: bool,
     view: Option<View>,
-    links: [Links; 3],
+    links: [Links; 2],
 }
 
 #[derive(Default)]
@@ -40,7 +39,7 @@ pub(crate) struct BlockEntityOrder {
     columns: HashMap<(i32, i32), HashSet<Pos>>,
     slots: Vec<Slot>,
     free: Vec<usize>,
-    lists: [List; 3],
+    lists: [List; 2],
     sequence: u64,
     /// Slots removed during a walk retain their forward links until all walks end.
     /// This lease prevents reuse while a paused walk could still reference them.
@@ -61,7 +60,7 @@ impl BlockEntityOrder {
             sequence: self.sequence,
             live: true,
             view,
-            links: [Links::default(); 3],
+            links: [Links::default(); 2],
         };
         let index = if Rc::strong_count(&self.walks) == 1 {
             self.free.pop()
@@ -221,7 +220,7 @@ mod tests {
         let mut order = BlockEntityOrder::default();
         let (a, b, c) = ([0, 0, 0], [1, 0, 0], [2, 0, 0]);
         let sequence = order.register(a, Some(View::Transport));
-        order.register(b, Some(View::Fluid));
+        order.register(b, None);
         order.register(c, Some(View::Transport));
         assert_eq!(order.register(a, Some(View::Transport)), sequence);
         assert_eq!(positions(&order, View::All), [a, b, c]);
@@ -229,7 +228,6 @@ mod tests {
         assert!(order.register(a, Some(View::Transport)) > sequence);
         assert_eq!(positions(&order, View::All), [b, c, a]);
         assert_eq!(positions(&order, View::Transport), [c, a]);
-        assert_eq!(positions(&order, View::Fluid), [b]);
     }
 
     #[test]
@@ -249,7 +247,7 @@ mod tests {
         assert_eq!(walk.next(&order), None);
         drop(walk);
         let slots = order.slots.len();
-        order.register(a, Some(View::Fluid));
+        order.register(a, Some(View::Transport));
         assert_eq!(order.slots.len(), slots, "reuse slots after walks end");
         assert!(order.registration_order(a).unwrap() > order.registration_order(b).unwrap());
         order.unload(-1, -1);

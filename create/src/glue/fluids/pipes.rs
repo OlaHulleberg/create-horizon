@@ -174,6 +174,7 @@ fn collide(lv: &mut ServerLevel<'_>) {
 
 pub(crate) fn tick_pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
     if with_world(|w| w.dims[lv.dim].pumping.contains(&pos)) == Some(true) {
+        let changed = changed || with_world(|w| w.dims[lv.dim].pipes_changed).unwrap_or(false);
         pump(lv, pos, changed);
     }
 }
