@@ -19,7 +19,8 @@ use create_engine::kinetics::{Axis, Dir};
 use mod_api::{
     BlockEntityDrawContext, BlockEntityOnLoadEvent, BlockEntityPart,
     BlockEntityRenderBoundingBoxEvent, BlockEntitySubmitEvent, BlockEntityViewDistanceEvent,
-    BlockKey, BlockPart, ClientHost, Compound, Host, HostSide, Registrar, RegistrationContext, Tag,
+    BlockKey, BlockPart, ClientHost, Compound, Host, HostSide, LevelRef, Registrar,
+    RegistrationContext, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -263,11 +264,10 @@ impl WorldPose {
     /// block light in bits 8..16, as the draw context takes it), the cell found as
     /// `BlockEntityRenderHelper.getLightPos` does. A cell the client holds no chunk for reads as
     /// the game's light query does there: full sky, no block light.
-    fn light(self, host: &dyn ClientHost, local: [f32; 3]) -> u32 {
+    fn light(self, host: &dyn ClientHost, level: Option<&LevelRef>, local: [f32; 3]) -> u32 {
         let at = self.cell(local);
-        let level = host.level(host.dimension());
         let read = |layer, unloaded: i32| {
-            let v = level.as_ref().and_then(|l| l.brightness(host, layer, at));
+            let v = level.and_then(|l| l.brightness(host, layer, at));
             v.unwrap_or(unloaded).clamp(0, 15) as u32 * 16
         };
         read(mod_api::LightLayer::Sky, 15) | read(mod_api::LightLayer::Block, 0) << 8
@@ -777,6 +777,10 @@ fn draw_blocks(
     lighting: Lighting,
 ) {
     let own = draw.light();
+    // The level once for the whole structure: each block reads its light from it.
+    let level = matches!(lighting, Lighting::Sampled(_))
+        .then(|| host.level(host.dimension()))
+        .flatten();
     for b in blocks {
         let props: Vec<(&str, &str)> = b
             .props
@@ -784,7 +788,7 @@ fn draw_blocks(
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
         if let Lighting::Sampled(pose) = lighting {
-            draw.set_light(pose.light(host, b.at));
+            draw.set_light(pose.light(host, level.as_ref(), b.at));
         }
         draw.push();
         draw.translate(b.at);
