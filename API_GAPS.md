@@ -1,10 +1,11 @@
 # API gaps
 
-What the mod SDK can't do yet, at the Sunrise pin in `create/sunrise-mod.toml` (`2d81263`), checked against the
-latest nightly (`2d81263`, 2026-11-17). We only ask for what Create itself uses; better APIs wait until after parity.
+What the mod SDK can't do yet that Create uses, as of 2026-11-18, at the Sunrise pin in `create/sunrise-mod.toml`
+(nightly `2d81263`, the latest). The port uses every API that nightly added where Create needs it; the rows below are
+what is still missing, including where a new API covers only part of Create's use. Better APIs wait until after parity.
 Links point to the Create 6.0.11 source (`b62e837`) that uses the missing feature.
 
-## Still missing (Create uses it)
+## Missing (Create uses it)
 
 | Missing | Effect in the port | What Create uses |
 |---|---|---|
@@ -44,35 +45,13 @@ Links point to the Create 6.0.11 source (`b62e837`) that uses the missing featur
 | Items in world draws | filter value boxes | [`renderItemIntoValueBox`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/blockEntity/behaviour/filtering/FilteringRenderer.java#L155) |
 | 3D item rotation in screens | wand screen | [`GuiGameElement.rotate`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/symmetryWand/SymmetryWandScreen.java#L133) |
 | Game bug: `_head` blocks get a skull block entity | piston heads break | [no block entity](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/piston/MechanicalPistonHeadBlock.java#L34) |
-
-## Added in nightly `2d81263` (usable once the pin moves)
-
-| Added | What Create uses |
-|---|---|
-| `shapes_from_block_entity` + `set_shapes` | [`FactoryPanelBlock.getShape`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/logistics/factoryBoard/FactoryPanelBlock.java#L317) |
-| Scoreboard host calls | [`addObjective`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/redstone/displayLink/source/StatTrackingDisplaySource.java#L33) |
-| `light_emission` / `friction` of a state | [`getFriction`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/copycat/CopycatBlock.java#L296), [`getLightEmission`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/copycat/CopycatBlock.java#L306) |
-| `is_redstone_conductor`, `is_solid_render`, correct-tool queries | [`isRedstoneConductor`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/actors/roller/RollerMovementBehaviour.java#L125), [`canHarvestBlock`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/copycat/CopycatBlock.java#L315) |
-| `level_block_break_effect` | [`levelEvent(PARTICLES_DESTROY_BLOCK)`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/utility/BlockHelper.java#L219) |
-| `level_update_from_neighbour_shapes` | [`updateShape`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/symmetryWand/SymmetryWandItem.java#L208) |
-| `on_block_placed_by` v2 (level) | [`setPlacedBy`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/base/KineticBlock.java#L81) |
-| `FluidInteraction` declarations | [`addInteraction`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/AllFluids.java#L121) |
-| `LevelHost::collision_shape` | [`getCollisionShape`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/crank/HandCrankBlock.java#L95) |
-| `level_place_block` without a player | [`setPlacedBy(…, null, …)`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/utility/BlockHelper.java#L400) |
-| `entities_in` returns frames and paintings | [`fillFromWorld`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/schematics/SchematicExport.java#L44) |
-| `level_portal_destination` | [`getPortalDestination`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/trains/track/AllPortalTracks.java#L133) |
-| `menu_quick_move` v3 (empty result) | [`quickMoveStack`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/schematics/cannon/SchematicannonMenu.java#L66) |
-| `set_collider`, `MoveCause::Carried` | [`collideEntities`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/ContraptionCollider.java#L77) |
-| `full_attack_charge` | [fake player attack](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/deployer/DeployerHandler.java#L217) |
-| `fall_on` v2 distance | [`fallOn`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/actors/seat/SeatBlock.java#L85) |
-| `set_sprinting` | [`setSprinting`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/tool/CardboardSwordItem.java#L115) |
-| Client-side `brightness` | [`getBrightness`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/trains/entity/CarriageContraptionEntityRenderer.java#L103) |
-| `client_pick` | [`mc.hitResult`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/extendoGrip/ExtendoGripItem.java#L171) |
-| `item_uses_block_light` | [`isGui3d`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/blockEntity/behaviour/ValueBoxRenderer.java#L31) |
-| `tick_rate_is_frozen` | [`isFrozen`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/base/KineticBlockEntity.java#L290) |
-| `play_sound` with `except` | [`CARDBOARD_SWORD.play`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/tool/CardboardSwordItem.java#L72) |
-| `SoundRef::move_to` / `set_pitch` | [`setLocation`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/trains/entity/CarriageSounds.java#L209), [`setPitch`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/fan/AirCurrent.java#L390) |
-| Fix: one bad recipe no longer empties its type | vanilla recipe loading |
+| Entity-free collision in `BlockEntityShapes` | factory panels collide with nothing | [`getCollisionShape` (no entity)](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/logistics/factoryBoard/FactoryPanelBlock.java#L309) |
+| Light and friction asked of another state at a position | copycats glow and slide as their frame | [`getFriction`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/copycat/CopycatBlock.java#L296), [`getLightEmission`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/copycat/CopycatBlock.java#L306) |
+| Correct-tool query from inside harvest hooks; per-player for fake players | copycat and deployer harvest guessed | [`canHarvestBlock`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/copycat/CopycatBlock.java#L315), [deployer](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/deployer/DeployerHandler.java#L392) |
+| `isRedstoneConductor` of a state not in the world | schematic palette reads a full cube | [`SchematicPrinter`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/schematics/SchematicPrinter.java#L243) |
+| Placing without a player, with the stack, after loading block entity data | printed blocks miss their item data | [`setPlacedBy(…, null, stack)`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/utility/BlockHelper.java#L400) |
+| Client entity ray, or extra reach in `client_pick` | extendo grip lends entity reach instead | [`getEntityHitResult`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/extendoGrip/ExtendoGripItem.java#L163) |
+| Per-frame world light for kept, spinning geometry | turning contraptions keep the light they were drawn with | [`ContraptionMatrices.getLight`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/render/ContraptionMatrices.java#L68) |
 
 ## Not used by Create (out of scope until after parity)
 
@@ -81,6 +60,5 @@ Links point to the Create 6.0.11 source (`b62e837`) that uses the missing featur
 | Rolling back mod state with a transaction | Create has no transactions |
 | Notice of any container changing | Create polls: [`BlockCapabilityCache`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/logistics/chute/ChuteBlockEntity.java#L513) |
 | Slots over 99 | toolbox slots are 64: [`ToolboxInventory`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/toolbox/ToolboxInventory.java#L32) |
-| Display entities loaded from a save | not needed (the nightly added it anyway) |
 
-Re-check an entry against a newer SDK before acting on it (`cargo horizon-mod sdk diff <old> <new>`).
+Re-check an entry against a newer SDK before acting on it (`cargo sunrise-mod sdk diff <old> <new>`).
