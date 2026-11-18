@@ -70,7 +70,7 @@ impl BlockEntityPart for HatchEntity {
             v[1] + 0.5,
             v[2] * c - v[0] * s + 0.5,
         ];
-        let solid = host.item_block(stack.item()).is_some();
+        let solid = host.item_uses_block_light(&stack, ItemDisplayContext::Fixed);
         let scale = 0.5 * 0.965 * if solid { 1.0 + 1.0 / 64.0 } else { 0.5 };
         let draw = &mut *event.draw;
         draw.translate(at);
