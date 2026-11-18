@@ -254,6 +254,7 @@ impl Subsystem for Fluids {
     }
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
+        lava::register(r);
         client::register(r);
         flows::register(r);
         for block in place::PLACED {
@@ -316,7 +317,6 @@ impl Subsystem for Fluids {
     /// Prepare pipes, boilers, valves and tanks before the shared transport walk.
     /// Pumps, drains and spouts run on their registration turn in that walk.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
-        lava::tick(lv);
         open_end::tick(lv);
         place::tick_layers(lv);
         pipes::tick_boilers(lv);
@@ -334,12 +334,6 @@ impl Subsystem for Fluids {
         flows::client_tick(&*host);
     }
 
-    /// Honey and chocolate meeting lava (`AllFluids.registerFluidInteractions`), looked at when
-    /// either ticks (`lava`).
-    fn fluid_tick(&self, level: &dyn mod_api::LevelHost, event: &mut mod_api::FluidTickEvent<'_>) {
-        lava::fluid_tick(level, event);
-    }
-
     /// The pipes beside a Create block that changed draw their pieces again (`rims`).
     fn block_changed(&self, dim: usize, pos: [i32; 3], _old: u32, new: u32) {
         flows::forget(dim, pos);
@@ -352,7 +346,6 @@ impl Subsystem for Fluids {
     }
 
     fn world_closed(&self) {
-        lava::reset();
         open_end::reset();
         flows::reset();
         place::reset();
