@@ -29,8 +29,9 @@
 //! Table and instant uploads keep the player's latest schematics in the mod's game data folder
 //! (`ServerSchematicLoader`, `maxSchematics`).
 //!
-//! Left out, for want of API: a schematic palette state's `isRedstoneConductor` (not yet in the
-//! world) is read as a full collision cube: the host answers conduction only for a placed cell.
+//! Schematic palette entries use the state's redstone conduction. Where it needs a block entity
+//! at the schematic position (e.g. shulker boxes), the SDK cannot answer without a placed cell;
+//! those entries still use the full collision cube approximation.
 
 pub mod body;
 mod deploy;
@@ -1099,7 +1100,11 @@ fn entry(lv: &ServerLevel<'_>, p: &PaletteState, rotation: Rotation, mirror: Mir
         placed: placed.map_or(0, intern),
         air: state.is_none_or(|s| is_air(host, s)),
         plain_air,
-        conductor: state.is_some_and(|s| full_cube(lv, s, [0; 3])),
+        conductor: state.is_some_and(|s| {
+            host.block_states()
+                .is_redstone_conductor(s)
+                .unwrap_or_else(|| full_cube(lv, s, [0; 3]))
+        }),
         requirement,
         ignore,
         defer,
