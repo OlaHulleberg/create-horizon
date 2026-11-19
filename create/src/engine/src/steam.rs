@@ -4,6 +4,7 @@
 //! supply and its size; each engine drives the powered shaft two blocks in front of it at a speed
 //! and stress capacity set by its share of the boiler's level.
 
+use crate::Block;
 use crate::fan::Heat;
 use crate::kinetics::{Axis, Dir, convert_to_direction};
 
@@ -435,6 +436,19 @@ pub fn still_valid(
     })
 }
 
+/// `ShaftBlock.pickCorrectShaftType`: choose the shaft's block after placement chose its axis.
+pub fn shaft_for_placement(
+    pos: [i32; 3],
+    axis: Axis,
+    engine_at: impl Fn([i32; 3]) -> Option<Dir>,
+) -> Block {
+    if still_valid(pos, axis, engine_at) {
+        Block::PoweredShaft
+    } else {
+        Block::Shaft
+    }
+}
+
 /// `BoilerData.evaluate` for the tank blocks `blocks`: the whistles attached to them
 /// (`whistle_at` gives a whistle's attached direction).
 pub fn attached_whistles(
@@ -743,10 +757,26 @@ mod tests {
         assert_eq!(shaft_pos([0, 0, 0], Dir::South), [0, 0, 2]);
         // A south-pointing engine at the origin powers an x or y shaft at z 2, not a z one.
         let engine = |p: [i32; 3]| (p == [0, 0, 0]).then_some(Dir::South);
-        assert!(still_valid([0, 0, 2], Axis::X, engine));
-        assert!(still_valid([0, 0, 2], Axis::Y, engine));
-        assert!(!still_valid([0, 0, 2], Axis::Z, engine));
-        assert!(!still_valid([0, 0, 3], Axis::X, engine));
+        assert_eq!(
+            shaft_for_placement([0, 0, 2], Axis::X, engine),
+            Block::PoweredShaft
+        );
+        assert_eq!(
+            shaft_for_placement([0, 0, 2], Axis::Y, engine),
+            Block::PoweredShaft
+        );
+        assert_eq!(
+            shaft_for_placement([0, 0, 2], Axis::Z, engine),
+            Block::Shaft
+        );
+        assert_eq!(
+            shaft_for_placement([0, 0, 3], Axis::X, engine),
+            Block::Shaft
+        );
+        assert_eq!(
+            shaft_for_placement([0, 0, -2], Axis::X, engine),
+            Block::Shaft
+        );
         // The tank north of it counts it; one beside it doesn't.
         assert_eq!(attached_engines([[0, 0, -1]], engine), vec![[0, 0, 0]]);
         assert!(attached_engines([[1, 0, 0]], engine).is_empty());
