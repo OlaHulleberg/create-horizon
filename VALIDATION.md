@@ -7,8 +7,8 @@ Checked on 2026-11-19 (Linux x86_64, Rust 1.99.1, a fresh build directory), pinn
 No SDK mirror or trusted-key override is used. Mixins stays at
 `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`, as the release SDK specifies.
 
-The `520fc48` pin move was not tried in game. The in-game results below are historical: the developer
-build was `b77574e`, the first nightly smoke test used `2d81263`, and the registry smoke tests used `ed3ac19`.
+`6373106` on `520fc48` passed the in-game smoke test below. The other in-game results are historical: the
+developer build was `b77574e`, the first nightly smoke test used `2d81263`, and the registry smoke tests used `ed3ac19`.
 
 ## Checks
 
@@ -216,9 +216,22 @@ it, so items picked up while it is open appear after the next change (Create's m
 dropped to the title screen ("End of stream") five times across three test sessions with no panic or crash report;
 none reproduced.
 
-## Not run on `520fc48`
+## In-game smoke test on `520fc48` (main `6373106`)
 
-- An in-game run or a build through the launcher.
+Built with `sunrise-launcher native-build` (launcher 1.1.1; 1.0.1 rejects the scaffolding data's
+`context_collision` field) against `nightly-2026-11-19-520fc48`, a fresh creative world, driven by `sunrise-ctl`.
+
+| # | Item | Result | Evidence |
+|---|---|---|---|
+| 1 | Creative motor turning a shaft | Pass | `create_debug speed`: 16 rpm, stress 0 / 262144 su; motor and shaft `Speed: 16.0f` |
+| 2 | Belt carrying a diamond onto a depot | Pass | 5-long belt at -16 rpm; depot `Items: [{count: 1, id: "minecraft:diamond"}]` |
+| 3 | Mechanical pump filling a tank | Pass | One source: 1000 mB; refilling pool: 48 → 544 → 1048 → 1544 → 2040 → 2544 mB at 3 s intervals, then 8000 (full) |
+| 4 | Fluid valve opened | Pass | Closed: tank 0 for 8 s; driven at 16 rpm: `Pointer` value 1.0, `enabled=true`, tank 824 → 2302 mB |
+| 5 | Bearing and windmill | Pass | Super-glued planks assembled at 16 rpm; 8-sail windmill at 1 rpm, 512 su; both seen turning |
+| 6 | Player placement and breaking | Pass | Shaft, cogwheel, gearbox and side shaft placed against blocks turn at 16 rpm; breaking the cogwheel stops the gearbox, re-placing restarts it |
+| 7 | Save, quit, relaunch | Pass | All 14 speeds read back the same; depot keeps its diamond and takes the next once emptied; tanks keep 1000/8000 mB, a two-high tank goes on filling; bearing (`Angle: 48.0f`) and windmill keep turning |
+
+Game log: no panics, crash reports or Create errors.
 
 ## Issue #17: declared-property defaults only (2026-11-17)
 
