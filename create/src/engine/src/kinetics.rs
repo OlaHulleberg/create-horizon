@@ -3132,6 +3132,35 @@ mod tests {
         // scheduled tick re-attaches before any of the fresh entities tick.
         loaded.detach_transmission([0, 0, 0]);
         loaded.change_block_state([0, 0, 0], 0, Part::split_shaft(Axis::X, -1.0), true);
+        // `KineticBlockEntity.write` saves `NeedsSpeedUpdate`, so a world saved between the
+        // detach and the block tick keeps the re-attach owed and a reload's first base tick
+        // attaches again (the level's scheduled tick list itself is not saved).
+        let detached = positions.map(|pos| loaded.saved_state(pos, 0).unwrap());
+        assert!(
+            detached[2].needs_speed_update,
+            "the detach owes an attach, and the flag is saved"
+        );
+        let mut reloaded = Kinetics::new();
+        let reloaded_parts = [
+            Part {
+                generated: -32.0,
+                ..crank
+            },
+            parts[1],
+            Part::split_shaft(Axis::X, -1.0),
+            parts[3],
+        ];
+        for ((pos, part), saved) in positions.into_iter().zip(reloaded_parts).zip(&detached) {
+            reloaded.set(pos, 0, part);
+            assert!(reloaded.restore_state(pos, 0, *saved));
+        }
+        reloaded.advance();
+        solve(&mut reloaded);
+        assert_eq!(
+            reloaded.speed([1, 0, 0], 0),
+            Some(32.0),
+            "the saved re-attach ran on the gearshift's first tick"
+        );
         let mut events = Vec::new();
         loaded.reattach_transmission([0, 0, 0], &mut events);
         loaded.advance();
