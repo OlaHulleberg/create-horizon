@@ -163,6 +163,8 @@ pub struct Dimension {
     handles: HashMap<[i32; 3], crate::valve::Handle>,
     /// Handles whose saved use state changed since the glue last wrote it.
     handle_changes: HashSet<[i32; 3]>,
+    /// The cranks' tick is due in this tick's block-entity pass (`tick_cranks`).
+    cranks_due: bool,
     /// Sliding doors whose `open` changed (position, open before), for the glue to apply
     /// Create's rules after the tick; and the lower halves whose panel still slides
     /// (`SlidingDoorBlockEntity.animation`), the only doors that tick.
@@ -198,9 +200,9 @@ pub struct Dimension {
     pub sequencers: HashMap<[i32; 3], crate::sequencer::Sequencer>,
     /// Sequenced gearshifts whose instruction runs: the only ones that tick.
     sequencing: Vec<[i32; 3]>,
-    /// Sequenced gearshifts whose neighbour changed: their redstone is looked at after the
-    /// level's tick (Create's scheduled block tick).
-    sequencer_checks: Vec<[i32; 3]>,
+    /// `SequencedGearshiftBlock`'s scheduled block ticks: a neighbour change makes the block
+    /// look at its power in the next tick's block-tick phase, unless it is due this tick.
+    sequencer_checks: crate::scheduled::ScheduledTicks,
     /// Steps sequenced gearshifts took when their speed changed, for their blocks to show.
     sequencer_steps: Vec<([i32; 3], crate::sequencer::Step)>,
     /// Depots and their held stack's motion; the stacks are in their block entities' slots.
@@ -2103,10 +2105,11 @@ impl CreateWorld {
             d.sequencers
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.sequencing.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.sequencer_checks
-                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.sequencer_steps
                 .retain(|(p, _)| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            // A gearshift's pending block tick stays: it is scheduled tick data, saved with the
+            // chunk (`LevelChunkTicks`) and run again after it loads, though its block entity's
+            // running state (`d.sequencers`) is read back with the chunk.
             // FluidTransportBehaviour.read restores pressure. Unloading a column
             // does not call FluidPropagator.propagateChangedPipe on surviving pipes.
             d.plumbing.column_unloaded(cx, cz);
@@ -2289,6 +2292,13 @@ impl CreateWorld {
         dim: usize,
         events: &mut Vec<Event>,
     ) -> (SolveStats, Vec<([i32; 3], crate::sequencer::Step)>) {
+        // Block entities tick now: the block-tick phase is over, so a block change from here on
+        // schedules the sequenced gearshift's next tick (`LevelTicks.tick` clears the ticks it
+        // ran and the set `willTickThisTick` reads before block entities tick).
+        self.dims[dim].sequencer_checks.phase_ended();
+        if std::mem::take(&mut self.dims[dim].cranks_due) {
+            self.run_cranks(dim);
+        }
         let stats = self.solve(dim, events);
         let steps = self.tick_sequencers(dim);
         (stats, steps)
@@ -2642,9 +2652,18 @@ impl CreateWorld {
         true
     }
 
+    /// The level's inputs were gathered: the cranks being turned tick with the level's block
+    /// entities, in `tick`. Java runs a tick's scheduled block ticks before any block entity
+    /// ticks (`ServerLevel` ticks `blockTicks` first), so a sequenced gearshift's block tick,
+    /// which starts an instruction and re-attaches its entity, precedes the crank pass that
+    /// walks the entities registered before it.
+    pub fn tick_cranks(&mut self, dim: usize) {
+        self.dims[dim].cranks_due = true;
+    }
+
     /// One tick of the cranks being turned: those whose time ran out stop; valve handles that
     /// stopped count their cooldown down (`ValveHandleBlockEntity.tick`, after the crank's).
-    pub fn tick_cranks(&mut self, dim: usize) {
+    fn run_cranks(&mut self, dim: usize) {
         let mut stopped = Vec::new();
         let d = &mut self.dims[dim];
         let mut positions: Vec<_> = d.handles.keys().copied().collect();
@@ -2785,7 +2804,8 @@ impl CreateWorld {
             Some(Block::MechanicalCrafter) => self.dims[dim].crafter_power_checks.push(pos),
             // `DeployerBlock.neighborChanged` → `redstoneUpdate`.
             Some(Block::Deployer) => self.dims[dim].deployer_power_checks.push(pos),
-            Some(Block::SequencedGearshift) => self.dims[dim].sequencer_checks.push(pos),
+            // `SequencedGearshiftBlock.neighborChanged`: a scheduled tick, one tick later.
+            Some(Block::SequencedGearshift) => self.dims[dim].sequencer_checks.schedule(pos),
             Some(Block::WaterWheel) => self.dims[dim].wheel_checks.push(pos),
             Some(Block::LargeWaterWheel) => schedule_large_wheel(&mut self.dims[dim], pos),
             // `WaterWheelStructuralBlock.updateShape`: the cell looks at its wheel now, and
@@ -3117,23 +3137,23 @@ impl CreateWorld {
         })
     }
 
-    /// Sequenced gearshifts whose neighbour changed, with whether each runs (its `state` is
-    /// not 0).
+    /// The sequenced gearshifts whose scheduled tick is due, their block-tick phase
+    /// (`SequencedGearshiftBlock.tick`), with whether each runs (its block's `state` is not 0).
     pub fn take_sequencer_checks(&mut self, dim: usize) -> Vec<([i32; 3], bool)> {
-        if self.dims[dim].sequencer_checks.is_empty() {
-            return Vec::new();
+        let d = &mut self.dims[dim];
+        d.sequencer_checks.due();
+        let mut checks = Vec::new();
+        for &pos in d.sequencer_checks.running() {
+            let Some(&state) = d.states.get(&pos) else {
+                continue;
+            };
+            if let Some((block, info)) = self.table.get(state)
+                && block == Block::SequencedGearshift
+            {
+                checks.push((pos, info.sequence != 0));
+            }
         }
-        let mut checks = std::mem::take(&mut self.dims[dim].sequencer_checks);
-        checks.sort();
-        checks.dedup();
         checks
-            .into_iter()
-            .filter_map(|pos| {
-                let state = *self.dims[dim].states.get(&pos)?;
-                let (block, info) = self.table.get(state)?;
-                (block == Block::SequencedGearshift).then_some((pos, info.sequence != 0))
-            })
-            .collect()
     }
 
     /// `SequencedGearshiftBlock.tick`: the sequenced gearshift at `pos` is `powered` or not, its
@@ -6645,6 +6665,7 @@ mod tests {
                 assert_eq!(w.dims[0].kinetics.network_membership(pos, 0).unwrap().1, 2);
                 for _ in 1..saved.in_use {
                     w.tick_cranks(0);
+                    w.tick(0, &mut Vec::new());
                 }
                 assert_eq!(w.dims[0].kinetics.generated(pos, 0), Some(rpm));
                 w.tick_cranks(0);
@@ -6687,8 +6708,8 @@ mod tests {
         assert_eq!(w.speed(0, [1, 0, 0]), Some(-32.0));
         for _ in 0..9 {
             w.tick_cranks(0);
+            w.tick(0, &mut Vec::new());
         }
-        w.tick(0, &mut Vec::new());
         assert_eq!(
             w.speed(0, [1, 0, 0]),
             Some(-32.0),
@@ -7008,8 +7029,8 @@ mod tests {
         );
         for _ in 0..6 {
             w.tick_cranks(0);
+            w.tick(0, &mut Vec::new());
         }
-        w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [1, 0, 0]), Some(-32.0), "45° takes 5 ticks, +2");
         w.tick_cranks(0);
         w.tick(0, &mut Vec::new());
@@ -7032,6 +7053,7 @@ mod tests {
         for _ in 0..3 {
             assert!(!w.use_valve(0, [0, 0, 0], true, 45), "cooling down");
             w.tick_cranks(0);
+            w.tick(0, &mut Vec::new());
         }
         assert!(
             w.use_valve(0, [0, 0, 0], true, 45),
@@ -7041,10 +7063,12 @@ mod tests {
         assert_eq!(w.speed(0, [1, 0, 0]), Some(32.0));
         for _ in 0..7 {
             w.tick_cranks(0);
+            w.tick(0, &mut Vec::new());
         }
         // Something else turning it: a motor at the shaft's far end.
         for _ in 0..4 {
             w.tick_cranks(0);
+            w.tick(0, &mut Vec::new());
         }
         w.block_changed(0, [2, 0, 0], 0, 12);
         w.tick(0, &mut Vec::new());
@@ -8705,6 +8729,175 @@ mod tests {
             w.tick(0, &mut Vec::new()).1.is_empty(),
             "idle: nothing ticks"
         );
+        states::clear_range();
+    }
+
+    #[test]
+    fn gearshifts_powered_in_one_tick_take_the_first_one_s_tick() {
+        use crate::sequencer::Step;
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:sequenced_gearshift", seq("0")),
+            ("create:sequenced_gearshift", seq("1")),
+            ("create:creative_motor", vec![("facing", "east")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (motor, first, second) = ([-1, 8, 0], [0, 8, 0], [1, 8, 0]);
+        w.block_changed(0, motor, 0, 12);
+        w.set_motor(0, motor, 32.0);
+        w.block_changed(0, first, 0, 10);
+        w.block_changed(0, second, 0, 10);
+        w.tick(0, &mut Vec::new());
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, first), Some(32.0));
+        // Both are powered in the same tick: each block's neighbour changed, so each looks at
+        // its power in this tick's block-tick phase (`SequencedGearshiftBlock.tick`).
+        for pos in [first, second] {
+            w.neighbor_changed(0, pos, 10);
+        }
+        assert_eq!(
+            w.take_sequencer_checks(0),
+            [(first, false), (second, false)]
+        );
+        for (pos, running) in [(first, false), (second, false)] {
+            let step = w.sequencer_redstone(0, pos, true, running);
+            if pos == first {
+                assert_eq!(step, Some(Step::Run(1)));
+                w.block_changed(0, pos, 10, 11);
+            } else {
+                // Java: it turns at 0 (the first is idle), so `getSpeed() == 0` keeps it idle.
+                assert_eq!(step, None);
+            }
+            // A block state change notifies the block's neighbours (`Level.setBlock`), the
+            // second gearshift among them (`willTickThisTick`: already due, so no second tick).
+            w.neighbor_changed(0, second, 11);
+        }
+        w.tick(0, &mut Vec::new());
+        // Java: the first turns 90° at 32 RPM (ceil(90 / 9.6) + 2 = 12 ticks).
+        let run = w.sequencer_run(0, first).unwrap();
+        assert_eq!((run.current, run.duration, run.timer), (0, 12, 1));
+        assert!((run.progress - 9.6).abs() < 1e-4);
+        // The second looked at its power while the first was idle, so it turns at 0 and
+        // starts nothing: no instruction, no duration, powered all the same.
+        let run = w.sequencer_run(0, second).unwrap();
+        assert_eq!(
+            (run.current, run.duration, run.progress, run.timer),
+            (-1, -1, 0.0, 0)
+        );
+        assert!(run.powered_before);
+        assert_eq!(w.state_at(0, second), Some(10));
+        // It turns through the first now, and nothing waits to look at it again.
+        assert_eq!(w.speed(0, second), Some(32.0));
+        // A tick that looked at it again would start its program; Java's does not.
+        assert!(w.take_sequencer_checks(0).is_empty());
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.sequencer_run(0, second).unwrap().current, -1);
+        assert_eq!(w.state_at(0, second), Some(10));
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_gearshift_repowered_when_its_column_reloads_restarts_its_program() {
+        use crate::sequencer::{Instruction, Kind, Run, Speed, Step};
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:shaft", vec![("axis", "x")]),
+            ("create:sequenced_gearshift", seq("0")),
+            ("create:sequenced_gearshift", seq("1")),
+            ("create:hand_crank", vec![("facing", "west")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (crank, shaft, gearshift) = ([-2, 8, 0], [-1, 8, 0], [0, 8, 0]);
+        w.block_changed(0, shaft, 0, 10);
+        w.block_changed(0, gearshift, 0, 11);
+        w.block_changed(0, crank, 0, 13);
+        w.tick(0, &mut Vec::new());
+        assert!(w.turn_crank(0, crank, false));
+        w.tick_cranks(0);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, gearshift), Some(-32.0));
+        let instructions = vec![
+            Instruction::new(Kind::TurnAngle, 90),
+            Instruction {
+                kind: Kind::End,
+                speed: Speed::Forward,
+                value: -1,
+            },
+        ];
+        w.set_sequencer_instructions(0, gearshift, instructions.clone(), false);
+        // Where Java is when its chunk saves: idle, unpowered, its program untouched.
+        w.restore_sequencer(
+            0,
+            gearshift,
+            Run {
+                current: -1,
+                duration: -1,
+                progress: 0.0,
+                timer: 0,
+                powered_before: false,
+            },
+        );
+        let run = w.sequencer_run(0, gearshift).unwrap();
+        let saved: Vec<_> = [crank, shaft, gearshift]
+            .into_iter()
+            .map(|p| (p, w.dims[0].kinetics.saved_state(p, 0)))
+            .collect();
+        let far = w.dims[0].kinetics.saved_state(gearshift, 1);
+        let handle = w.saved_handle(0, crank).unwrap();
+        let states: Vec<_> = [shaft, gearshift, crank]
+            .into_iter()
+            .map(|p| (p, w.state_at(0, p).unwrap()))
+            .collect();
+        // The signal comes back at the action boundary and the column reloads in the same
+        // tick: `Persistence.reload` keeps blocks and scheduled block ticks, and reads the
+        // block entities back from their data.
+        w.neighbor_changed(0, gearshift, 11);
+        w.column_unloaded(0, 0, 0);
+        w.column_unloaded(0, -1, 0);
+        for (p, state) in states {
+            w.block_loaded(0, p, state);
+        }
+        for (p, state) in saved {
+            if let Some(state) = state {
+                assert!(w.dims[0].kinetics.restore_state(p, 0, state));
+            }
+        }
+        if let Some(far) = far {
+            assert!(w.dims[0].kinetics.restore_state(gearshift, 1, far));
+        }
+        w.restore_handle(0, crank, handle);
+        w.set_sequencer_instructions(0, gearshift, instructions, false);
+        w.restore_sequencer(0, gearshift, run);
+        // The crank's pass runs with the block entities, after this tick's block ticks.
+        w.tick_cranks(0);
+        assert_eq!(w.take_sequencer_checks(0), [(gearshift, false)]);
+        assert_eq!(
+            w.sequencer_redstone(0, gearshift, true, false),
+            Some(Step::Run(1))
+        );
+        w.block_changed(0, gearshift, 11, 12);
+        w.tick(0, &mut Vec::new());
+        // Java: the program restarts at 32 RPM (12 ticks for 90°) and the gearshift is
+        // attached again in this tick, turning its far half 9.6° a tick.
+        assert_eq!(w.state_at(0, gearshift), Some(12));
+        let run = w.sequencer_run(0, gearshift).unwrap();
+        assert_eq!((run.current, run.duration, run.timer), (0, 12, 1));
+        assert!((run.progress + 9.6).abs() < 1e-4);
+        assert!(run.powered_before);
+        assert_eq!(w.speed(0, gearshift), Some(-32.0));
+        let saved = w.dims[0].kinetics.saved_state(gearshift, 0).unwrap();
+        assert_eq!((saved.speed, saved.needs_speed_update), (-32.0, false));
+        assert_eq!(saved.source.map(|s| s.pos), Some(shaft));
         states::clear_range();
     }
 
