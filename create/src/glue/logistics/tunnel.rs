@@ -63,6 +63,21 @@ pub fn has_distribution(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
     !f.is_empty() && (brass_connected(lv, pos) || f.iter().any(|d| d.axis() != axis))
 }
 
+/// `BrassTunnelBlockEntity.canInsert`: whether an item entering from `side` is accepted by the
+/// tunnel's own filter and (when distributing) its held slot.
+pub fn can_insert(lv: &ServerLevel<'_>, pos: [i32; 3], side: Dir, item: &str) -> bool {
+    let distributing = has_distribution(lv, pos);
+    let filter_passes = own_filter_passes(lv, pos, side, item);
+    let dim = lv.dim;
+    with_world(|w| {
+        w.dims[dim]
+            .brass
+            .get(&pos)
+            .is_some_and(|b| b.can_insert(distributing, filter_passes))
+    })
+    .unwrap_or(false)
+}
+
 /// `canTakeItems`: the brass tunnel at `pos` holds no stack and does not hand out with its
 /// synchronized group.
 pub fn can_take(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
@@ -71,7 +86,7 @@ pub fn can_take(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
         w.dims[dim]
             .brass
             .get(&pos)
-            .is_some_and(|b| b.stack.is_none() && !b.synced)
+            .is_some_and(create_engine::tunnel::Brass::can_take)
     })
     .unwrap_or(false)
 }

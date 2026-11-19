@@ -240,6 +240,20 @@ impl Default for Brass {
     }
 }
 
+impl Brass {
+    /// `BrassTunnelBlockEntity.canInsert`: whether an item entering from `side` is accepted by
+    /// the tunnel's own filter and (when distributing) its held slot; false means `stuckAtTunnel`.
+    pub fn can_insert(&self, distributing: bool, filter_passes: bool) -> bool {
+        filter_passes && (!distributing || self.stack.is_none())
+    }
+
+    /// `BrassTunnelBlockEntity.canTakeItems`: holds no stack and is not handing out with a
+    /// synchronized group.
+    pub fn can_take(&self) -> bool {
+        self.stack.is_none() && !self.synced
+    }
+}
+
 /// `BrassTunnelFilterSlot`: where a brass tunnel (axis `axis`, shape `shape`) shows the filter
 /// slot of side `side`, in the block; None on a side without one (`isValidFaceForFilter`: its
 /// open sides).
