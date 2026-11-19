@@ -1,14 +1,14 @@
 # Validation
 
 Checked on 2026-11-19 (Linux x86_64, Rust 1.99.1, a fresh build directory), pinned to Sunrise
-`ed3ac19558d8dc1092c431312848cbb58fb01e41` in `create/sunrise-mod.toml`.
+`520fc4882de3abb8ecd8b98293f4d7263bc88181` in `create/sunrise-mod.toml`.
 `cargo sunrise-mod check` uses the official release tool and signed SDK from
-`sdk-ed3ac19558d8dc1092c431312848cbb58fb01e41`, with its built-in published keys.
+`sdk-520fc4882de3abb8ecd8b98293f4d7263bc88181`, with its built-in published keys.
 No SDK mirror or trusted-key override is used. Mixins stays at
 `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`, as the release SDK specifies.
 
-The tests under “In game” are historical: the developer build was `b77574e` and that section's nightly smoke
-was on `2d81263`. The registry smoke tests below use `ed3ac19`.
+The `520fc48` pin move was not tried in game. The in-game results below are historical: the developer
+build was `b77574e`, the first nightly smoke test used `2d81263`, and the registry smoke tests used `ed3ac19`.
 
 ## Checks
 
@@ -16,15 +16,15 @@ was on `2d81263`. The registry smoke tests below use `ed3ac19`.
 |---|---|---|
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 check` and `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
-| `create/` | `cargo +1.99.1 test` | Pass (99 glue tests) |
-| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (781 engine tests) |
-| `create/` | `cargo sunrise-mod check` | Pass (official ed3ac19 SDK) |
+| `create/` | `cargo +1.99.1 test` | Pass (100 glue tests) |
+| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (800 engine tests) |
+| `create/` | `cargo sunrise-mod check` | Pass (official 520fc48 SDK) |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/src/engine/` | `cargo +1.99.1 check` and `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 fmt --check` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 check --locked` and `cargo +1.99.1 clippy --locked --all-targets -- -D warnings` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (53 tests, including `committed_assets` with `CREATE_JAR` set to the pinned jar) |
-| `tools/create-data/` | `cargo run --locked -- registry --out ../../create --check` | Pass; rejected a modified atlas in a scratch copy. Earlier runs rejected a stale recipe and an altered item definition |
+| `tools/create-data/` | `cargo run --locked -- registry --out ../../create --check` | Pass |
 
 ## Registry package smoke test on `ed3ac19`
 
@@ -216,10 +216,9 @@ it, so items picked up while it is open appear after the next change (Create's m
 dropped to the title screen ("End of stream") five times across three test sessions with no panic or crash report;
 none reproduced.
 
-## Not run
+## Not run on `520fc48`
 
-- **A player's build.** Without a published SDK for the pin, the launcher builds the mod only on a developer base
-  built from Sunrise at the pin, and CI's `cargo sunrise-mod check` fails at the SDK fetch.
+- An in-game run or a build through the launcher.
 
 ## Issue #17: declared-property defaults only (2026-11-17)
 

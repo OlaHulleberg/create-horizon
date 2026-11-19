@@ -59,9 +59,9 @@ use mod_api::{
     BlockEntityTypeKey, BlockEntityUpdateTagEvent, BlockKey, BlockPart, BlockShapeKind, BlockState,
     BlockUpdateFlags, ClientHost, Command, CommandArgumentValue, Compound, ContentsChangedEvent,
     Direction, Flow, Host, HostBlockStates, HostSide, HostTransaction, ITEMS, ItemPart,
-    ItemResource, ItemStack, ModContainer, OnBlockPlacedByEvent, PlayerRef, RegisterCommandsEvent,
-    Registrar, RegistrationContext, RunModCommandEvent, Screen, ScreenEvent, ServerHost,
-    SoundSource, Tag,
+    ItemResource, ItemStack, MenuPart, ModContainer, OnBlockPlacedByEvent, PlayerRef,
+    RegisterCommandsEvent, Registrar, RegistrationContext, RunModCommandEvent, Screen, ScreenEvent,
+    ServerHost, SoundSource, Tag,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -74,6 +74,7 @@ const QUILL: &str = "create:schematic_and_quill";
 const GUNPOWDER: &str = "minecraft:gunpowder";
 /// `SchematicannonInventory`: schematic in, schematic out, book in, book out, gunpowder.
 const CANNON_SLOTS: usize = 5;
+const MENU: &str = "minecraft:hopper";
 /// The key in a cannon's block entity data under which clients find where its barrel aims:
 /// `[has a target, x, y, z, resting yaw's bits]`.
 const AIM: &str = "Aim";
@@ -363,10 +364,11 @@ impl Subsystem for Schematics {
                     faces: std::array::from_fn(|_| Vec::new()),
                     inputs: Vec::new(),
                     outputs: Vec::new(),
-                    menu: Some("minecraft:hopper".into()),
+                    menu: Some(MENU.into()),
                 },
             );
         }
+        r.menu_part(MENU, SchematicScreens);
         for kind in [cannon, table] {
             if let Err(e) = r.block_entity_part(&kind, SchematicEntity) {
                 crate::create_log!(
@@ -1430,7 +1432,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
 }
 
 /// The cannon's and the table's block entities: the barrel drawn where it aims
-/// (`SchematicannonRenderer`), the table's screen, and their column's data once they load.
+/// (`SchematicannonRenderer`), their server-side menu actions, and column data once they load.
 struct SchematicEntity;
 
 #[mod_api::sunrise_part]
@@ -1488,45 +1490,6 @@ impl BlockEntityPart for SchematicEntity {
         draw.keep();
     }
 
-    /// `SchematicTableMenu`: the input and output slots, as the hopper's first and last.
-    fn screen_draw(&self, host: &dyn ClientHost, event: &mut mod_api::ScreenDrawEvent<'_>) {
-        match event.block {
-            "create:schematicannon" => {
-                screens::draw_cannon(host, event.draw, event.data, event.origin);
-            }
-            "create:schematic_table" => {
-                TABLE_OPEN.set(true);
-                screens::draw_table(host, event.draw, event.data, event.origin);
-            }
-            _ => {}
-        }
-    }
-
-    fn screen_click(
-        &self,
-        host: &dyn ClientHost,
-        event: &mut mod_api::ScreenClickEvent<'_>,
-    ) -> Option<i32> {
-        if event.right {
-            return None;
-        }
-        match event.block {
-            "create:schematicannon" => screens::click_cannon(host, event.data, event.at),
-            "create:schematic_table" => screens::click_table(host, event.at),
-            _ => None,
-        }
-    }
-
-    fn screen_tooltip(&self, host: &dyn ClientHost, event: &mut mod_api::ScreenTooltipEvent<'_>) {
-        match event.block {
-            "create:schematicannon" => {
-                screens::tooltip_cannon(event.data, event.at, event.lines);
-            }
-            "create:schematic_table" => screens::tooltip_table(host, event.at, event.lines),
-            _ => {}
-        }
-    }
-
     fn menu_button(&self, host: &mut dyn ServerHost, event: &mut mod_api::MenuButtonEvent<'_>) {
         match event.entity.id() {
             "create:schematicannon" => cannon_button(host, event),
@@ -1579,12 +1542,58 @@ impl BlockEntityPart for SchematicEntity {
         *event.stack = packages::body::with_count(&stack, stack.count() - n);
         Flow::Cancel
     }
+}
 
+/// The cannon and table share the hopper menu type, with a different screen layout for each block.
+struct SchematicScreens;
+
+#[mod_api::sunrise_part]
+impl MenuPart for SchematicScreens {
     fn screen(&self, _host: &dyn Host, event: &mut ScreenEvent<'_>) -> Option<Screen> {
-        if event.block == "create:schematicannon" {
-            return Some(screens::cannon_screen());
+        match event.block {
+            Some("create:schematicannon") => Some(screens::cannon_screen()),
+            Some("create:schematic_table") => Some(screens::table_screen()),
+            _ => None,
         }
-        (event.block == "create:schematic_table").then(screens::table_screen)
+    }
+
+    /// `SchematicTableMenu`: the input and output slots, as the hopper's first and last.
+    fn screen_draw(&self, host: &dyn ClientHost, event: &mut mod_api::ScreenDrawEvent<'_>) {
+        match event.block {
+            Some("create:schematicannon") => {
+                screens::draw_cannon(host, event.draw, event.data, event.origin);
+            }
+            Some("create:schematic_table") => {
+                TABLE_OPEN.set(true);
+                screens::draw_table(host, event.draw, event.data, event.origin);
+            }
+            _ => {}
+        }
+    }
+
+    fn screen_click(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ScreenClickEvent<'_>,
+    ) -> Option<i32> {
+        if event.right {
+            return None;
+        }
+        match event.block {
+            Some("create:schematicannon") => screens::click_cannon(host, event.data, event.at),
+            Some("create:schematic_table") => screens::click_table(host, event.at),
+            _ => None,
+        }
+    }
+
+    fn screen_tooltip(&self, host: &dyn ClientHost, event: &mut mod_api::ScreenTooltipEvent<'_>) {
+        match event.block {
+            Some("create:schematicannon") => {
+                screens::tooltip_cannon(event.data, event.at, event.lines);
+            }
+            Some("create:schematic_table") => screens::tooltip_table(host, event.at, event.lines),
+            _ => {}
+        }
     }
 }
 

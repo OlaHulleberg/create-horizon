@@ -1,6 +1,6 @@
 # API gaps
 
-What the port is missing as of 2026-11-19, at Sunrise Nightly `ed3ac19` in `create/sunrise-mod.toml`.
+What the port is missing as of 2026-11-19, at Sunrise Nightly `520fc48` in `create/sunrise-mod.toml`.
 These rows include gaps in the SDK and APIs the port has not adopted yet. Better APIs wait until after parity.
 Links point to the Create 6.0.11 source (`b62e837`) that uses the missing feature.
 

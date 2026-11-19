@@ -17,8 +17,9 @@ use create_engine::door::{Door, Slide};
 use create_engine::dye::{self, DyeColor};
 use mod_api::{
     BlockEntityPart, BlockPart, BlockState, Compound, Hand, Host, HostTransaction,
-    InteractionResult, ItemStack, MenuClosedEvent, PlayerRef, Registrar, RegistrationContext,
-    Screen, ScreenEvent, ServerHost, SoundSource, UseItemOnEvent, UseWithoutItemEvent,
+    InteractionResult, ItemStack, MenuClosedEvent, MenuPart, PlayerRef, Registrar,
+    RegistrationContext, Screen, ScreenEvent, ServerHost, SoundSource, UseItemOnEvent,
+    UseWithoutItemEvent,
 };
 
 use super::processing::TOOLBOX_TYPE;
@@ -37,9 +38,10 @@ impl Subsystem for Blocks {
                 r.block_part(states::key(block), TemplateBlock);
             }
         }
+        r.menu_part(create_engine::toolbox::MENU, ToolboxScreen);
         let toolbox = r.block_entity_type_key(TOOLBOX_TYPE);
-        if let Err(e) = r.block_entity_part(&toolbox, ToolboxMenu) {
-            crate::create_log!("[create] the toolbox screen's part was refused: {e:?}");
+        if let Err(e) = r.block_entity_part(&toolbox, ToolboxButtons) {
+            crate::create_log!("[create] the toolbox buttons' part was refused: {e:?}");
         }
     }
 
@@ -506,25 +508,16 @@ fn tick_doors(lv: &mut ServerLevel<'_>) {
 }
 
 /// The toolbox's menu screen.
-struct ToolboxMenu;
+struct ToolboxScreen;
 
 #[mod_api::sunrise_part]
-impl BlockPart for ToolboxMenu {}
-
-#[mod_api::sunrise_part]
-impl BlockEntityPart for ToolboxMenu {
+impl MenuPart for ToolboxScreen {
     /// A toolbox's screen (`ToolboxScreen`) shows each compartment by its first stack round the
     /// toolbox's picture; the other stacks and the container's four slots past Create's 32 are
     /// hidden (the server's menu leaves them out too).
     fn screen(&self, _host: &dyn Host, event: &mut ScreenEvent<'_>) -> Option<Screen> {
         use create_engine::toolbox;
-        let block = event
-            .block
-            .strip_prefix("create:")
-            .and_then(Block::from_name)?;
-        if !dye::is_toolbox(block) {
-            return None;
-        }
+        event.block.and_then(toolbox_block)?;
         Some(Screen {
             width: toolbox::SCREEN_WIDTH,
             height: toolbox::SCREEN_HEIGHT,
@@ -556,7 +549,8 @@ impl BlockEntityPart for ToolboxMenu {
         event: &mut mod_api::ScreenDrawEvent<'_>,
     ) {
         use create_engine::toolbox::{BACKGROUND, SCREEN_HEIGHT};
-        let Some(block) = toolbox_block(event.block) else {
+        let Some(name) = event.block else { return };
+        let Some(block) = toolbox_block(name) else {
             return;
         };
         let [ox, oy] = event.origin;
@@ -586,7 +580,7 @@ impl BlockEntityPart for ToolboxMenu {
             false,
         );
         // `renderToolbox`: the toolbox, 50 px a block, right of the background's foot.
-        if let Some(state) = host.block_state_id(event.block) {
+        if let Some(state) = host.block_state_id(name) {
             let _ = draw.draw_scene(
                 [
                     bx + BACKGROUND[0],
@@ -621,7 +615,7 @@ impl BlockEntityPart for ToolboxMenu {
         _host: &dyn mod_api::ClientHost,
         event: &mut mod_api::ScreenClickEvent<'_>,
     ) -> Option<i32> {
-        toolbox_block(event.block)?;
+        event.block.and_then(toolbox_block)?;
         if event.right {
             return None;
         }
@@ -640,14 +634,23 @@ impl BlockEntityPart for ToolboxMenu {
         _host: &dyn mod_api::ClientHost,
         event: &mut mod_api::ScreenTooltipEvent<'_>,
     ) {
-        if toolbox_block(event.block).is_some() && on_button(TOOLBOX_DEPOSIT, event.at) {
+        if event.block.and_then(toolbox_block).is_some() && on_button(TOOLBOX_DEPOSIT, event.at) {
             event.lines.push((
                 mod_api::Text::translate("create.toolbox.depositBox", vec![]),
                 0xFFFF_FFFF,
             ));
         }
     }
+}
 
+/// Server-side buttons for a toolbox's block entity menu.
+struct ToolboxButtons;
+
+#[mod_api::sunrise_part]
+impl BlockPart for ToolboxButtons {}
+
+#[mod_api::sunrise_part]
+impl BlockEntityPart for ToolboxButtons {
     fn menu_button(&self, host: &mut dyn ServerHost, event: &mut mod_api::MenuButtonEvent<'_>) {
         if event.entity.id() != TOOLBOX_TYPE {
             return;
