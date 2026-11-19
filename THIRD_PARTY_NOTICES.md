@@ -8,8 +8,10 @@ of Sunrise's own are used.
 
 This port translates Create's Java code (the 6.0.11 source, branch `mc1.21.1/dev`) and compiles its data
 (everything outside `src/main/resources/assets/`, `src/generated/` included) into Rust; the jar the player's game
-reads Create's assets from is the 6.0.10 release. Source: <https://github.com/Creators-of-Create/Create>, file
-`LICENSE.md`.
+reads Create's assets from is the 6.0.10 release. The committed 26.3 registry overlays are derived from that
+release's MIT `src/generated` data at `ac0c444d9828da3453ae8cc65338e8de063286fb`; the simple item definitions
+refer to model IDs verified against the same tree, not copies of the models. Source:
+<https://github.com/Creators-of-Create/Create>, file `LICENSE.md`.
 
     MIT License
 

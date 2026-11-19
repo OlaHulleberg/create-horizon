@@ -47,5 +47,8 @@ jobs:
         run: cargo fmt --check
       - working-directory: tools/create-data
         run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Check registry overlays against the pinned Create jar and MIT tree
+        working-directory: tools/create-data
+        run: cargo run --locked -- registry --out ../../create --check
       - working-directory: tools/create-data
         run: cargo test --locked
