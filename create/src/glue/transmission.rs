@@ -5,8 +5,9 @@
 //! shaft or cog next to it: the shaft line extended (`ShaftBlock.PlacementHelper`) and cogs
 //! meshing beside or diagonally (`CogwheelBlockItem`'s `SmallCogHelper`, `LargeCogHelper`,
 //! `DiagonalCogHelper`). The helpers' ghost preview is client drawing Create does every frame;
-//! it is left out. Also the wrench on chain drives in a chain (`ChainDriveBlock`'s turn about
-//! the chain) and on sequenced gearshifts (`onWrenched`), and a horizontal gearbox picked as the
+//! it is left out. Also the wrench on chain drives (`ChainDriveBlock`'s turn, about the chain
+//! in one, and `updateAfterWrenched`) and on sequenced gearshifts (`onWrenched`), and a
+//! horizontal gearbox picked as the
 //! vertical gearbox (`getCloneItemStack`).
 //!
 //! A casing taken off shows its break particles and sound as `levelEvent(2001)` does (rebuilt
@@ -417,28 +418,38 @@ pub fn wrench_used(
     let Some(axis) = info.axis else {
         return false;
     };
-    // ChainDriveBlock.getRotatedBlockState: a drive in a chain turns about the chain's axis,
-    // staying in it (its neighbours reshape it after, `updateAfterWrenched`); one alone turns
-    // about the clicked face's, as any axis block.
+    // IWrenchable.onWrenched on a chain drive. ChainDriveBlock.getRotatedBlockState: a drive in
+    // a chain turns about the chain's axis, one alone about the clicked face's, as any axis
+    // block. ChainDriveBlock.updateAfterWrenched: it starts over from its default state on the
+    // new axis, shaped by the drives beside it (a gearshift's `powered` read again); the
+    // drives beside it are told when it is set.
     if matches!(
         block,
         Block::EncasedChainDrive | Block::AdjustableChainGearshift
     ) && !sneaking
     {
-        if info.chain.unwrap_or_default() == create_engine::chain::Part::None {
-            return false;
-        }
-        let about = create_engine::chain::connection_axis(axis, info.along_first);
+        let about = match info.chain.unwrap_or_default() {
+            create_engine::chain::Part::None => clicked.axis(),
+            _ => create_engine::chain::connection_axis(axis, info.along_first),
+        };
         let turned = create_engine::wrench::clockwise(Dir::from_axis(axis, true), about).axis();
+        let Some(shaped) = with_world(|w| w.chain_after_wrenched(lv.dim, pos, turned)) else {
+            return true;
+        };
+        let flag = |b: bool| if b { "true" } else { "false" };
         let facts = lv.host.block_states();
-        if turned != axis
-            && let Ok(next) = state.with(&facts, "axis", axis_name(turned))
-        {
+        let mut next = state
+            .with(&facts, "axis", axis_name(turned))
+            .and_then(|s| s.with(&facts, "part", shaped.part.name()))
+            .and_then(|s| s.with(&facts, "axis_along_first", flag(shaped.along_first)));
+        if block == Block::AdjustableChainGearshift {
+            let powered = lv.has_neighbor_signal(pos);
+            next = next.and_then(|s| s.with(&facts, "powered", flag(powered)));
+        }
+        if let Ok(next) = next {
             super::items::wrench::switch_state(lv, pos, next);
-            // `Block.updateFromNeighbourShapes`: its part from the drives beside it.
-            if let Some(id) = states::id(next) {
-                with_world(|w| w.neighbor_changed(lv.dim, pos, id));
-            }
+        }
+        if lv.block_state(pos) != Some(state) {
             super::items::wrench::rotate_sound(lv, pos);
         }
         return true;
