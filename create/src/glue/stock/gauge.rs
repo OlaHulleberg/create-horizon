@@ -541,6 +541,23 @@ fn panel_tag(host: &dyn mod_api::Host, n: &Net, pp: PanelPos, g: &Panel<Key>) ->
     Tag::compound(c)
 }
 
+/// `FactoryPanelBlock.getCollisionShape`: the panels' boxes for a query with no entity (the
+/// block entity's published collision shape, which the game answers with), nothing for an entity.
+pub(super) struct Collision;
+
+#[mod_api::sunrise_part]
+impl mod_api::BlockPart for Collision {
+    fn collision_shape(
+        &self,
+        _context: &dyn mod_api::LoopContext,
+        event: &mut mod_api::CollisionShapeEvent<'_>,
+    ) {
+        if event.query.entity().is_some() {
+            *event.shape = Some(Vec::new());
+        }
+    }
+}
+
 /// The gauges whose panels changed: their block entities' data, which goes to their clients.
 pub(super) fn send_redraws(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
@@ -563,17 +580,18 @@ pub(super) fn send_redraws(lv: &mut ServerLevel<'_>) {
         };
         // FactoryPanelBlockEntity.getShape: union only the active panels' boxes.
         if let Some((face, facing)) = orientation(lv, pos) {
-            let outline = with(dim, |n| {
+            let outline: Vec<[f64; 6]> = with(dim, |n| {
                 panels_at(n, pos)
                     .into_iter()
                     .map(|slot| fx::panel_box(face, facing, slot))
                     .collect()
             });
+            // `getCollisionShape` gives these to a query with no entity ([`Collision`]).
             let _ = entity.set_shapes(
                 &mut *lv.host,
                 Some(mod_api::BlockEntityShapes {
+                    collision: outline.clone(),
                     outline,
-                    collision: Vec::new(),
                 }),
             );
         }

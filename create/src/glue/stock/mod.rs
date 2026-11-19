@@ -519,6 +519,7 @@ impl Subsystem for Stock {
         ] {
             r.block_part(states::key(b), StockBlock);
         }
+        r.block_part(states::key(Block::FactoryGauge), gauge::Collision);
         for item in [
             "create:stock_link",
             "create:stock_ticker",
