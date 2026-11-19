@@ -608,6 +608,15 @@ pub(super) fn put_turning(lv: &mut ServerLevel<'_>, pos: [i32; 3], carried: Carr
 /// the new speed. A windmill neither assembles nor comes apart from a speed change (its
 /// `onSpeedChanged` keeps its assembly): its angle runs on at the new speed too. Nothing runs
 /// without a change.
+/// `MechanicalBearingBlockEntity.onSpeedChanged`: the speed changed sign from a turning one
+/// (`Math.signum(prevSpeed) != Math.signum(getSpeed()) && prevSpeed != 0`, with Java's signum of
+/// zero being zero, so stopping counts), after which a structure not stalled has its angle
+/// rounded to the nearest degree (`angle = Math.round(angle)`).
+fn sign_changed(prev: f32, now: f32) -> bool {
+    let signum = |v: f32| if v == 0.0 { 0.0 } else { v.signum() };
+    prev != 0.0 && signum(prev) != signum(now)
+}
+
 pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let Some(mut checks) = with_world(|w| std::mem::take(&mut w.dims[dim].bearing_checks)) else {
@@ -645,11 +654,9 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
                     .get_mut(&pos)
                     .filter(|m| m.kind == create_engine::world::BearingKind::Windmill)
                 {
-                    // `onSpeedChanged`: where the speed changed sign, the angle snaps to the
-                    // nearest degree (`Math.round(angle)`).
                     let was = m.turn.rpm;
                     m.turn.rebase(now, at);
-                    if was != 0.0 && was.signum() != at.signum() {
+                    if !stalled && sign_changed(was, rpm) {
                         m.turn.angle = (m.turn.angle + 0.5).floor();
                     }
                     w.dims[dim].windmill_changes.push(pos);
@@ -675,9 +682,7 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
                     BEARING_CARRIED.with_borrow(|c| c.get(&(dim, pos)).is_some_and(|c| c.stalled));
                 let was = turn.rpm;
                 turn.rebase(now, if stalled { 0.0 } else { rpm });
-                // `onSpeedChanged`: where the speed changed sign, the angle snaps to the
-                // nearest degree (`Math.round(angle)`).
-                if was != 0.0 && was.signum() != rpm.signum() {
+                if !stalled && sign_changed(was, rpm) {
                     turn.angle = (turn.angle + 0.5).floor();
                 }
                 // `onSpeedChanged`: the limit starts again from the context it has now (not
@@ -1844,4 +1849,16 @@ fn windmills_from_nbt(
             ))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod sign_tests {
+    #[test]
+    fn stopping_a_turning_bearing_is_a_sign_change() {
+        assert!(super::sign_changed(16.0, 0.0));
+        assert!(super::sign_changed(-16.0, 0.0));
+        assert!(super::sign_changed(16.0, -8.0));
+        assert!(!super::sign_changed(16.0, 8.0));
+        assert!(!super::sign_changed(0.0, 16.0));
+    }
 }
