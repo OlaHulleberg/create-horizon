@@ -1461,7 +1461,11 @@ impl BlockPart for StockBlock {
         }
     }
 
-    fn analog_output(&self, _level: &dyn LevelHost, event: &mut AnalogOutputEvent) {
+    fn analog_output(
+        &self,
+        _level: &mut dyn mod_api::LevelRandomHost,
+        event: &mut AnalogOutputEvent,
+    ) {
         if states::id(event.state).and_then(block_of) != Some(Block::RedstoneRequester) {
             return;
         }

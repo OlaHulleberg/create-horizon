@@ -92,6 +92,7 @@ pub(super) fn register(r: &mut dyn mod_api::Registrar) {
         r.block_container(
             &crate::glue::states::key(b),
             ModContainer {
+                insert_rules: Vec::new(),
                 slots: if super::is_port(b) { PORT_SLOTS } else { 2 },
                 faces: std::array::from_fn(|_| Vec::new()),
                 inputs: Vec::new(),

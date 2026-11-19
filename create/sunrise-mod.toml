@@ -11,7 +11,7 @@ capabilities = ["registries"]
 
 [native]
 game = "26.3"
-sunrise = "2d8126336e579777eabf9b2fd8b3d476236a04f2"
+sunrise = "ed3ac19558d8dc1092c431312848cbb58fb01e41"
 mixins = "e59da9094f0c2fdda6c627fe9eff22dec6a906f0"
 
 [[jar]]

@@ -5,7 +5,7 @@
 //! cannon's ticks; its buttons are menu buttons (`ConfigureSchematicannonPacket`).
 
 use create_engine::schematicannon::{Cannon, Configure, SHOTS_PER_GUNPOWDER, State, Status};
-use mod_api::{ClientHost, DrawContext, Screen};
+use mod_api::{ClientHost, DrawContext, Screen, Text, text::TextStyle};
 use std::cell::Cell;
 
 const TEX: &str = "create:gui/schematics_2";
@@ -321,27 +321,31 @@ pub(super) fn click_cannon(host: &dyn ClientHost, data: &[i32], at: [f32; 2]) ->
 }
 
 /// The tooltips of the buttons, the fuel bar and the empty slots.
-pub(super) fn tooltip_cannon(
-    host: &dyn ClientHost,
-    data: &[i32],
-    at: [f32; 2],
-    lines: &mut Vec<String>,
-) {
-    let tr = |key: &str| host.translate(key).unwrap_or_else(|| key.to_owned());
+pub(super) fn tooltip_cannon(data: &[i32], at: [f32; 2], lines: &mut Vec<(Text, u32)>) {
     if inside(at, [36.0, 19.0, 47.0, 16.0]) {
-        if get(data, 7) != 0 {
-            lines.push(tr("create.gui.schematicannon.gunpowderLevel").replace("%1$s", "100"));
+        let creative = get(data, 7) != 0;
+        let fuel = get(data, 5);
+        let percent = if creative {
+            100
         } else {
-            let fuel = get(data, 5);
-            let percent = fuel * 100 / SHOTS_PER_GUNPOWDER;
-            lines.push(
-                tr("create.gui.schematicannon.gunpowderLevel")
-                    .replace("%1$s", &percent.to_string()),
-            );
-            lines.push(format!(
-                "\u{a7}7{}",
-                tr("create.gui.schematicannon.shotsRemaining")
-                    .replace("%1$s", &format!("\u{a7}9{fuel}\u{a7}7"))
+            fuel * 100 / SHOTS_PER_GUNPOWDER
+        };
+        lines.push((
+            Text::translate(
+                "create.gui.schematicannon.gunpowderLevel",
+                vec![Text::literal(percent.to_string())],
+            ),
+            0xFFFF_FFFF,
+        ));
+        if !creative {
+            let mut blue = TextStyle::default();
+            blue.color = Some("blue".into());
+            lines.push((
+                Text::translate(
+                    "create.gui.schematicannon.shotsRemaining",
+                    vec![Text::literal(fuel.to_string()).with_style(blue)],
+                ),
+                0xFFAA_AAAA,
             ));
         }
         return;
@@ -368,15 +372,15 @@ pub(super) fn tooltip_cannon(
         if inside(at, [b.at[0], b.at[1], 18.0, 18.0])
             && let Some((_, key)) = keys.iter().find(|(id, _)| *id == b.id)
         {
-            lines.push(tr(key));
+            lines.push((Text::translate(*key, vec![]), 0xFFFF_FFFF));
             if b.id >= MODE {
                 let (_, green) = looks(&b, data);
                 let (key, colour) = if green {
-                    ("create.gui.schematicannon.optionEnabled", "\u{a7}2")
+                    ("create.gui.schematicannon.optionEnabled", 0xFF00_AA00)
                 } else {
-                    ("create.gui.schematicannon.optionDisabled", "\u{a7}c")
+                    ("create.gui.schematicannon.optionDisabled", 0xFFFF_5555)
                 };
-                lines.push(format!("{colour}{}", tr(key)));
+                lines.push((Text::translate(key, vec![]), colour));
             }
             return;
         }
@@ -388,7 +392,7 @@ pub(super) fn tooltip_cannon(
     ];
     for (p, key) in slots {
         if inside(at, [p[0], p[1], 16.0, 16.0]) {
-            lines.push(tr(key));
+            lines.push((Text::translate(key, vec![]), 0xFFFF_FFFF));
         }
     }
 }
@@ -560,7 +564,7 @@ pub(super) fn scroll_table(host: &dyn ClientHost, up: bool) {
 }
 
 /// The list's tooltip: its title and the schematics, the chosen one marked.
-pub(super) fn tooltip_table(host: &dyn ClientHost, at: [f32; 2], lines: &mut Vec<String>) {
+pub(super) fn tooltip_table(host: &dyn ClientHost, at: [f32; 2], lines: &mut Vec<(Text, u32)>) {
     if !inside(at, [45.0, 21.0, 139.0, 18.0]) {
         return;
     }
@@ -568,22 +572,24 @@ pub(super) fn tooltip_table(host: &dyn ClientHost, at: [f32; 2], lines: &mut Vec
     if files.is_empty() {
         return;
     }
-    let title = host
-        .translate("create.gui.schematicTable.availableSchematics")
-        .unwrap_or_else(|| "Available Schematics".into());
-    lines.push(format!("\u{a7}6{title}"));
+    lines.push((
+        Text::translate("create.gui.schematicTable.availableSchematics", vec![]),
+        0xFFFF_AA00,
+    ));
     let chosen = CHOSEN.get().min(files.len() - 1);
     for (i, f) in files.iter().enumerate() {
         lines.push(if i == chosen {
-            format!("\u{a7}f-> {f}")
+            (Text::literal(format!("-> {f}")), 0xFFFF_FFFF)
         } else {
-            format!("\u{a7}7> {f}")
+            (Text::literal(format!("> {f}")), 0xFFAA_AAAA)
         });
     }
-    let scroll = host
-        .translate("create.gui.scrollInput.scrollToSelect")
-        .unwrap_or_else(|| "Scroll to Select".into());
-    lines.push(format!("\u{a7}8\u{a7}o{scroll}"));
+    let mut italic = TextStyle::default();
+    italic.italic = Some(true);
+    lines.push((
+        Text::translate("create.gui.scrollInput.scrollToSelect", vec![]).with_style(italic),
+        0xFF55_5555,
+    ));
 }
 
 #[cfg(test)]

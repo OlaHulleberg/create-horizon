@@ -214,7 +214,11 @@ impl BlockPart for AnalogBlock {
     }
 
     /// `getAnalogOutputSignal`: no Create block reads differently by side.
-    fn analog_output(&self, _level: &dyn LevelHost, event: &mut AnalogOutputEvent) {
+    fn analog_output(
+        &self,
+        _level: &mut dyn mod_api::LevelRandomHost,
+        event: &mut AnalogOutputEvent,
+    ) {
         let Some((block, info)) = states::id(event.state).and_then(info) else {
             return;
         };

@@ -1,8 +1,7 @@
 # API gaps
 
-What the mod SDK can't do yet that Create uses, as of 2026-11-18, at the Sunrise pin in `create/sunrise-mod.toml`
-(nightly `2d81263`, the latest). The port uses every API that nightly added where Create needs it; the rows below are
-what is still missing, including where a new API covers only part of Create's use. Better APIs wait until after parity.
+What the port is missing as of 2026-11-19, at Sunrise Nightly `ed3ac19` in `create/sunrise-mod.toml`.
+These rows include gaps in the SDK and APIs the port has not adopted yet. Better APIs wait until after parity.
 Links point to the Create 6.0.11 source (`b62e837`) that uses the missing feature.
 
 ## Missing (Create uses it)

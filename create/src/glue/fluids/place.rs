@@ -32,12 +32,11 @@ fn flag(b: bool) -> &'static str {
     if b { "true" } else { "false" }
 }
 
-/// The Create block at `p` as the server's world numbers it.
+/// The Create block and its properties read from the placement's level.
 fn create_block(level: &dyn LevelHost, p: [i32; 3]) -> Option<(Block, StateInfo, BlockState)> {
     let state = level.block_state(p)?;
-    let id = states::id(state)?;
-    let (b, i) = with_world(|w| w.table.get(id).map(|(b, i)| (b, *i))).flatten()?;
-    Some((b, i, state))
+    let (block, info) = states::level_info(level, state)?;
+    Some((block, info, state))
 }
 
 /// A pipe state's open sides, read from its properties.
@@ -106,12 +105,23 @@ fn set(level: &dyn LevelHost, state: BlockState, props: &[(&str, &str)]) -> Bloc
 impl BlockPart for Placement {
     fn state_for_placement(
         &self,
-        level: &dyn LevelHost,
+        level: mod_api::LevelSide<'_>,
         event: &mut StateForPlacementEvent<'_>,
     ) -> Option<Option<BlockState>> {
-        let id = states::id(event.state)?;
-        let (block, _) = with_world(|w| w.table.get(id).map(|(b, i)| (b, *i))).flatten()?;
-        let dim = level_index(event.dimension.key().id())?;
+        let server = matches!(level, mod_api::LevelSide::Server(_));
+        let (mod_api::LevelSide::Server(level) | mod_api::LevelSide::Client(level)) = level;
+        let block = states::level_block(level, event.state)?;
+        // Pump, valve and hose placements prefer neighbouring shafts. The port reads those
+        // connections from its server kinetic world, not the client's block snapshots.
+        let dim = match block {
+            Block::MechanicalPump | Block::FluidValve | Block::HosePulley => {
+                if !server {
+                    return None;
+                }
+                Some(level_index(event.dimension.key().id())?)
+            }
+            _ => None,
+        };
         let c = event.context;
         let pos = [c.pos.x, c.pos.y, c.pos.z];
         let looking = ordered_by_nearest(c.yaw, c.pitch);
@@ -120,7 +130,10 @@ impl BlockPart for Placement {
         let clicked = Dir::ALL[c.face as usize];
         let joins = |d: Dir| fluids::connects(cell(level, offset(pos, d)), d);
         let shaft = |d: Dir| {
-            with_world(|w| w.has_shaft_towards(dim, offset(pos, d), d.opposite())).unwrap_or(false)
+            dim.is_some_and(|dim| {
+                with_world(|w| w.has_shaft_towards(dim, offset(pos, d), d.opposite()))
+                    .unwrap_or(false)
+            })
         };
         let state = event.state;
         // `withWater` (pipes and pumps are `ProperWaterloggedBlock`s).

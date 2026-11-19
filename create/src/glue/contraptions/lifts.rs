@@ -1621,9 +1621,14 @@ impl BlockPart for ContactPart {
     /// the clicked face when sneaking or a contact is there; powered when a contact faces back.
     fn state_for_placement(
         &self,
-        level: &dyn LevelHost,
+        level: mod_api::LevelSide<'_>,
         event: &mut StateForPlacementEvent<'_>,
     ) -> Option<Option<BlockState>> {
+        // RedstoneContactItem chooses an elevator contact if it faces a live elevator column.
+        // The port tracks those columns in the server's lift state, not on the client.
+        let mod_api::LevelSide::Server(level) = level else {
+            return None;
+        };
         let name = level.state_block(event.state)?;
         if name != "create:redstone_contact" {
             return None;

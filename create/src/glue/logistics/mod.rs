@@ -170,6 +170,7 @@ impl Subsystem for Logistics {
             r.block_container(
                 &states::key(block),
                 ModContainer {
+                    insert_rules: Vec::new(),
                     slots,
                     faces: std::array::from_fn(|_| all.clone()),
                     inputs,

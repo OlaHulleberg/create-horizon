@@ -12,7 +12,7 @@ use create_engine::copycat::{self as cc, Drawn, Shape, Special, Use};
 use create_engine::kinetics::Dir;
 use mod_api::{
     BlockEntityPart, BlockEntitySubmitEvent, BlockEntityUpdateTagEvent, BlockPart, BlockState,
-    ClientHost, Compound, Direction, Hand, InteractionResult, ItemPart, ItemStack, LevelHost,
+    ClientHost, Compound, Direction, Hand, InteractionResult, ItemPart, ItemStack,
     OnBlockPlacedByEvent, PlayerRef, ServerHost, SoundSource, StateForPlacementEvent, Tag,
     UseItemOnEvent,
 };
@@ -243,9 +243,10 @@ impl BlockPart for CopycatBlock {
     /// (upper half under a block or high on a side).
     fn state_for_placement(
         &self,
-        level: &dyn LevelHost,
+        level: mod_api::LevelSide<'_>,
         event: &mut StateForPlacementEvent<'_>,
     ) -> Option<Option<BlockState>> {
+        let (mod_api::LevelSide::Server(level) | mod_api::LevelSide::Client(level)) = level;
         let block = copycat_block(event.state.block())?;
         let c = event.context;
         let nearest = create_engine::place::ordered_by_nearest(c.yaw, c.pitch)[0];

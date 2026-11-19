@@ -10,8 +10,8 @@ use super::{add, block_of, dir_named, prop, use_one, with_props};
 use create_engine::Block;
 use create_engine::kinetics::Dir;
 use mod_api::{
-    BlockClick, BlockState, CanSurviveEvent, Hand, InteractionResult, ItemStack, LevelHost,
-    PlayerRef, Registrar, ServerHost, SupportType, UseItemOnEvent,
+    BlockClick, BlockState, CanSurviveEvent, Hand, InteractionResult, ItemStack, PlayerRef,
+    Registrar, ServerHost, SupportType, UseItemOnEvent,
 };
 
 /// Create's metal ladders.
@@ -47,7 +47,12 @@ struct Ladder;
 impl mod_api::BlockPart for Ladder {
     /// `MetalLadderBlock.canSurvive`: the same ladder facing the same way above holds it; else
     /// the ladder's own rule (a sturdy wall behind).
-    fn can_survive(&self, level: &dyn LevelHost, event: &mut CanSurviveEvent) -> Option<bool> {
+    fn can_survive(
+        &self,
+        level: mod_api::LevelSide<'_>,
+        event: &mut CanSurviveEvent,
+    ) -> Option<bool> {
+        let (mod_api::LevelSide::Server(level) | mod_api::LevelSide::Client(level)) = level;
         let text = level.state_string(event.state)?;
         let facing = facing_in(&text)?;
         let above = level.block_state([event.pos.x, event.pos.y + 1, event.pos.z])?;

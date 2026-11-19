@@ -1867,7 +1867,11 @@ impl BlockPart for PackageBlock {
         event.output = true;
     }
 
-    fn analog_output(&self, _level: &dyn LevelHost, event: &mut AnalogOutputEvent) {
+    fn analog_output(
+        &self,
+        _level: &mut dyn mod_api::LevelRandomHost,
+        event: &mut AnalogOutputEvent,
+    ) {
         let Some(dim) = level_index(event.dimension.key().id()) else {
             return;
         };

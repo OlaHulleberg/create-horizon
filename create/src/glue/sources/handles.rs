@@ -20,7 +20,7 @@ use create_engine::kinetics::Dir;
 use create_engine::valve;
 use mod_api::{
     BlockEntityClientTickEvent, BlockEntityClientTicksEvent, BlockEntityPart,
-    BlockEntitySubmitEvent, BlockPart, CanSurviveEvent, ClientHost, Compound, HostSide, LevelHost,
+    BlockEntitySubmitEvent, BlockPart, CanSurviveEvent, ClientHost, Compound, HostSide,
     ModBlockEntity, OnChunkUnloadedEvent, Registrar, SoundPlay, SoundSource, Tag,
 };
 use std::cell::{Cell, RefCell};
@@ -213,9 +213,13 @@ struct Supported;
 
 #[mod_api::sunrise_part]
 impl BlockPart for Supported {
-    fn can_survive(&self, level: &dyn LevelHost, event: &mut CanSurviveEvent) -> Option<bool> {
-        let id = states::id(event.state)?;
-        let facing = with_world(|w| w.table.get(id).and_then(|(_, i)| i.facing)).flatten()?;
+    fn can_survive(
+        &self,
+        level: mod_api::LevelSide<'_>,
+        event: &mut CanSurviveEvent,
+    ) -> Option<bool> {
+        let (mod_api::LevelSide::Server(level) | mod_api::LevelSide::Client(level)) = level;
+        let facing = states::level_info(level, event.state)?.1.facing?;
         let o = facing.opposite().offset();
         let p = [event.pos.x + o[0], event.pos.y + o[1], event.pos.z + o[2]];
         level.collision_shape(p).map(|boxes| !boxes.is_empty())

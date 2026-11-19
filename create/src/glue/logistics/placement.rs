@@ -70,15 +70,13 @@ struct Placement;
 impl BlockPart for Placement {
     fn state_for_placement(
         &self,
-        level: &dyn LevelHost,
+        level: mod_api::LevelSide<'_>,
         event: &mut StateForPlacementEvent<'_>,
     ) -> Option<Option<BlockState>> {
-        let id = states::id(event.state)?;
-        let table = |s: u32| -> Option<(Block, StateInfo)> {
-            with_world(|w| w.table.get(s).map(|(b, i)| (b, *i))).flatten()
-        };
-        let (block, _) = table(id)?;
-        let dim = level_index(event.dimension.key().id())?;
+        let server = matches!(level, mod_api::LevelSide::Server(_));
+        let (mod_api::LevelSide::Server(level) | mod_api::LevelSide::Client(level)) = level;
+        let block = states::level_block(level, event.state)?;
+        let info_at = |p| states::level_info(level, level.block_state(p)?);
         let c = event.context;
         let pos = [c.pos.x, c.pos.y, c.pos.z];
         let clicked_face = dir_of(c.face);
@@ -105,10 +103,7 @@ impl BlockPart for Placement {
             // ItemVaultBlock.getStateForPlacement: the axis of the vault it was placed against
             // unless sneaking, else the player's horizontal facing's.
             let on = beside(clicked_face.opposite());
-            let preferred = level
-                .block_state(on)
-                .and_then(states::id)
-                .and_then(table)
+            let preferred = info_at(on)
                 .filter(|(b, _)| *b == Block::ItemVault)
                 .and_then(|(_, i)| i.axis);
             let axis = match preferred {
@@ -130,7 +125,11 @@ impl BlockPart for Placement {
         }
         if create_engine::world::gauge_kind(block).is_some() {
             // GaugeBlock.getStateForPlacement: the block it was placed on (behind the clicked
-            // face) carries its shaft on through it.
+            // face) carries its shaft on through it. Shaft connections are in the server mirror.
+            if !server {
+                return None;
+            }
+            let dim = level_index(event.dimension.key().id())?;
             let on = beside(clicked_face.opposite());
             let look = create_engine::place::ordered_by_nearest(c.yaw, c.pitch)[0];
             let horizontal = create_engine::place::horizontal_direction(c.yaw);
@@ -157,12 +156,11 @@ impl BlockPart for Placement {
             // nearest way the player looks (`getNearestLookingDirections`: into the clicked
             // block first) whose block behind is no funnel.
             Block::AndesiteFunnel | Block::BrassFunnel => {
-                let funnel = |p: [i32; 3]| {
+                let funnel = |p| {
                     level
                         .block_state(p)
-                        .and_then(states::id)
-                        .and_then(table)
-                        .is_some_and(|(b, _)| super::funnel::is_funnel(b))
+                        .and_then(|state| states::level_block(level, state))
+                        .is_some_and(super::funnel::is_funnel)
                 };
                 let facing =
                     create_engine::place::nearest_looking_directions(ctx, c.replace_clicked)
@@ -179,7 +177,7 @@ impl BlockPart for Placement {
             // (`updateChuteState`).
             Block::Chute => {
                 let facing_at = |p: [i32; 3]| {
-                    let (b, i) = level.block_state(p).and_then(states::id).and_then(table)?;
+                    let (b, i) = info_at(p)?;
                     match b {
                         Block::Chute => Some(i.facing.unwrap_or(Dir::Down)),
                         Block::SmartChute => Some(Dir::Down),
@@ -192,14 +190,10 @@ impl BlockPart for Placement {
                     Dir::Down
                 };
                 let above = [pos[0], pos[1] + 1, pos[2]];
-                let funnel_down = level
-                    .block_state(above)
-                    .and_then(states::id)
-                    .and_then(table)
-                    .is_some_and(|(b, i)| {
-                        matches!(b, Block::AndesiteFunnel | Block::BrassFunnel)
-                            && i.facing == Some(Dir::Down)
-                    });
+                let funnel_down = info_at(above).is_some_and(|(b, i)| {
+                    matches!(b, Block::AndesiteFunnel | Block::BrassFunnel)
+                        && i.facing == Some(Dir::Down)
+                });
                 let (f, shape) = create_engine::chute::update_state(
                     pos,
                     facing,
@@ -229,6 +223,12 @@ impl BlockPart for Placement {
             }
             _ => {}
         }
+        // `placed_state` selects the preferred facing/axis from the server kinetic world's
+        // shaft and cog connections. Leave the template's answer on a client without that mirror.
+        if !server {
+            return None;
+        }
+        let dim = level_index(event.dimension.key().id())?;
         // `GearshiftBlock.getStateForPlacement` (inherited by ClutchBlock):
         // choose power here, not when an arbitrary state is inserted into the world.
         let default = if matches!(block, Block::Clutch | Block::Gearshift) {
@@ -244,9 +244,7 @@ impl BlockPart for Placement {
         } else {
             default
         };
-        placed_state(block, default, water, (dim, pos), ctx, &set, &|p| {
-            level.block_state(p).and_then(states::id).and_then(table)
-        })
+        placed_state(block, default, water, (dim, pos), ctx, &set, &info_at)
     }
 }
 

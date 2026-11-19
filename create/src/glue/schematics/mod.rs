@@ -358,6 +358,7 @@ impl Subsystem for Schematics {
             r.block_container(
                 &states::key(b),
                 ModContainer {
+                    insert_rules: Vec::new(),
                     slots: CANNON_SLOTS,
                     faces: std::array::from_fn(|_| Vec::new()),
                     inputs: Vec::new(),
@@ -1519,7 +1520,7 @@ impl BlockEntityPart for SchematicEntity {
     fn screen_tooltip(&self, host: &dyn ClientHost, event: &mut mod_api::ScreenTooltipEvent<'_>) {
         match event.block {
             "create:schematicannon" => {
-                screens::tooltip_cannon(host, event.data, event.at, event.lines);
+                screens::tooltip_cannon(event.data, event.at, event.lines);
             }
             "create:schematic_table" => screens::tooltip_table(host, event.at, event.lines),
             _ => {}

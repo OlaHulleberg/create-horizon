@@ -11,8 +11,7 @@ use super::super::states;
 use super::block_of;
 use create_engine::Block;
 use mod_api::{
-    BlockFace, CanSurviveEvent, Flow, LevelHost, LevelWriteHost, Registrar, SupportType,
-    TickBlockEvent,
+    BlockFace, CanSurviveEvent, Flow, LevelWriteHost, Registrar, SupportType, TickBlockEvent,
 };
 
 pub(super) const BLOCKS: [Block; 3] = [
@@ -37,7 +36,11 @@ impl mod_api::BlockPart for Scaffolding {
     }
 
     /// `MetalScaffoldingBlock.canSurvive`: anywhere.
-    fn can_survive(&self, _level: &dyn LevelHost, _event: &mut CanSurviveEvent) -> Option<bool> {
+    fn can_survive(
+        &self,
+        _level: mod_api::LevelSide<'_>,
+        _event: &mut CanSurviveEvent,
+    ) -> Option<bool> {
         Some(true)
     }
 }
