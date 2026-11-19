@@ -474,6 +474,9 @@ pub struct Dimension {
     /// Boilers: tanks with steam engines on them (`BoilerData.isActive`), with those engines.
     /// Only they tick.
     pub boilers: HashMap<[i32; 3], SteamBoiler>,
+    /// The data of boilers whose columns are unloaded, as their controller's block entity
+    /// keeps it (`FluidTankBlockEntity.write`/`read`), read back when it loads.
+    boiler_saved: HashMap<[i32; 3], crate::steam::SavedBoiler>,
     /// Tanks whose engines are counted again (`FluidTankBlockEntity.updateBoilerState`).
     pub boiler_checks: Vec<[i32; 3]>,
     /// Boilers whose heat is read again (`needsHeatLevelUpdate`).
@@ -1272,6 +1275,20 @@ impl CreateWorld {
                 d.tanks.restore(pos, saved);
             } else if !d.tanks.parts.contains_key(&pos) {
                 d.tanks.load(pos, None);
+            }
+            // `FluidTankBlockEntity.read` reads its saved boiler (`BoilerData.read`).
+            if d.tanks.parts.get(&pos).map(|p| p.controller) == Some(pos)
+                && let Some(saved) = d.boiler_saved.remove(&pos)
+            {
+                d.boilers.insert(
+                    pos,
+                    SteamBoiler {
+                        data: saved.read(),
+                        engines: Vec::new(),
+                        whistles: Vec::new(),
+                        size: 0,
+                    },
+                );
             }
             d.tank_changes.push(pos);
             self.tanks_touched(dim, false);
@@ -2171,7 +2188,20 @@ impl CreateWorld {
             d.creative_tanks.unload_column(cx, cz);
             d.creative_tank_saved
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.boilers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            // A boiler's block entity keeps its data while its column is unloaded
+            // (`FluidTankBlockEntity.write`/`read`): its controller reads it back when it loads.
+            d.boiler_saved
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            let gone: Vec<([i32; 3], _)> = d
+                .boilers
+                .iter()
+                .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (cx, cz))
+                .map(|(p, b)| (*p, b.data.saved()))
+                .collect();
+            for (p, saved) in gone {
+                d.boilers.remove(&p);
+                d.boiler_saved.insert(p, saved);
+            }
             d.boiler_checks
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.boiler_heat_checks
@@ -2204,7 +2234,9 @@ impl CreateWorld {
             d.sliding.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
         }
         d.block_entities.unload(cx, cz);
-        d.settings.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+        // Settings are the block entity's own fields (a motor's speed, a wheel's flow, a powered
+        // shaft's engine), which Create writes with the block entity and reads back when its
+        // column loads. The glue restores those it saves; the rest stay as they were.
     }
 
     /// A block entity setting that changes a part (a motor's speed), then re-places the block.
@@ -4025,6 +4057,70 @@ impl CreateWorld {
             .collect();
         out.sort_by_key(|(p, _)| *p);
         out
+    }
+
+    /// `FluidTankBlockEntity.read`: the boiler data saved with a column's tank controllers.
+    pub fn load_boilers(
+        &mut self,
+        dim: usize,
+        saved: impl Iterator<Item = ([i32; 3], crate::steam::SavedBoiler)>,
+    ) {
+        self.dims[dim].boiler_saved.extend(saved);
+    }
+
+    /// `FluidTankBlockEntity.write`: the boiler data of a column's tank controllers.
+    pub fn column_boilers(
+        &self,
+        dim: usize,
+        cx: i32,
+        cz: i32,
+    ) -> Vec<([i32; 3], crate::steam::SavedBoiler)> {
+        let mut out: Vec<_> = self.dims[dim]
+            .boilers
+            .iter()
+            .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (cx, cz))
+            .map(|(p, b)| (*p, b.data.saved()))
+            .collect();
+        out.sort_by_key(|(p, _)| *p);
+        out
+    }
+
+    /// A water wheel's flow score (`WaterWheelBlockEntity.flowScore`), which its block entity
+    /// writes (`FlowScore`) and reads back before its first tick.
+    pub fn wheel_flow(&self, dim: usize, pos: [i32; 3]) -> Option<i8> {
+        Some(self.dims[dim].settings.get(&pos)?.flow)
+    }
+
+    /// `WaterWheelBlockEntity.read`: the saved flow score is the wheel's field again, without
+    /// an attachment or a speed-change notification (its first tick attaches it).
+    pub fn restore_wheel_flow(&mut self, dim: usize, pos: [i32; 3], score: i32) {
+        self.read_settings(dim, pos, |s| s.flow = score.clamp(-1, 1) as i8);
+    }
+
+    /// `PoweredShaftBlockEntity.read`: the saved engine and its power are the shaft's fields
+    /// again, before its first tick (`updateGeneratedRotation` is not run here).
+    pub fn restore_shaft_steam(&mut self, dim: usize, pos: [i32; 3], out: crate::steam::Output) {
+        self.read_settings(dim, pos, |s| s.steam = out);
+    }
+
+    /// A block entity setting read back with it: the part follows, without detaching or
+    /// notifying as a runtime change does (`KineticBlockEntity.read`).
+    fn read_settings(&mut self, dim: usize, pos: [i32; 3], update: impl FnOnce(&mut Settings)) {
+        let d = &mut self.dims[dim];
+        let settings = {
+            let s = d.settings.entry(pos).or_default();
+            update(s);
+            *s
+        };
+        let Some((block, info)) = d.states.get(&pos).and_then(|state| self.table.get(*state))
+        else {
+            return;
+        };
+        for (sub, part) in parts(block, info, &settings).into_iter().enumerate() {
+            if let Some(part) = part {
+                d.kinetics.read_part(pos, sub as u8, part);
+            }
+        }
     }
 
     /// Creative tanks' sizes saved with a column (by controller).
@@ -7482,6 +7578,134 @@ mod tests {
                 .iter()
                 .all(|(_, m)| m.multi.is_some_and(|m| m.blocks() == 1 && !m.window))
         );
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_reloaded_water_wheel_keeps_its_flow_network() {
+        // Issue #89, Java tick 122 of create-fuzz seed 20: a flowing wheel saved with
+        // network capacity 256 and size 1 comes back a one-block network at -8 RPM, its
+        // capacity read out of the saved members (`KineticNetwork.addSilently`, which
+        // subtracts `lastCapacityProvided * |getGeneratedSpeed()|` from the unloaded totals).
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> =
+            vec![("create:water_wheel", vec![("facing", "east")])];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let wheel = [0, 8, 0];
+        w.block_changed(0, wheel, 0, 10);
+        // The wheel's flow score: water falling on its north side (`flowScore` -1).
+        w.set_wheel_flow(0, wheel, -1);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, wheel), Some(-8.0));
+        let saved = w.dims[0].kinetics.saved_state(wheel, 0).unwrap();
+        assert_eq!(
+            saved.network.map(|n| (n.capacity, n.size)),
+            Some((256.0, 1))
+        );
+        // `WaterWheelBlockEntity.write`/`read`: FlowScore comes back with the entity, so the
+        // wheel's network is rebuilt from that block entity alone.
+        let flow = w.wheel_flow(0, wheel).unwrap();
+        w.column_unloaded(0, 0, 0);
+        // The reloaded case owns a new network space (`NetworkIsolation.reset`).
+        w.dims[0].kinetics = crate::kinetics::Kinetics::new();
+        w.block_loaded(0, wheel, 10);
+        assert!(w.dims[0].kinetics.restore_state(wheel, 0, saved));
+        w.set_wheel_flow(0, wheel, i32::from(flow));
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, wheel), Some(-8.0));
+        let reloaded = w.dims[0].kinetics.saved_state(wheel, 0).unwrap();
+        assert_eq!(
+            reloaded.network.map(|n| (n.capacity, n.size)),
+            Some((256.0, 1)),
+            "the saved member is not counted twice"
+        );
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_reloaded_boiler_keeps_driving_its_shaft() {
+        // Issue #90, Java tick 119 of create-fuzz seed 21: a running boiler keeps its water
+        // supply in its tank's block entity (`BoilerData.write`/`read`), so the next engine
+        // tick drives the powered shaft again instead of letting it stop.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            (
+                "create:fluid_tank",
+                vec![("bottom", "true"), ("top", "true"), ("shape", "window")],
+            ),
+            (
+                "create:steam_engine",
+                vec![
+                    ("face", "wall"),
+                    ("facing", "south"),
+                    ("waterlogged", "false"),
+                ],
+            ),
+            ("create:shaft", vec![("axis", "x")]),
+            ("create:powered_shaft", vec![("axis", "x")]),
+            ("create:blaze_burner", vec![("blaze", "kindled")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let square = [[0, 0, 0], [1, 0, 0], [0, 0, 1], [1, 0, 1]];
+        for p in square {
+            w.block_changed(0, [p[0], -1, p[2]], 0, 14);
+        }
+        for p in square {
+            w.block_changed(0, p, 0, 10);
+        }
+        w.tick_fluid_entities(0, |_| None);
+        let c = [0, 0, 0];
+        let (engine, shaft) = ([1, 0, 2], [1, 0, 4]);
+        w.block_changed(0, shaft, 0, 12);
+        w.block_changed(0, engine, 0, 11);
+        w.evaluate_boilers(0);
+        let changes = w.shaft_changes(0);
+        assert_eq!(changes, vec![(shaft, true)]);
+        w.block_changed(0, shaft, 12, 13);
+        w.set_boiler_heat(0, c, &[1, 1, 1, 1]);
+        w.fill_boiler(0, [1, 0, 0], crate::tank::Fluid::Water, 50);
+        w.tick_boilers(0);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, shaft), Some(64.0));
+        let saved = w.dims[0].kinetics.saved_state(shaft, 0).unwrap();
+        assert_eq!(
+            saved.network.map(|n| (n.capacity, n.size)),
+            Some((16384.0, 1))
+        );
+        // The block entities are re-created with what their data holds: the boiler's water
+        // supply (`FluidTankBlockEntity.write`'s Boiler compound) and the shaft's kinetic state.
+        let boiler = w.column_boilers(0, 0, 0)[0].1;
+        assert_eq!(boiler.water_supply, 10.0);
+        let tanks = w.column_tanks(0, 0, 0);
+        w.column_unloaded(0, 0, 0);
+        w.dims[0].kinetics = crate::kinetics::Kinetics::new();
+        w.load_tanks(0, tanks.into_iter());
+        w.load_boilers(0, std::iter::once((c, boiler)));
+        for p in square {
+            w.block_loaded(0, p, 10);
+        }
+        w.block_loaded(0, engine, 11);
+        w.block_loaded(0, shaft, 13);
+        assert!(w.dims[0].kinetics.restore_state(shaft, 0, saved));
+        w.evaluate_boilers(0);
+        assert_eq!(w.take_heat_checks(0), vec![(c, 2)]);
+        w.set_boiler_heat(0, c, &[1, 1, 1, 1]);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(
+            w.speed(0, shaft),
+            Some(64.0),
+            "the engine keeps driving its shaft"
+        );
+        let reloaded = w.dims[0].kinetics.saved_state(shaft, 0).unwrap();
+        assert_eq!(reloaded.network.map(|n| n.size), Some(1));
         states::clear_range();
     }
 

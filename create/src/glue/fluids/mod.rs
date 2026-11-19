@@ -272,6 +272,10 @@ impl Subsystem for Fluids {
         let tanks = tanks_from_nbt(data);
         let dim = lv.dim;
         with_world(|w| w.load_tanks(dim, tanks.into_iter()));
+        if let Some(Tag::IntArray(v)) = data.get(&"boilers".into()) {
+            let boilers = boilers_from_nbt(v);
+            with_world(|w| w.load_boilers(dim, boilers.into_iter()));
+        }
         plumbing::chunk_load(dim, data);
         machines::chunk_load(dim, data);
         pipes::chunk_load(dim, data);
@@ -308,6 +312,31 @@ impl Subsystem for Fluids {
                 .collect();
             data.insert("tank_entities".into(), Tag::IntArray(v));
             put_fluid_keys(data, "tank_entities", codes);
+        }
+        // `FluidTankBlockEntity.write`'s Boiler compound: its controller's saved data.
+        let boilers = with_world(|w| w.column_boilers(dim, chunk[0], chunk[1])).unwrap_or_default();
+        if !boilers.is_empty() {
+            data.insert(
+                "boilers".into(),
+                Tag::IntArray(
+                    boilers
+                        .iter()
+                        .flat_map(|(p, b)| {
+                            [
+                                p[0],
+                                p[1],
+                                p[2],
+                                b.water_supply.to_bits() as i32,
+                                b.active_heat,
+                                i32::from(b.passive_heat),
+                                b.attached_engines,
+                                b.attached_whistles,
+                                i32::from(b.needs_heat_level_update),
+                            ]
+                        })
+                        .collect(),
+                ),
+            );
         }
         plumbing::chunk_data_save(dim, chunk, data);
         machines::chunk_data_save(dim, chunk, data);
@@ -603,6 +632,27 @@ fn boiler_occlusion(lv: &ServerLevel<'_>, c: [i32; 3], width: i32) -> i32 {
         }
     }
     bits
+}
+
+/// `BoilerData.write`/`read`: a controller's boiler as its block entity data holds it.
+fn boilers_from_nbt(v: &[i32]) -> Vec<([i32; 3], create_engine::steam::SavedBoiler)> {
+    v.as_chunks::<9>()
+        .0
+        .iter()
+        .map(|c| {
+            (
+                [c[0], c[1], c[2]],
+                create_engine::steam::SavedBoiler {
+                    water_supply: f32::from_bits(c[3] as u32),
+                    active_heat: c[4],
+                    passive_heat: c[5] != 0,
+                    attached_engines: c[6],
+                    attached_whistles: c[7],
+                    needs_heat_level_update: c[8] != 0,
+                },
+            )
+        })
+        .collect()
 }
 
 /// FluidTankBlockEntity.read for column members; accept both older controller-only formats.
