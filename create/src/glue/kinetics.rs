@@ -37,6 +37,11 @@ pub(crate) const BRACKET: &str = "Bracket";
 const CARRIED_SPEED: &str = "Speed";
 /// Server-only KineticBlockEntity.write data, one compound per engine port.
 const SAVED_KINETICS: &str = "KineticState";
+/// `WaterWheelBlockEntity.write`'s `FlowScore`, saved with the wheel's block entity.
+const WHEEL: &str = "Wheel";
+/// `PoweredShaftBlockEntity.write`'s `Direction` and `EnginePower` (its `EngineType` is always
+/// a steam engine here).
+const ENGINE: &str = "Engine";
 const SOURCE_FACE: &str = "create:source_face";
 /// In an update tag: the server is frozen (`/tick freeze`), so the block's parts are drawn at
 /// rest (`KineticBlockEntity.getSpeed` is 0 while `tickRateManager().isFrozen()`). Sent from the
@@ -427,21 +432,7 @@ fn tick_inputs(lv: &mut ServerLevel<'_>) {
     // Water wheels whose surroundings changed, and one in 60 of the others each tick.
     let now = lv.game_time() as u64;
     for (pos, axis, large) in with_world(|w| w.take_wheel_checks(dim, now)).unwrap_or_default() {
-        let offsets = if large {
-            create_engine::waterwheel::large_offsets(axis)
-        } else {
-            create_engine::waterwheel::small_offsets(axis).to_vec()
-        };
-        let samples: Vec<([i32; 3], [f64; 3])> = offsets
-            .into_iter()
-            .map(|o| {
-                let at = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
-                (o, super::sources::waterwheels::flow_at(lv, at))
-            })
-            .collect();
-        let score = create_engine::waterwheel::flow_score(axis, &samples);
-        super::advancements::water_wheel(lv, pos, samples.iter().map(|s| s.0), score != 0);
-        with_world(|w| w.set_wheel_flow(dim, pos, score));
+        super::sources::waterwheels::determine_flow(lv, pos, axis, large);
     }
     // Clutches and gearshifts follow redstone (`ClutchBlock.neighborChanged`): `powered` is set
     // before solving, so the change turns the network in this tick's solve.
@@ -630,6 +621,24 @@ fn publish_saved(lv: &mut ServerLevel<'_>) {
             .collect();
         // KineticBlockEntity.write: a `Source` or `Network` the entity no longer has is gone.
         lv.write_entity_field(pos, SAVED_KINETICS, ports);
+        // `WaterWheelBlockEntity.write`: the flow score its first tick after a load reads back.
+        if matches!(
+            with_world(|w| w.block_at(dim, pos)).flatten(),
+            Some(Block::WaterWheel | Block::LargeWaterWheel)
+        ) && let Some(flow) = with_world(|w| w.wheel_flow(dim, pos)).flatten()
+        {
+            let flow = Compound::from([("FlowScore".into(), Tag::Int(i32::from(flow)))]);
+            lv.write_entity_field(pos, WHEEL, flow);
+        }
+        // `PoweredShaftBlockEntity.write`: the engine it is powered by.
+        if with_world(|w| w.block_at(dim, pos)).flatten() == Some(Block::PoweredShaft) {
+            let out = with_world(|w| w.shaft_steam(dim, pos)).unwrap_or_default();
+            let engine = Compound::from([
+                ("Direction".into(), Tag::Int(i32::from(out.direction))),
+                ("EnginePower".into(), Tag::Float(out.efficiency.to_bits())),
+            ]);
+            lv.write_entity_field(pos, ENGINE, engine);
+        }
         if let Some(signal) = with_world(|w| w.saved_chain_signal(dim, pos)).flatten()
             && let Some(entity) = lv.host.block_entity(lv.level, pos)
         {
@@ -839,6 +848,31 @@ impl BlockEntityPart for KineticEntity {
         let legacy = loading_legacy_save(&data);
         with_world(|w| {
             w.block_loaded(dim, pos, state);
+            // `WaterWheelBlockEntity.read` and `PoweredShaftBlockEntity.read`: the fields are
+            // the entity's before its first tick, so its part turns as it did when saved.
+            if let Some(Tag::Compound(wheel)) = data.get(&WHEEL.into())
+                && let Some(Tag::Int(flow)) = wheel.get(&"FlowScore".into())
+            {
+                w.restore_wheel_flow(dim, pos, *flow);
+            }
+            if let Some(Tag::Compound(engine)) = data.get(&ENGINE.into()) {
+                let direction = match engine.get(&"Direction".into()) {
+                    Some(Tag::Int(v)) => *v as i8,
+                    _ => 1,
+                };
+                let efficiency = match engine.get(&"EnginePower".into()) {
+                    Some(Tag::Float(bits)) => f32::from_bits(*bits),
+                    _ => 0.0,
+                };
+                w.restore_shaft_steam(
+                    dim,
+                    pos,
+                    create_engine::steam::Output {
+                        direction,
+                        efficiency,
+                    },
+                );
+            }
             let signal = match data.get(&"Signal".into()) {
                 Some(Tag::Int(signal)) => *signal,
                 _ => 0,

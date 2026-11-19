@@ -55,6 +55,48 @@ pub struct Boiler {
     pub attached_whistles: i32,
 }
 
+/// `BoilerData.write`/`read`: the fields a boiler keeps in its tank's block entity data.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SavedBoiler {
+    pub water_supply: f32,
+    pub active_heat: i32,
+    pub passive_heat: bool,
+    pub attached_engines: i32,
+    pub attached_whistles: i32,
+    pub needs_heat_level_update: bool,
+}
+
+impl Boiler {
+    /// `BoilerData.write`.
+    pub fn saved(&self) -> SavedBoiler {
+        SavedBoiler {
+            water_supply: self.water_supply,
+            active_heat: self.active_heat,
+            passive_heat: self.passive_heat,
+            attached_engines: self.attached_engines,
+            attached_whistles: self.attached_whistles,
+            needs_heat_level_update: self.needs_heat_level_update,
+        }
+    }
+}
+
+impl SavedBoiler {
+    /// `BoilerData.read`: the supply is the best of ten samples again, gathered supply and the
+    /// sample timer start over (`Arrays.fill(supplyOverTime, (int) waterSupply)`).
+    pub fn read(self) -> Boiler {
+        Boiler {
+            supply_over_time: [(self.water_supply as i32) as f32; 10],
+            water_supply: self.water_supply,
+            active_heat: self.active_heat,
+            passive_heat: self.passive_heat,
+            attached_engines: self.attached_engines,
+            attached_whistles: self.attached_whistles,
+            needs_heat_level_update: self.needs_heat_level_update,
+            ..Boiler::default()
+        }
+    }
+}
+
 impl Boiler {
     /// `isActive`: engines or whistles on it.
     pub fn is_active(&self) -> bool {

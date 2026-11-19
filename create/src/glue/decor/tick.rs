@@ -242,52 +242,33 @@ fn haunt_bell(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 }
 
 /// Large water wheels: a placed one (`onPlace`'s tick) builds its frame of structure blocks,
-/// breaking without drops when one can't go; a broken one takes its frame; a broken frame block
-/// breaks its wheel with drops (`WaterWheelStructuralBlock.onRemove`). `extension` follows a
-/// wheel on its negative side (`updateShape`).
+/// breaking without drops when one can't go, and looks at its flow; a broken frame block breaks
+/// its wheel with drops (`WaterWheelStructuralBlock.onRemove`), a frame cell that no longer holds
+/// its wheel goes on its own tick (`updateShape` schedules it, `tick` takes it away).
+/// `extension` follows a wheel on its negative side (`LargeWaterWheelBlock.updateShape`).
 fn large_wheels(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
-    let Some((checks, gone, frames)) = with_world(|w| {
-        let d = &mut w.dims[dim];
-        if d.large_wheel_checks.is_empty()
-            && d.large_wheels_gone.is_empty()
-            && d.wheel_structures_gone.is_empty()
-        {
-            return None;
-        }
-        Some((
-            std::mem::take(&mut d.large_wheel_checks),
-            std::mem::take(&mut d.large_wheels_gone),
-            std::mem::take(&mut d.wheel_structures_gone),
-        ))
+    let Some((checks, gone, ticks)) = with_world(|w| {
+        let checks = std::mem::take(&mut w.dims[dim].large_wheel_checks);
+        let gone = w.take_broken_wheels(dim);
+        let ticks = w.take_frame_ticks(dim);
+        (!checks.is_empty() || !gone.is_empty() || !ticks.is_empty())
+            .then_some((checks, gone, ticks))
     })
     .flatten() else {
         return;
     };
     let air = lv.host.block_state_id("minecraft:air");
-    for (pos, axis) in gone {
-        // `stillValid` no longer holds for its frame: each goes (`tick`: to air).
-        for (o, f) in create_engine::waterwheel::structure(axis) {
-            let p = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
-            let is_frame = block_of(lv.block(p))
-                .is_some_and(|(b, i)| b == Block::WaterWheelStructure && i.facing == Some(f));
-            if is_frame && let Some(air) = air {
-                lv.put(p, air);
-            }
-        }
+    for master in gone {
+        // `WaterWheelStructuralBlock.onRemove`: `level.destroyBlock(master, true)`.
+        lv.destroy_block(master, true);
     }
-    for (pos, facing) in frames {
-        let p1 = add(pos, facing);
-        let master = match block_of(lv.block(p1)) {
-            Some((Block::LargeWaterWheel, _)) => Some(p1),
-            Some((Block::WaterWheelStructure, i)) => i.facing.map(|f| add(p1, f)).filter(|p| {
-                block_of(lv.block(*p)).is_some_and(|(b, _)| b == Block::LargeWaterWheel)
-            }),
-            _ => None,
-        };
-        if let Some(m) = master {
-            // `level.destroyBlock(master, true)`.
-            lv.destroy_block(m, true);
+    // `WaterWheelStructuralBlock.tick`: a cell whose frame no longer holds it goes, which tells
+    // the cells beside it to look at theirs in turn (the engine keeps the ones a frame holds
+    // again).
+    for pos in ticks {
+        if let Some(air) = air {
+            lv.put(pos, air);
         }
     }
     for pos in checks {
@@ -327,5 +308,7 @@ fn large_wheels(lv: &mut ServerLevel<'_>) {
         let extension =
             block_of(lv.block(behind)).is_some_and(|(b, _)| b == Block::LargeWaterWheel);
         lv.set_property(pos, "extension", flag(extension), update_all());
+        // `withBlockEntityDo(pLevel, pPos, WaterWheelBlockEntity::determineAndApplyFlowScore)`.
+        super::super::sources::waterwheels::determine_flow(lv, pos, axis, true);
     }
 }
