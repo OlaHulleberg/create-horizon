@@ -71,7 +71,7 @@ impl Subsystem for Blocks {
 }
 
 /// The Create block at `pos`, its state facts and its state.
-fn block_at(
+pub(crate) fn block_at(
     lv: &ServerLevel<'_>,
     pos: [i32; 3],
 ) -> Option<(Block, create_engine::parts::StateInfo, BlockState)> {

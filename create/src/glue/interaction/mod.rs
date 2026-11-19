@@ -20,6 +20,7 @@ mod crank;
 mod ghost;
 mod ghost_models;
 mod hud;
+mod item_use_overrides;
 mod placement;
 /// The value channels and the value box rules, for the subsystems whose blocks have one.
 pub(crate) mod value_text;
@@ -66,10 +67,17 @@ impl Subsystem for Interaction {
 
     /// `ValueSettingsInputHandler.onBlockActivated` on both sides, and the client's prediction
     /// of a hand crank's or valve handle's use (`HandCrankBlock.useItemOn` answers SUCCESS on
-    /// the client too).
+    /// the client too). `ItemUseOverrides` follows on the server: a click on the crank, a valve
+    /// handle or the analog lever is the block's own use, whatever the hand holds but the
+    /// wrench.
     fn right_click_block(&self, host: HostSide, event: &mut RightClickBlockEvent<'_>) -> Flow {
         match host {
-            HostSide::Server(host) => values::right_click(host, event),
+            HostSide::Server(host) => {
+                if values::right_click(host, event) == Flow::Cancel {
+                    return Flow::Cancel;
+                }
+                item_use_overrides::right_click(host, event)
+            }
             HostSide::Client(host) => board::right_click(host, event),
         }
     }

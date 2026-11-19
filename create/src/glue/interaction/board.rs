@@ -6,7 +6,7 @@ use super::super::items::{self, Item};
 use super::super::kinetics;
 use super::super::net;
 use super::super::states;
-use super::crank;
+use super::item_use_overrides;
 use super::values::{self, VALUE_SETTINGS, may_use_value_box, value_box_hit};
 use crate::glue::stock::gauge_client as gauge;
 use create_engine::Block as B;
@@ -298,12 +298,12 @@ pub(super) fn right_click(host: &mut dyn ClientHost, event: &mut RightClickBlock
         *event.cancellation_result = InteractionResult::Success;
         return Flow::Cancel;
     }
-    // The block's own use is skipped while sneaking with something in either hand.
-    let bypassed = items::sneaking(&*host, player)
-        && Hand::BOTH
-            .iter()
-            .any(|&h| items::held(&*host, player, h).is_some());
-    if !bypassed && crank::answers(&*host, player, block) {
+    // `ItemUseOverrides`: the crank's, the valve handles' and the lever's own use takes the
+    // click over the held item, sneaking included; the wrench keeps its own use.
+    let held = click.stack.map(|s| s.item().id(&*host));
+    if create_engine::item_use_overrides::invokes_use(block, held.as_deref())
+        && item_use_overrides::answers(&*host, player, block)
+    {
         if block == B::HandCrank {
             super::super::sources::handles::cranked(click.pos);
         }
