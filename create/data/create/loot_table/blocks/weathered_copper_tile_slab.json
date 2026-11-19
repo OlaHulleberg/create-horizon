@@ -1,0 +1,35 @@
+{
+  "type": "minecraft:block",
+  "pools": [
+    {
+      "bonus_rolls": 0.0,
+      "entries": [
+        {
+          "type": "minecraft:item",
+          "name": "create:weathered_copper_tile_slab",
+          "modifier": [
+            {
+              "add": false,
+              "conditions": [
+                {
+                  "block": "create:weathered_copper_tile_slab",
+                  "properties": {
+                    "type": "double"
+                  },
+                  "type": "minecraft:block_state_property"
+                }
+              ],
+              "count": 2.0,
+              "type": "minecraft:set_count"
+            },
+            {
+              "type": "minecraft:explosion_decay"
+            }
+          ]
+        }
+      ],
+      "rolls": 1.0
+    }
+  ],
+  "random_sequence": "create:blocks/weathered_copper_tile_slab"
+}

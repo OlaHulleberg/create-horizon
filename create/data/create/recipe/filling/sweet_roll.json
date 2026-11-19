@@ -1,0 +1,16 @@
+{
+  "type": "create:filling",
+  "ingredients": [
+    "minecraft:bread",
+    {
+      "type": "neoforge:tag",
+      "amount": 250,
+      "tag": "c:milk"
+    }
+  ],
+  "results": [
+    {
+      "id": "create:sweet_roll"
+    }
+  ]
+}

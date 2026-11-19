@@ -1,0 +1,50 @@
+{
+  "type": "minecraft:block",
+  "pools": [
+    {
+      "bonus_rolls": 0.0,
+      "conditions": [
+        {
+          "type": "minecraft:survives_explosion"
+        },
+        {
+          "type": "minecraft:block_state_property",
+          "block": "create:gearbox",
+          "properties": {
+            "axis": "y"
+          }
+        }
+      ],
+      "entries": [
+        {
+          "type": "minecraft:item",
+          "name": "create:gearbox"
+        }
+      ],
+      "rolls": 1.0
+    },
+    {
+      "bonus_rolls": 0.0,
+      "conditions": [
+        {
+          "type": "minecraft:inverted",
+          "term": {
+            "type": "minecraft:block_state_property",
+            "block": "create:gearbox",
+            "properties": {
+              "axis": "y"
+            }
+          }
+        }
+      ],
+      "entries": [
+        {
+          "type": "minecraft:item",
+          "name": "create:vertical_gearbox"
+        }
+      ],
+      "rolls": 1.0
+    }
+  ],
+  "random_sequence": "create:blocks/gearbox"
+}

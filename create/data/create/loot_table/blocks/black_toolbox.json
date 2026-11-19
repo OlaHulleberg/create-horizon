@@ -1,0 +1,35 @@
+{
+  "type": "minecraft:block",
+  "pools": [
+    {
+      "bonus_rolls": 0.0,
+      "conditions": [
+        {
+          "type": "minecraft:survives_explosion"
+        }
+      ],
+      "entries": [
+        {
+          "type": "minecraft:item",
+          "name": "create:black_toolbox",
+          "modifier": [
+            {
+              "source": "block_entity",
+              "type": "minecraft:copy_name"
+            },
+            {
+              "source": "block_entity",
+              "include": [
+                "create:toolbox_uuid",
+                "create:toolbox_inventory"
+              ],
+              "type": "minecraft:copy_components"
+            }
+          ]
+        }
+      ],
+      "rolls": 1.0
+    }
+  ],
+  "random_sequence": "create:blocks/black_toolbox"
+}
