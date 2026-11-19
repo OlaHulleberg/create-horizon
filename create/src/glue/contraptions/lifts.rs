@@ -1387,18 +1387,14 @@ fn disassemble_elevator(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     mark_unsaved(lv, pos);
 }
 
-/// Reads a level's states: the server's level or a level reader.
-type Read<'a> = &'a dyn Fn([i32; 3]) -> Option<BlockState>;
-
-/// The Create block and facts of the state at `pos`.
-fn info_at(read: Read<'_>, pos: [i32; 3]) -> Option<(Block, create_engine::parts::StateInfo)> {
-    create_info(states::id(read(pos)?)?)
-}
-
 /// Whether the block `facing` of a contact is a contact facing back
 /// (`RedstoneContactBlock.hasValidContact`).
-fn contact_faces_back(read: Read<'_>, pos: [i32; 3], facing: Dir) -> bool {
-    let other = match info_at(read, add(pos, facing.offset())) {
+fn contact_faces_back(
+    read: impl FnOnce([i32; 3]) -> Option<(Block, create_engine::parts::StateInfo)>,
+    pos: [i32; 3],
+    facing: Dir,
+) -> bool {
+    let other = match read(add(pos, facing.offset())) {
         Some((Block::RedstoneContact | Block::ElevatorContact, i)) => i.facing,
         _ => None,
     };
@@ -1429,7 +1425,7 @@ fn tick_contacts(lv: &mut ServerLevel<'_>) {
         let Some(facing) = info.facing else {
             continue;
         };
-        let valid = contact_faces_back(&|p| lv.block_state(p), pos, facing);
+        let valid = contact_faces_back(|p| lv.info(p), pos, facing);
         // A contact a moving one powers stays powered until that one leaves it.
         let held = with_world(|w| w.dims[dim].lifts.contact_held.contains(&pos)) == Some(true);
         match block {
@@ -1463,7 +1459,7 @@ fn tick_contacts(lv: &mut ServerLevel<'_>) {
             with_world(|w| w.dims[dim].lifts.contact_held.remove(&pos));
             let valid = info
                 .facing
-                .is_some_and(|f| contact_faces_back(&|p| lv.block_state(p), pos, f));
+                .is_some_and(|f| contact_faces_back(|p| lv.info(p), pos, f));
             if info.powered != valid {
                 lv.set_flags(pos, &[("powered", valid)], update_all());
             }
@@ -1473,7 +1469,7 @@ fn tick_contacts(lv: &mut ServerLevel<'_>) {
         let should = lit
             || info
                 .facing
-                .is_some_and(|f| contact_faces_back(&|p| lv.block_state(p), pos, f));
+                .is_some_and(|f| contact_faces_back(|p| lv.info(p), pos, f));
         with_world(|w| {
             let held = &mut w.dims[dim].lifts.contact_held;
             if lit {
@@ -1624,12 +1620,7 @@ impl BlockPart for ContactPart {
         level: mod_api::LevelSide<'_>,
         event: &mut StateForPlacementEvent<'_>,
     ) -> Option<Option<BlockState>> {
-        // RedstoneContactItem chooses an elevator contact if it faces a live elevator column.
-        // The port tracks those columns in the server's lift state, not on the client.
         let (level, server) = states::level_view(level);
-        if !server {
-            return None;
-        }
         let name = level.state_block(event.state)?;
         if name != "create:redstone_contact" {
             return None;
@@ -1643,12 +1634,14 @@ impl BlockPart for ContactPart {
             clicked_face: Dir::ALL[cx.face as usize],
         };
         let (facing, powered) = create_engine::place::redstone_contact(ctx, |d| {
-            contact_faces_back(&|p| level.block_state(p), pos, d)
+            contact_faces_back(|p| states::level_info_at(level, p), pos, d)
         });
-        // `RedstoneContactItem.getPlacementState`: facing an elevator column, it is that
-        // column's elevator contact (`copyProperties`).
-        let dim = super::super::world::level_index(event.dimension.key().id());
-        let name = if dim.is_some_and(|dim| facing_column(dim, pos, facing, None)) {
+        // `RedstoneContactItem.getPlacementState`: swap to an elevator contact if it faces a
+        // live column (`copyProperties`). Only the server tracks active columns.
+        let name = if server
+            && super::super::world::level_index(event.dimension.key().id())
+                .is_some_and(|dim| facing_column(dim, pos, facing, None))
+        {
             "create:elevator_contact"
         } else {
             "create:redstone_contact"
@@ -1693,7 +1686,7 @@ impl BlockPart for ContactPart {
             Block::ElevatorContact => {
                 let reader = add(pos, face.offset());
                 let reader_is_contact = matches!(
-                    info_at(&|p| level.block_state(p), reader),
+                    states::level_info_at(level, reader),
                     Some((Block::ElevatorContact, _))
                 );
                 event.signal =

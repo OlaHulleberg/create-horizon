@@ -9,7 +9,7 @@ use super::super::states;
 use super::super::world::{level_index, with_world};
 use create_engine::Block;
 use create_engine::kinetics::{Axis, Dir};
-use create_engine::parts::StateInfo;
+use create_engine::place::Neighbours;
 use mod_api::{BlockPart, BlockState, LevelHost, Registrar, StateForPlacementEvent};
 
 /// The blocks other subsystems place.
@@ -73,9 +73,10 @@ impl BlockPart for Placement {
         level: mod_api::LevelSide<'_>,
         event: &mut StateForPlacementEvent<'_>,
     ) -> Option<Option<BlockState>> {
-        let (level, server) = states::level_view(level);
+        let (level, _) = states::level_view(level);
         let block = states::level_block(level, event.state)?;
-        let info_at = |p| states::level_info(level, level.block_state(p)?);
+        let info_at = |p| states::level_info_at(level, p);
+        let neighbours = Neighbours(&info_at);
         let c = event.context;
         let pos = [c.pos.x, c.pos.y, c.pos.z];
         let clicked_face = dir_of(c.face);
@@ -124,23 +125,17 @@ impl BlockPart for Placement {
         }
         if create_engine::world::gauge_kind(block).is_some() {
             // GaugeBlock.getStateForPlacement: the block it was placed on (behind the clicked
-            // face) carries its shaft on through it. Shaft connections are in the server mirror.
-            if !server {
-                return None;
-            }
-            let dim = level_index(event.dimension.key().id())?;
+            // face) carries its shaft on through it.
             let on = beside(clicked_face.opposite());
             let look = create_engine::place::ordered_by_nearest(c.yaw, c.pitch)[0];
             let horizontal = create_engine::place::horizontal_direction(c.yaw);
-            let (facing, along) = with_world(|w| {
-                create_engine::gauge::placement(
-                    clicked_face,
-                    look,
-                    horizontal,
-                    w.has_shaft_towards(dim, on, clicked_face),
-                    |side| w.has_shaft_towards(dim, beside(side), side.opposite()),
-                )
-            })?;
+            let (facing, along) = create_engine::gauge::placement(
+                clicked_face,
+                look,
+                horizontal,
+                neighbours.has_shaft_towards(on, clicked_face),
+                |side| neighbours.has_shaft_towards(beside(side), side.opposite()),
+            );
             let s = set(default, "facing", super::super::kinetics::dir_name(facing));
             return Some(Some(set(
                 s,
@@ -222,44 +217,31 @@ impl BlockPart for Placement {
             }
             _ => {}
         }
-        // `placed_state` selects the preferred facing/axis from the server kinetic world's
-        // shaft and cog connections. Leave the template's answer on a client without that mirror.
-        if !server {
-            return None;
-        }
-        let dim = level_index(event.dimension.key().id())?;
         // `GearshiftBlock.getStateForPlacement` (inherited by ClutchBlock):
         // choose power here, not when an arbitrary state is inserted into the world.
-        let default = if matches!(block, Block::Clutch | Block::Gearshift) {
-            set(
-                default,
-                "powered",
-                if level.has_neighbor_signal(pos)? {
-                    "true"
-                } else {
-                    "false"
-                },
-            )
+        let default = if matches!(block, Block::Clutch | Block::Gearshift)
+            && let Some(powered) = level.has_neighbor_signal(pos)
+        {
+            set(default, "powered", flag(powered))
         } else {
             default
         };
-        placed_state(block, default, water, (dim, pos), ctx, &set, &info_at)
+        placed_state(block, default, water, pos, ctx, &set, &neighbours)
     }
 }
 
 /// The rest of `getStateForPlacement` for Create's kinetic blocks (their facing, axis and the
-/// properties that follow them) placed at `pos` in level `dim` in `ctx`, from `default` (in
-/// water when `water`): None leaves the template's state, `Some(None)` refuses the spot.
-/// `info_at` reads the blocks around. Also what `processing::operator` places an assembly
-/// operator with, two above what it works on.
+/// properties that follow them) placed at `pos` in `ctx`, from `default` (in water when `water`):
+/// None leaves the template's state, `Some(None)` refuses the spot. Also what
+/// `processing::operator` places an assembly operator with, two above what it works on.
 pub(crate) fn placed_state(
     block: Block,
     default: BlockState,
     water: bool,
-    (dim, pos): (usize, [i32; 3]),
+    pos: [i32; 3],
     ctx: create_engine::place::Context,
     set: &dyn Fn(BlockState, &str, &str) -> BlockState,
-    info_at: &dyn Fn([i32; 3]) -> Option<(Block, StateInfo)>,
+    neighbours: &Neighbours<'_>,
 ) -> Option<Option<BlockState>> {
     let clicked_face = ctx.clicked_face;
     let flag = |b: bool| if b { "true" } else { "false" };
@@ -269,12 +251,8 @@ pub(crate) fn placed_state(
     };
     let mut state = default;
     let mut changed = water;
-    let facing = with_world(|w| {
-        create_engine::place::facing(block, ctx, |side| {
-            w.has_shaft_towards(dim, beside(side), side.opposite())
-        })
-    })
-    .flatten();
+    let shaft = |side: Dir| neighbours.has_shaft_towards(beside(side), side.opposite());
+    let facing = create_engine::place::facing(block, ctx, shaft);
     // Set even when it is the default state's: a template's own placement (the basin's
     // barrel) would otherwise turn it.
     if let Some(f) = facing {
@@ -284,12 +262,7 @@ pub(crate) fn placed_state(
     if let Some(f) = facing
         && matches!(block, Block::Deployer | Block::MechanicalSaw)
     {
-        let along = with_world(|w| {
-            create_engine::place::along_first(f, ctx, |side| {
-                w.has_shaft_towards(dim, beside(side), side.opposite())
-            })
-        })
-        .unwrap_or(false);
+        let along = create_engine::place::along_first(f, ctx, shaft);
         state = set(state, "axis_along_first", flag(along));
         if block == Block::MechanicalSaw {
             state = set(
@@ -302,7 +275,8 @@ pub(crate) fn placed_state(
     }
     if block == Block::MechanicalCrafter {
         // Placed against another crafter, it takes that one's facing.
-        let against = info_at(beside(clicked_face.opposite()))
+        let against = neighbours
+            .at(beside(clicked_face.opposite()))
             .filter(|(b, _)| *b == Block::MechanicalCrafter)
             .and_then(|(_, i)| i.facing);
         let (f, pointing) = create_engine::place::crafter(ctx, against);
@@ -312,33 +286,26 @@ pub(crate) fn placed_state(
     }
     // Create's axis blocks: shafts, cogs, casings, gearboxes, chain drives, the speed
     // controller, the sequenced gearshift.
-    let axis = with_world(|w| {
-        let below = [pos[0], pos[1] - 1, pos[2]];
-        let near = create_engine::place::Nearby {
-            large_cog_above: w.large_cog_axis(dim, [pos[0], pos[1] + 1, pos[2]]),
-            small_cog_clicked: w
-                .cog_at(dim, beside(clicked_face.opposite()))
-                .filter(|(large, _)| !large)
-                .map(|(_, a)| a),
-            controller_below: w
-                .state_at(dim, below)
-                .and_then(|s| w.table.get(s))
-                .filter(|(b, _)| *b == Block::RotationSpeedController)
-                .and_then(|(_, i)| i.axis),
-        };
-        create_engine::place::axis(
-            block,
-            ctx,
-            |side| w.has_shaft_towards(dim, beside(side), side.opposite()),
-            near,
-        )
-    })
-    .flatten();
+    let near = create_engine::place::Nearby {
+        large_cog_above: neighbours
+            .cog_at(beside(Dir::Up))
+            .filter(|(large, _)| *large)
+            .map(|(_, a)| a),
+        small_cog_clicked: neighbours
+            .cog_at(beside(clicked_face.opposite()))
+            .filter(|(large, _)| !large)
+            .map(|(_, a)| a),
+        controller_below: neighbours
+            .at(beside(Dir::Down))
+            .filter(|(b, _)| *b == Block::RotationSpeedController)
+            .and_then(|(_, i)| i.axis),
+    };
+    let axis = create_engine::place::axis(block, ctx, shaft, near);
     // CogWheelBlock.canSurvive (`isValidCogwheelPosition`): no large cog beside it in its
     // plane, nor a small one beside a large one.
     if let (Block::Cogwheel | Block::LargeCogwheel, Some((a, _))) = (block, axis) {
         let large = block == Block::LargeCogwheel;
-        if with_world(|w| w.valid_cog_position(dim, pos, large, a)) == Some(false) {
+        if !neighbours.valid_cog_position(pos, large, a) {
             return Some(None);
         }
     }

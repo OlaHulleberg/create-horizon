@@ -431,6 +431,11 @@ pub fn level_info(level: &dyn LevelHost, state: BlockState) -> Option<(Block, St
     Some((block, StateInfo::read(properties.into_iter())))
 }
 
+/// The Create block at `pos` and its state as seen by this level.
+pub fn level_info_at(level: &dyn LevelHost, pos: [i32; 3]) -> Option<(Block, StateInfo)> {
+    level_info(level, level.block_state(pos)?)
+}
+
 /// Builds the numbering for the world being opened (on the server, or on a client joining one)
 /// and returns the engine's table, or `None` when Create's blocks are absent. The ids are the
 /// same for every world and both sides of this process (the states never change while it runs),

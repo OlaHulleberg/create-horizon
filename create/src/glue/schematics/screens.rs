@@ -574,7 +574,7 @@ pub(super) fn tooltip_table(host: &dyn ClientHost, at: [f32; 2], lines: &mut Vec
     }
     lines.push((
         Text::translate("create.gui.schematicTable.availableSchematics", vec![]),
-        0xFFFF_AA00,
+        0xFF53_91E1,
     ));
     let chosen = CHOSEN.get().min(files.len() - 1);
     for (i, f) in files.iter().enumerate() {

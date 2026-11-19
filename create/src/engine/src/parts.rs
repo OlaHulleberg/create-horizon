@@ -524,6 +524,19 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
     }
 }
 
+/// The first cog in a block's state: whether it is large, and the axis it turns on.
+pub(crate) fn cog(block: Block, info: &StateInfo) -> Option<(bool, Axis)> {
+    use crate::kinetics::Cog;
+    parts(block, info, &Settings::default())
+        .into_iter()
+        .flatten()
+        .find_map(|p| match p.cog {
+            Cog::Small => Some((false, p.axis)),
+            Cog::Large => Some((true, p.axis)),
+            Cog::None => None,
+        })
+}
+
 /// `DirectionalAxisKineticBlock.getRotationAxis`: the first or second axis other than the
 /// facing's.
 pub fn directional_axis(facing: Dir, along_first: bool) -> Axis {

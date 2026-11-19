@@ -2935,20 +2935,6 @@ impl CreateWorld {
         );
     }
 
-    /// The axis of the large cog at `pos` (`ICogWheel.isLargeCog`), for a speed controller placed
-    /// below it.
-    pub fn large_cog_axis(&self, dim: usize, pos: [i32; 3]) -> Option<crate::kinetics::Axis> {
-        let state = *self.dims[dim].states.get(&pos)?;
-        let (block, info) = self.table.get(state)?;
-        matches!(
-            block,
-            Block::LargeCogwheel
-                | Block::AndesiteEncasedLargeCogwheel
-                | Block::BrassEncasedLargeCogwheel
-        )
-        .then_some(info.axis)?
-    }
-
     /// The encased chain drive at `pos` as its chain rules read it; None for any other block.
     fn chain_drive(&self, dim: usize, pos: [i32; 3]) -> Option<crate::chain::Drive> {
         let state = *self.dims[dim].states.get(&pos)?;
@@ -4658,15 +4644,7 @@ impl CreateWorld {
     pub fn cog_at(&self, dim: usize, pos: [i32; 3]) -> Option<(bool, crate::kinetics::Axis)> {
         let d = &self.dims[dim];
         let (block, info) = d.states.get(&pos).and_then(|&s| self.table.get(s))?;
-        let settings = d.settings.get(&pos).copied().unwrap_or_default();
-        parts(block, info, &settings)
-            .iter()
-            .flatten()
-            .find_map(|p| match p.cog {
-                crate::kinetics::Cog::Small => Some((false, p.axis)),
-                crate::kinetics::Cog::Large => Some((true, p.axis)),
-                crate::kinetics::Cog::None => None,
-            })
+        crate::parts::cog(block, info)
     }
 
     /// `CogWheelBlock.isValidCogwheelPosition`: no large cog (nor, for a large one, a small cog)
@@ -4678,23 +4656,12 @@ impl CreateWorld {
         large: bool,
         axis: crate::kinetics::Axis,
     ) -> bool {
-        crate::kinetics::Dir::ALL
-            .into_iter()
-            .filter(|d| d.axis() != axis)
-            .all(|d| {
-                let o = d.offset();
-                let at = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
-                let along = self.dims[dim]
-                    .states
-                    .get(&at)
-                    .and_then(|&s| self.table.get(s))
-                    .is_some_and(|(_, i)| i.axis == Some(d.axis()));
-                along
-                    || match self.cog_at(dim, at) {
-                        Some((other_large, _)) => !other_large && !large,
-                        None => true,
-                    }
-            })
+        let read = |at| {
+            self.table
+                .get(*self.dims[dim].states.get(&at)?)
+                .map(|(b, i)| (b, *i))
+        };
+        crate::place::Neighbours(&read).valid_cog_position(pos, large, axis)
     }
 
     pub fn speed(&self, dim: usize, pos: [i32; 3]) -> Option<f32> {
