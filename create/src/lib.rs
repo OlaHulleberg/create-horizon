@@ -139,7 +139,7 @@ impl Hooks for Create {
             return;
         }
         for s in SUBSYSTEMS {
-            s.block_changed(dim, pos, old, new);
+            s.block_changed(dim, pos, old, new, event.flags);
         }
     }
 

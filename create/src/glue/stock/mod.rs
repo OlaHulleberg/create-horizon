@@ -855,7 +855,14 @@ impl Subsystem for Stock {
         Flow::Continue
     }
 
-    fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+    fn block_changed(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+        old: u32,
+        new: u32,
+        _: mod_api::BlockUpdateFlags,
+    ) {
         if block_of(old).is_some_and(shop::is_cloth) || block_of(new).is_some_and(shop::is_cloth) {
             shop::changed(dim, pos);
         }

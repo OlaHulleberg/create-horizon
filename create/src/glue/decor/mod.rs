@@ -427,7 +427,14 @@ impl Subsystem for Decor {
 
     /// A Create block changed: ours are looked at after the level's tick. Shafts, cogs and pipes
     /// only when they hold a bracket.
-    fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+    fn block_changed(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+        old: u32,
+        new: u32,
+        _: mod_api::BlockUpdateFlags,
+    ) {
         let (o, n) = (block_of(old).map(|x| x.0), block_of(new).map(|x| x.0));
         let mine = |b: Option<Block>| b.is_some_and(ours);
         let bracket = o.is_some_and(bracketed)

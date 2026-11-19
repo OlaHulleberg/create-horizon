@@ -410,7 +410,14 @@ impl Subsystem for Carts {
     }
 
     /// An assembler gone from the world forgets its mode.
-    fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+    fn block_changed(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+        old: u32,
+        new: u32,
+        _: mod_api::BlockUpdateFlags,
+    ) {
         if assembler(old).is_some() && assembler(new).is_none() {
             CARTS.with_borrow_mut(|c| {
                 if c.stations.remove(&(dim, pos)).is_some() {

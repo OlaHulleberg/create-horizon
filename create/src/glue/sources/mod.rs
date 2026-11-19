@@ -121,7 +121,14 @@ impl Subsystem for Sources {
         SYNCED
     }
 
-    fn block_changed(&self, dim: usize, pos: [i32; 3], _old: u32, new: u32) {
+    fn block_changed(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+        _old: u32,
+        new: u32,
+        _: mod_api::BlockUpdateFlags,
+    ) {
         let source = with_world(|w| w.table.get(new).is_some_and(|(b, _)| generates(b)));
         if source == Some(true) {
             PLACED.with_borrow_mut(|p| p.push((dim, pos)));

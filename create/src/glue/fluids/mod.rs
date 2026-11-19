@@ -364,7 +364,14 @@ impl Subsystem for Fluids {
     }
 
     /// The pipes beside a Create block that changed draw their pieces again (`rims`).
-    fn block_changed(&self, dim: usize, pos: [i32; 3], _old: u32, new: u32) {
+    fn block_changed(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+        _old: u32,
+        new: u32,
+        _: mod_api::BlockUpdateFlags,
+    ) {
         flows::forget(dim, pos);
         engine::changed(dim, pos, new);
         rims::changed(dim, pos);
