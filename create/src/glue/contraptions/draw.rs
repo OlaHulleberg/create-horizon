@@ -19,7 +19,8 @@ use create_engine::kinetics::{Axis, Dir};
 use mod_api::{
     BlockEntityDrawContext, BlockEntityOnLoadEvent, BlockEntityPart,
     BlockEntityRenderBoundingBoxEvent, BlockEntitySubmitEvent, BlockEntityViewDistanceEvent,
-    BlockKey, BlockPart, ClientHost, Compound, Host, HostSide, Registrar, RegistrationContext, Tag,
+    BlockKey, BlockPart, ClientHost, Compound, Host, HostSide, LevelRef, Registrar,
+    RegistrationContext, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -169,15 +170,14 @@ fn holds_structure(data: &Compound) -> bool {
 // ---------------------------------------------------------------------------------------------
 // Server: writing a structure into its anchor
 
-/// `blocks` (offsets from `place`, in whole blocks from the anchor) with their states, the
-/// light each is drawn with, and what the block entity of each shows (`Contraption.updateTags`:
-/// what contraption `key` carries for it, by the same offset).
+/// `blocks` (offsets in whole blocks from the anchor) with their states, and what the block
+/// entity of each shows (`Contraption.updateTags`: what contraption `key` carries for it, by the
+/// same offset). Clients light them where they are drawn.
 fn blocks_tags(
     c: &mut Compound,
     suffix: &str,
     lv: &ServerLevel<'_>,
-    (_anchor, key): ([i32; 3], [i32; 3]),
-    _place: [i32; 3],
+    key: [i32; 3],
     blocks: &[([i32; 3], u32)],
 ) {
     let host = &*lv.host;
@@ -206,54 +206,6 @@ fn blocks_tags(
                 .collect(),
         ),
     );
-}
-
-/// Current local-to-world transform used for contraption lighting, including block centres
-/// (`ContraptionMatrices.getLight` / `ContraptionEntityRenderer`).
-#[derive(Clone, Copy)]
-struct WorldPose(create_engine::math::Mat4);
-
-impl WorldPose {
-    fn translated(anchor: [i32; 3], shift: [f32; 3]) -> Self {
-        use create_engine::math::{Mat4, Vec3};
-        Self(Mat4::from_translation(Vec3::new(
-            anchor[0] as f32 + shift[0],
-            anchor[1] as f32 + shift[1],
-            anchor[2] as f32 + shift[2],
-        )))
-    }
-
-    fn turned(anchor: [i32; 3], axis: [f32; 3], degrees: f32) -> Self {
-        use create_engine::math::{Mat4, Vec3};
-        let centre = Vec3::splat(0.5);
-        Self(
-            Self::translated(anchor, [0.0; 3]).0
-                * Mat4::from_translation(centre)
-                * match axis_enum(axis) {
-                    Axis::X => Mat4::from_rotation_x(degrees.to_radians()),
-                    Axis::Y => Mat4::from_rotation_y(degrees.to_radians()),
-                    Axis::Z => Mat4::from_rotation_z(degrees.to_radians()),
-                }
-                * Mat4::from_translation(-centre),
-        )
-    }
-
-    fn cell(self, local: [f32; 3]) -> [i32; 3] {
-        use create_engine::math::Vec3;
-        self.0
-            .transform_point3(Vec3::new(local[0], local[1], local[2]) + Vec3::splat(0.5))
-            .to_array()
-            .map(|v| v.floor() as i32)
-    }
-
-    fn light(self, host: &dyn ClientHost, local: [f32; 3]) -> u32 {
-        let Some(level) = host.level(host.dimension()) else {
-            return 0;
-        };
-        let at = self.cell(local);
-        let read = |layer| level.brightness(host, layer, at).unwrap_or(0).clamp(0, 15) as u32 * 16;
-        read(mod_api::LightLayer::Sky) | read(mod_api::LightLayer::Block) << 8
-    }
 }
 
 fn float(v: f32) -> Tag {
@@ -321,7 +273,7 @@ pub(super) fn show_turn(
 ) {
     let mut c = Compound::new();
     c.insert("Kind".into(), Tag::Int(TURN));
-    blocks_tags(&mut c, "", lv, (anchor, anchor), [0; 3], blocks);
+    blocks_tags(&mut c, "", lv, anchor, blocks);
     c.insert("Axis".into(), Tag::Int(axis_index(axis)));
     let now = lv.game_time();
     c.insert("Angle".into(), float(turn.map_or(0.0, |t| t.angle_at(now))));
@@ -354,8 +306,7 @@ pub(super) struct Glide<'a> {
 pub(super) fn show_glide(lv: &mut ServerLevel<'_>, anchor: [i32; 3], g: Glide<'_>) {
     let mut c = Compound::new();
     c.insert("Kind".into(), Tag::Int(GLIDE));
-    let place = [0, 1, 2].map(|i| g.origin[i] + (g.dir[i] as f32 * g.offset).round() as i32);
-    blocks_tags(&mut c, "", lv, (anchor, g.key), place, g.blocks);
+    blocks_tags(&mut c, "", lv, g.key, g.blocks);
     c.insert("Origin".into(), Tag::IntArray(g.origin.to_vec()));
     c.insert("Dir".into(), Tag::IntArray(g.dir.to_vec()));
     c.insert("Offset".into(), float(g.offset));
@@ -383,8 +334,8 @@ pub(super) struct Hands<'a> {
 pub(super) fn show_clock(lv: &mut ServerLevel<'_>, anchor: [i32; 3], h: Hands<'_>) {
     let mut c = Compound::new();
     c.insert("Kind".into(), Tag::Int(CLOCK));
-    blocks_tags(&mut c, "", lv, (anchor, anchor), [0; 3], h.hour);
-    blocks_tags(&mut c, "2", lv, (anchor, anchor), [0; 3], h.minute);
+    blocks_tags(&mut c, "", lv, anchor, h.hour);
+    blocks_tags(&mut c, "2", lv, anchor, h.minute);
     c.insert("Axis".into(), Tag::Int(axis_index(h.axis)));
     c.insert("Angle".into(), float(h.angles.0));
     c.insert("Angle2".into(), float(h.angles.1));
@@ -404,12 +355,7 @@ pub(super) fn show_elevator(
 ) {
     let mut c = Compound::new();
     c.insert("Kind".into(), Tag::Int(ELEVATOR));
-    let place = [
-        e.anchor[0] - anchor[0],
-        e.y.round() as i32 - anchor[1],
-        e.anchor[2] - anchor[2],
-    ];
-    blocks_tags(&mut c, "", lv, (anchor, anchor), place, &e.blocks);
+    blocks_tags(&mut c, "", lv, anchor, &e.blocks);
     let y = e.y.to_bits();
     let nums = vec![
         e.anchor[0],
@@ -650,6 +596,72 @@ fn parse(host: &dyn Host, c: &Compound) -> Option<Shape> {
 // ---------------------------------------------------------------------------------------------
 // Client
 
+/// How a structure's blocks are lit as they are drawn (`ContraptionMatrices.getLight`: the world's
+/// light where each block is now).
+#[derive(Clone, Copy)]
+enum Lighting {
+    /// Drawn spinning (`spin`): the game lights each quad where it turns to.
+    Host,
+    /// Drawn where `WorldPose` puts it this frame: each block reads the light at its cell.
+    Sampled(WorldPose),
+}
+
+/// Where a structure's blocks are this frame: the anchor, and a transform from block-local to
+/// anchor-relative coordinates (relative, so `f32` keeps its precision far from the origin).
+#[derive(Clone, Copy)]
+struct WorldPose {
+    anchor: [i32; 3],
+    local: create_engine::math::Mat4,
+}
+
+impl WorldPose {
+    fn translated(anchor: [i32; 3], shift: [f32; 3]) -> Self {
+        use create_engine::math::{Mat4, Vec3};
+        Self {
+            anchor,
+            local: Mat4::from_translation(Vec3::new(shift[0], shift[1], shift[2])),
+        }
+    }
+
+    fn turned(anchor: [i32; 3], axis: [f32; 3], degrees: f32) -> Self {
+        use create_engine::math::{Mat4, Vec3};
+        let centre = Vec3::splat(0.5);
+        let turn = match axis_enum(axis) {
+            Axis::X => Mat4::from_rotation_x(degrees.to_radians()),
+            Axis::Y => Mat4::from_rotation_y(degrees.to_radians()),
+            Axis::Z => Mat4::from_rotation_z(degrees.to_radians()),
+        };
+        Self {
+            anchor,
+            local: Mat4::from_translation(centre) * turn * Mat4::from_translation(-centre),
+        }
+    }
+
+    /// The world cell the block at `local` (its corner, in blocks from the anchor) has its
+    /// centre in.
+    fn cell(self, local: [f32; 3]) -> [i32; 3] {
+        use create_engine::math::Vec3;
+        let at = self
+            .local
+            .transform_point3(Vec3::new(local[0], local[1], local[2]) + Vec3::splat(0.5))
+            .to_array();
+        [0, 1, 2].map(|i| self.anchor[i] + at[i].floor() as i32)
+    }
+
+    /// The packed light at the block at `local`'s cell (16 times sky light in bits 0..8, 16 times
+    /// block light in bits 8..16, as the draw context takes it), the cell found as
+    /// `BlockEntityRenderHelper.getLightPos` does. A cell the client holds no chunk for reads as
+    /// the game's light query does there: full sky, no block light.
+    fn light(self, host: &dyn ClientHost, level: Option<&LevelRef>, local: [f32; 3]) -> u32 {
+        let at = self.cell(local);
+        let read = |layer, unloaded: i32| {
+            let v = level.and_then(|l| l.brightness(host, layer, at));
+            v.unwrap_or(unloaded).clamp(0, 15) as u32 * 16
+        };
+        read(mod_api::LightLayer::Sky, 15) | read(mod_api::LightLayer::Block, 0) << 8
+    }
+}
+
 struct Shown {
     rev: i32,
     shape: Shape,
@@ -762,16 +774,22 @@ fn draw_blocks(
     anchor: [i32; 3],
     blocks: &[Drawn],
     actors: Option<&Frame<'_>>,
-    world_pose: WorldPose,
+    lighting: Lighting,
 ) {
     let own = draw.light();
+    // The level once for the whole structure: each block reads its light from it.
+    let level = matches!(lighting, Lighting::Sampled(_))
+        .then(|| host.level(host.dimension()))
+        .flatten();
     for b in blocks {
         let props: Vec<(&str, &str)> = b
             .props
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
-        draw.set_light(world_pose.light(host, b.at));
+        if let Lighting::Sampled(pose) = lighting {
+            draw.set_light(pose.light(host, level.as_ref(), b.at));
+        }
         draw.push();
         draw.translate(b.at);
         // What its block entity holds first: a translucent model (a nixie tube's glass) then
@@ -1237,16 +1255,21 @@ fn submit(
                     draw.push();
                     draw.rotate_about(*axis, here, [0.5; 3]);
                     draw_bearing_top(draw, top);
-                    draw_blocks(host, draw, pos, blocks, frame.as_ref(), world_pose);
+                    draw_blocks(
+                        host,
+                        draw,
+                        pos,
+                        blocks,
+                        frame.as_ref(),
+                        Lighting::Sampled(world_pose),
+                    );
                     draw.pop();
                 } else {
-                    // A steady turn is kept and spun by the game. Its blocks keep the light of
-                    // where they were when it was drawn: a kept draw has no per-frame light
-                    // (Create's light volume), API_GAPS.md.
+                    // A steady turn is kept and spun by the game, which lights it where it turns.
                     let phase = (f64::from(here) - anim * f64::from(rate)) % 360.0;
                     draw.spin(*axis, [0.5; 3], rate, phase as f32);
                     draw_bearing_top(draw, top);
-                    draw_blocks(host, draw, pos, blocks, None, world_pose);
+                    draw_blocks(host, draw, pos, blocks, None, Lighting::Host);
                     draw.still();
                     draw.keep();
                 }
@@ -1269,14 +1292,7 @@ fn submit(
                     if is_hour {
                         draw_bearing_top(draw, top);
                     }
-                    draw_blocks(
-                        host,
-                        draw,
-                        pos,
-                        blocks,
-                        None,
-                        WorldPose::turned(pos, *axis, here % 360.0),
-                    );
+                    draw_blocks(host, draw, pos, blocks, None, Lighting::Host);
                     draw.still();
                 }
                 draw.keep();
@@ -1320,7 +1336,7 @@ fn submit(
                     pos,
                     blocks,
                     frame.as_ref(),
-                    WorldPose::translated(pos, shift),
+                    Lighting::Sampled(WorldPose::translated(pos, shift)),
                 );
                 draw.pop();
                 // The magnet and rope down to it.
@@ -1373,7 +1389,7 @@ fn submit(
                     pos,
                     blocks,
                     frame.as_ref(),
-                    WorldPose::translated(pos, origin),
+                    Lighting::Sampled(WorldPose::translated(pos, origin)),
                 );
                 draw.pop();
                 // The magnet a block over its anchor, and the belt up to the pulley.
@@ -1888,6 +1904,15 @@ mod world_light_tests {
         let p = WorldPose::turned([10, 64, -10], [0.0, 1.0, 0.0], 90.0);
         assert_eq!(p.cell([2.0, 0.0, 0.0]), [10, 64, -12]);
         assert_eq!(p.cell([-2.0, 0.0, 0.0]), [10, 64, -8]);
+    }
+
+    /// Far from the origin an absolute `f32` centre rounds into the next cell.
+    #[test]
+    fn lighting_keeps_its_cell_far_from_the_origin() {
+        let p = WorldPose::translated([8_388_609, 64, -8_388_609], [0.0; 3]);
+        assert_eq!(p.cell([0.0; 3]), [8_388_609, 64, -8_388_609]);
+        let t = WorldPose::turned([8_388_609, 64, 0], [0.0, 1.0, 0.0], 90.0);
+        assert_eq!(t.cell([2.0, 0.0, 0.0]), [8_388_609, 64, -2]);
     }
 
     #[test]
