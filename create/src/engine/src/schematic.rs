@@ -845,7 +845,16 @@ pub const MAX_TOTAL_SCHEMATIC_SIZE_KB: u64 = 256;
 /// `CSchematics.maxSchematics`: uploads a player keeps before the oldest is replaced.
 pub const MAX_SCHEMATICS: usize = 10;
 
-/// `ServerSchematicLoader`: a player's upload replaces the oldest other schematic at the cap.
+/// Whether a same-name file counts toward the limit before an upload.
+#[derive(Clone, Copy)]
+pub enum SchematicUpload {
+    /// `handleNewUpload` removes a same-name file before counting.
+    Table,
+    /// `handleInstantSchematic` counts before replacing a same-name file.
+    Instant,
+}
+
+/// `ServerSchematicLoader`: a player's upload evicts the oldest eligible schematic at the cap.
 /// Holds just one candidate across all pages of the player's upload directory.
 #[derive(Default)]
 pub struct UploadRetention {
@@ -854,9 +863,14 @@ pub struct UploadRetention {
 }
 
 impl UploadRetention {
-    /// The incoming name replaces its own previous file and does not consume another slot.
-    pub fn record(&mut self, incoming: &str, name: String, modified_millis: u64) {
-        if name == incoming || !valid_file(&name) {
+    pub fn record(
+        &mut self,
+        upload: SchematicUpload,
+        incoming: &str,
+        name: String,
+        modified_millis: u64,
+    ) {
+        if (matches!(upload, SchematicUpload::Table) && name == incoming) || !valid_file(&name) {
             return;
         }
         self.count += 1;
@@ -1124,21 +1138,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_new_upload_at_the_cap_evicts_the_oldest_other_schematic() {
-        let retention = |incoming: &str, count| {
+    fn table_and_instant_uploads_count_same_name_replacements_differently() {
+        use SchematicUpload::{Instant, Table};
+        let eviction = |upload, incoming: &str, count| {
             let mut retention = UploadRetention::default();
             for i in 0..count {
                 // File listing order is not age order.
-                retention.record(incoming, format!("{i}.nbt"), 100 - i as u64);
+                retention.record(upload, incoming, format!("{i}.nbt"), 100 - i as u64);
             }
-            retention.record(incoming, "notes.txt".into(), 0);
+            retention.record(upload, incoming, "notes.txt".into(), 0);
             retention.evict()
         };
-        assert_eq!(retention("new.nbt", MAX_SCHEMATICS - 1), None);
-        assert_eq!(retention("0.nbt", MAX_SCHEMATICS), None);
+        let oldest = format!("{}.nbt", MAX_SCHEMATICS - 1);
+        assert_eq!(eviction(Table, "new.nbt", MAX_SCHEMATICS - 1), None);
+        assert_eq!(eviction(Table, "0.nbt", MAX_SCHEMATICS), None);
         assert_eq!(
-            retention("new.nbt", MAX_SCHEMATICS),
-            Some(format!("{}.nbt", MAX_SCHEMATICS - 1))
+            eviction(Table, "new.nbt", MAX_SCHEMATICS).as_deref(),
+            Some(oldest.as_str())
+        );
+        assert_eq!(
+            eviction(Instant, "0.nbt", MAX_SCHEMATICS).as_deref(),
+            Some(oldest.as_str())
+        );
+        assert_eq!(
+            eviction(Instant, &oldest, MAX_SCHEMATICS).as_deref(),
+            Some(oldest.as_str())
         );
     }
 

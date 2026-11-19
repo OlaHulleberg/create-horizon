@@ -2006,7 +2006,8 @@ fn save(
     let size = body::size(&*lv.host, &file).unwrap_or(0);
     match (uploaded(name, &file), holding) {
         (Some(target), Some((slot, _))) if sch::size_allowed(size) => {
-            match body::upload(&*lv.host, &file, &target) {
+            // `handleInstantSchematic` counts the old copy before replacing it.
+            match body::upload(&*lv.host, &file, &target, sch::SchematicUpload::Instant) {
                 Ok(()) => {
                     let Some(mut stack) = packages::body::new_stack(&*lv.host, SCHEMATIC, 1) else {
                         return lines;
@@ -2073,7 +2074,8 @@ fn upload(lv: &mut ServerLevel<'_>, player: &str, pos: [i32; 3], file: &str) -> 
     if !sch::size_allowed(size) {
         return vec![too_large(size)];
     }
-    if let Err(e) = body::upload(host, file, &target) {
+    // `handleNewUpload` excludes a same-name copy before counting.
+    if let Err(e) = body::upload(host, file, &target, sch::SchematicUpload::Table) {
         crate::create_log!("[create] Exception Thrown when starting Upload: {player}/{file}: {e}");
         return vec![format!("upload of {file} failed")];
     }

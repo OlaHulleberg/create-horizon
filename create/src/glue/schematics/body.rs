@@ -9,7 +9,7 @@
 
 use crate::glue::packages::body::{CustomData, set_custom};
 use create_engine::gzip;
-use create_engine::schematic::{Nbt, SchematicData, UploadRetention};
+use create_engine::schematic::{Nbt, SchematicData, SchematicUpload, UploadRetention};
 use mod_api::{ConfigEntryKind, ConfigFileError, ConfigFiles, ConfigPath, Host, ItemStack, Tag};
 use std::collections::HashMap;
 
@@ -160,7 +160,13 @@ pub fn size(host: &dyn Host, rel: &str) -> Option<u64> {
 }
 
 /// Store a local schematic as its owner's upload, evicting the oldest at the cap.
-pub(super) fn upload(host: &dyn Host, from: &str, to: &str) -> Result<(), ConfigFileError> {
+/// Table uploads exclude the destination name before counting; instant uploads include it.
+pub(super) fn upload(
+    host: &dyn Host,
+    from: &str,
+    to: &str,
+    upload: SchematicUpload,
+) -> Result<(), ConfigFileError> {
     let from = path(from).ok_or(ConfigFileError::InvalidPath)?;
     let to = path(to).ok_or(ConfigFileError::InvalidPath)?;
     let (folder, name) = to
@@ -185,7 +191,7 @@ pub(super) fn upload(host: &dyn Host, from: &str, to: &str) -> Result<(), Config
         after = Some(last.name.clone());
         for entry in page {
             if entry.stat.kind == ConfigEntryKind::File {
-                retention.record(name, entry.name, entry.stat.modified_millis);
+                retention.record(upload, name, entry.name, entry.stat.modified_millis);
             }
         }
     }
