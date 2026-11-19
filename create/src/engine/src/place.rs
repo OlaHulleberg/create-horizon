@@ -4,7 +4,7 @@
 
 use crate::Block;
 use crate::kinetics::{Axis, Dir};
-use crate::parts::{Settings, StateInfo, parts};
+use crate::parts::StateInfo;
 
 /// Placement reads kinetic connections from the neighbouring block states on either side.
 pub struct Neighbours<'a>(pub &'a dyn Fn([i32; 3]) -> Option<(Block, StateInfo)>);
@@ -18,17 +18,7 @@ impl Neighbours<'_> {
         let Some((block, info)) = self.at(pos) else {
             return false;
         };
-        // A belt's pulley comes from its segment state. The simulation only creates its part
-        // once the controller is known, but placement does not need a running belt network.
-        if block == Block::Belt {
-            return info
-                .belt
-                .is_some_and(|seg| seg.has_pulley() && seg.rotation_axis() == face.axis());
-        }
-        parts(block, &info, &Settings::default())
-            .into_iter()
-            .flatten()
-            .any(|p| p.shafts & face.bit() != 0)
+        crate::parts::has_shaft_towards(block, &info, face)
     }
 
     pub fn cog_at(&self, pos: [i32; 3]) -> Option<(bool, Axis)> {

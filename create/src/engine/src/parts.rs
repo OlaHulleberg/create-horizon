@@ -524,6 +524,21 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
     }
 }
 
+/// `IRotate.hasShaftTowards`: whether the block state exposes a shaft on `face`.
+pub(crate) fn has_shaft_towards(block: Block, info: &StateInfo, face: Dir) -> bool {
+    // `BeltBlock.hasShaftTowards` reads its rotation axis and pulley. Neither depends on
+    // whether the simulation knows the belt's controller yet.
+    if block == Block::Belt {
+        return info
+            .belt
+            .is_some_and(|seg| seg.has_pulley() && seg.rotation_axis() == face.axis());
+    }
+    parts(block, info, &Settings::default())
+        .into_iter()
+        .flatten()
+        .any(|p| p.shafts & face.bit() != 0)
+}
+
 /// The first cog in a block's state: whether it is large, and the axis it turns on.
 pub(crate) fn cog(block: Block, info: &StateInfo) -> Option<(bool, Axis)> {
     use crate::kinetics::Cog;

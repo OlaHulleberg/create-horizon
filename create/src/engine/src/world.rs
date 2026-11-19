@@ -4632,11 +4632,7 @@ impl CreateWorld {
         let Some((block, info)) = d.states.get(&pos).and_then(|&s| self.table.get(s)) else {
             return false;
         };
-        let settings = d.settings.get(&pos).copied().unwrap_or_default();
-        parts(block, info, &settings)
-            .iter()
-            .flatten()
-            .any(|p| p.shafts & face.bit() != 0)
+        crate::parts::has_shaft_towards(block, info, face)
     }
 
     /// The cog at `pos` (`ICogWheel.isSmallCog` / `isLargeCog`): whether it is large, and its
@@ -6110,6 +6106,11 @@ mod tests {
         w.block_changed(0, [1, 0, 0], 0, 11);
         w.block_changed(0, [2, 0, 0], 0, 12);
         w.block_changed(0, [0, 0, -1], 0, 13);
+        // A start pulley presents its shaft even before the belt has a controller.
+        assert!(w.dims[0].belt_of.is_empty());
+        assert!(w.has_shaft_towards(0, [0, 0, 0], crate::kinetics::Dir::North));
+        assert!(!w.has_shaft_towards(0, [0, 0, 0], crate::kinetics::Dir::East));
+        assert!(!w.has_shaft_towards(0, [1, 0, 0], crate::kinetics::Dir::North));
         w.settle_belts(0);
         assert_eq!(w.dims[0].belts[&[0, 0, 0]].chain.len(), 3);
         assert_eq!(w.dims[0].belt_of[&[2, 0, 0]], [0, 0, 0]);
