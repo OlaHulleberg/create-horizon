@@ -1,8 +1,7 @@
 //! The block breakers and the saw: the mechanical drill and saw breaking the block in front
 //! (`BlockBreakingKineticBlockEntity`), the saw facing up cutting what lands on it
 //! (`SawBlockEntity`), and both hurting what walks into them (`entityInside`), with vanilla's
-//! `generic` damage for Create's `mechanical_saw` and `mechanical_drill` (`API_GAPS.md`: a
-//! native mod's damage types).
+//! Create's `mechanical_saw` and `mechanical_drill` damage types.
 
 use super::{recipes, stacks};
 use crate::glue::logistics::{insert_into_from, random_angle, upright};
@@ -543,9 +542,8 @@ impl mod_api::BlockPart for Blades {
 }
 
 /// The entities that walked into a turning saw or drill this tick: hurt by its speed
-/// (`DrillBlock.getDamage`) when their box meets the block shrunk by 0.1. Create's
-/// `mechanical_saw` and `mechanical_drill` damage types are stood in for by vanilla's `generic`
-/// (`API_GAPS.md`: a native mod's damage types).
+/// (`DrillBlock.getDamage`) when their box meets the block shrunk by 0.1, with Create's
+/// `mechanical_saw` or `mechanical_drill` damage type.
 pub fn hurt_inside(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let inside: Vec<_> = BLADES.with_borrow_mut(|b| {
@@ -554,12 +552,11 @@ pub fn hurt_inside(lv: &mut ServerLevel<'_>) {
         here
     });
     for (_, pos, id) in inside {
-        if !matches!(
-            lv.info(pos).map(|(b, _)| b),
-            Some(Block::MechanicalSaw | Block::MechanicalDrill)
-        ) {
-            continue;
-        }
+        let damage_type = match lv.info(pos).map(|(b, _)| b) {
+            Some(Block::MechanicalSaw) => "create:mechanical_saw",
+            Some(Block::MechanicalDrill) => "create:mechanical_drill",
+            _ => continue,
+        };
         let speed = lv.speed(pos);
         if speed == 0.0 {
             continue;
@@ -571,13 +568,7 @@ pub fn hurt_inside(lv: &mut ServerLevel<'_>) {
             continue;
         };
         if drill::inside(pos, min, max) {
-            let _ = entity.hurt(
-                &mut *lv.host,
-                "minecraft:generic",
-                drill::damage(speed),
-                None,
-                None,
-            );
+            let _ = entity.hurt(&mut *lv.host, damage_type, drill::damage(speed), None, None);
         }
     }
 }

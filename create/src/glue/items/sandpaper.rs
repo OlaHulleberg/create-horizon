@@ -14,9 +14,9 @@
 
 use super::{custom, held, set_custom, set_held};
 use mod_api::{
-    ClientHost, Hand, HostSide, InteractionResult, ItemPart, ItemStack, PlayerRef,
-    ReleaseUsingEvent, ServerHost, Tag, UseAnimation, UseAnimationEvent, UseDurationEvent,
-    UseItemEvent, UseOnEvent,
+    BlockState, ClientHost, Hand, Host, HostBlockStates, HostSide, InteractionResult, ItemPart,
+    ItemStack, PlayerRef, ReleaseUsingEvent, ServerHost, Tag, UseAnimation, UseAnimationEvent,
+    UseDurationEvent, UseItemEvent, UseOnEvent,
 };
 
 pub(super) const IDS: [&str; 2] = ["create:sand_paper", "create:red_sand_paper"];
@@ -98,10 +98,7 @@ impl ItemPart for SandPaper {
                 let state = host
                     .level(host.dimension())?
                     .block_state(&*host, event.pos)?;
-                let text = host.block_state_string(state)?;
-                let (name, _) = super::super::states::split(&text);
-                let to = scraped(name)?;
-                host.block_key(&to).map(|_| InteractionResult::Success)
+                copper_transition(&*host, state).map(|_| InteractionResult::Success)
             }
         }
     }
@@ -336,29 +333,14 @@ pub(super) fn finished(
     *event.result = give_back(host, player, true);
 }
 
-/// The block a scrape (`AXE_SCRAPE`: an age back) or a wax-off (`AXE_WAX_OFF`) turns copper
-/// block `name` into, by its name as vanilla's and Create's copper are named.
-fn scraped(name: &str) -> Option<String> {
-    let (ns, path) = name.split_once(':')?;
-    if !path.contains("copper") {
-        return None;
-    }
-    let back = if let Some(rest) = path.strip_prefix("waxed_") {
-        rest.to_owned()
-    } else if let Some(rest) = path.strip_prefix("oxidized_") {
-        format!("weathered_{rest}")
-    } else if let Some(rest) = path.strip_prefix("weathered_") {
-        format!("exposed_{rest}")
+/// The registered scrape or wax-off result; true for wax-off's distinct particles.
+fn copper_transition(host: &dyn Host, state: BlockState) -> Option<(BlockState, bool)> {
+    let facts = host.block_states();
+    if let Some(previous) = facts.previous_weathering_stage(state) {
+        Some((previous, false))
     } else {
-        // `exposed_copper` steps back to `copper_block`.
-        let rest = path.strip_prefix("exposed_")?;
-        if rest == "copper" {
-            "copper_block".to_owned()
-        } else {
-            rest.to_owned()
-        }
-    };
-    Some(format!("{ns}:{back}"))
+        Some((facts.unwaxed(state)?, true))
+    }
 }
 
 /// `SandPaperItem.useOn`: copper scraped an age back, else its wax taken off, with the sanding
@@ -368,20 +350,7 @@ fn scrape(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
     let dimension = player.dimension(&*host)?.to_string();
     let mut lv = super::super::server::ServerLevel::new(host, &dimension)?;
     let state = lv.block_state(event.pos)?;
-    let text = lv.host.block_state_string(state)?;
-    let (name, props) = super::super::states::split(&text);
-    let to = scraped(name)?;
-    let key = lv.host.block_key(&to)?;
-    let facts = mod_api::HostBlockStates::block_states(&*lv.host);
-    let mut next = lv.host.block_state_default(key)?;
-    for (k, v) in &props {
-        if let Ok(s) = next.with(&facts, k, v) {
-            next = s;
-        }
-    }
-    let wax = name
-        .split_once(':')
-        .is_some_and(|(_, p)| p.starts_with("waxed_"));
+    let (next, wax) = copper_transition(&*lv.host, state)?;
     lv.set_state(event.pos, next, super::super::server::update_all());
     let pitch = {
         let r = lv
@@ -415,27 +384,4 @@ fn scrape(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
         set_held(lv.host, player, event.hand, paper);
     }
     Some(InteractionResult::Success)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::scraped;
-
-    #[test]
-    fn copper_scrapes_an_age_back_and_loses_its_wax() {
-        assert_eq!(
-            scraped("create:weathered_copper_shingles").as_deref(),
-            Some("create:exposed_copper_shingles")
-        );
-        assert_eq!(
-            scraped("minecraft:exposed_copper").as_deref(),
-            Some("minecraft:copper_block")
-        );
-        assert_eq!(
-            scraped("minecraft:waxed_oxidized_cut_copper").as_deref(),
-            Some("minecraft:oxidized_cut_copper")
-        );
-        assert_eq!(scraped("create:copper_tiles"), None);
-        assert_eq!(scraped("minecraft:stone"), None);
-    }
 }
