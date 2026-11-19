@@ -1,6 +1,6 @@
 # Validation
 
-Checked on 2026-11-18 (Linux x86_64, Rust 1.99.1), pinned to Sunrise
+Checked on 2026-11-19 at `bbeafd6` (Linux x86_64, Rust 1.99.1, a fresh build directory), pinned to Sunrise
 `2d8126336e579777eabf9b2fd8b3d476236a04f2` in `create/sunrise-mod.toml`.
 `cargo sunrise-mod check` uses the official release tool and signed SDK from
 `sdk-2d8126336e579777eabf9b2fd8b3d476236a04f2`, with its built-in published keys.
@@ -16,8 +16,8 @@ the "Sunrise nightly pin" row.
 |---|---|---|
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
-| `create/` | `cargo +1.99.1 test` | Pass (91 glue tests) |
-| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (774 engine tests) |
+| `create/` | `cargo +1.99.1 test` | Pass (97 glue tests) |
+| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (778 engine tests) |
 | `create/` | `cargo sunrise-mod check` | Pass (official 2d81263 SDK) |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/src/engine/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
