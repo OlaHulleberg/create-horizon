@@ -154,6 +154,16 @@ pub enum Requirement {
     Items(Vec<(String, u32)>),
 }
 
+impl Requirement {
+    /// `launchBlockOrBelt` uses the first required stack, or an empty stack.
+    pub fn first_stack(&self) -> Option<(&str, u32)> {
+        match self {
+            Self::Items(items) => items.first().map(|(item, count)| (item.as_str(), *count)),
+            Self::Empty | Self::Invalid => None,
+        }
+    }
+}
+
 /// One palette entry of a loaded schematic, resolved against the game once per load: the state
 /// it prints (`setZeroAge`) and the one it places, and what the printer asks of it.
 #[derive(Clone, Debug, PartialEq)]
@@ -542,6 +552,8 @@ pub struct Flying {
     pub belt_to: Option<[i32; 3]>,
     /// The belt's segments' casings from `target` (`ForBelt.casings`, `casing_of`'s numbers).
     pub casings: Vec<u8>,
+    /// The first required stack on a `ForBlockState` shot, by item id and count.
+    pub stack: Option<(String, u32)>,
     /// A block's block entity data (`ForBlockState.data`: `prepareBlockEntityData`'s).
     pub data: Option<crate::schematic::Nbt>,
     /// An entity (`LaunchedItem.ForEntity`).
@@ -659,10 +671,16 @@ pub trait CannonWorld {
     fn grab(&mut self, item: &str, count: u32, simulate: bool) -> bool;
     /// `LaunchedItem.place`.
     fn place(&mut self, pos: [i32; 3], state: u32);
-    /// `LaunchedItem.ForBlockState.place`: `placeSchematicBlock` with the block entity data the
-    /// cannon took (`prepareBlockEntityData`), loaded into the placed block entity.
-    fn place_data(&mut self, pos: [i32; 3], state: u32, data: Option<&crate::schematic::Nbt>) {
-        let _ = data;
+    /// `LaunchedItem.ForBlockState.place`: `placeSchematicBlock` with the launched stack and
+    /// block entity data (`prepareBlockEntityData`), loaded into the placed block entity.
+    fn place_data(
+        &mut self,
+        pos: [i32; 3],
+        state: u32,
+        stack: Option<(&str, u32)>,
+        data: Option<&crate::schematic::Nbt>,
+    ) {
+        let _ = (stack, data);
         self.place(pos, state);
     }
     /// `LaunchedItem.ForBelt.place`: a shaft at `pos`, then the belt from it to `to`, each
@@ -833,7 +851,14 @@ impl Cannon {
                 match (&f.entity, f.belt_to) {
                     (Some(e), _) => w.place_entity(e),
                     (None, Some(to)) => w.place_belt(f.target, f.state, to, &f.casings),
-                    (None, None) => w.place_data(f.target, f.state, f.data.as_ref()),
+                    (None, None) => w.place_data(
+                        f.target,
+                        f.state,
+                        f.stack
+                            .as_ref()
+                            .map(|(item, count)| (item.as_str(), *count)),
+                        f.data.as_ref(),
+                    ),
                 }
             } else {
                 i += 1;
@@ -1165,6 +1190,7 @@ impl Cannon {
                 state: 0,
                 belt_to: None,
                 casings: Vec::new(),
+                stack: None,
                 data: None,
                 entity: Some(Box::new(e.clone())),
                 total,
@@ -1180,16 +1206,23 @@ impl Cannon {
             self.blocks_placed += 1;
         }
         let (state, belt_to, casings) = l.launch(rel, target, entry);
-        let data = belt_to
-            .is_none()
-            .then(|| l.printer.block_data(rel, entry))
-            .flatten();
+        let (stack, data) = if belt_to.is_none() {
+            (
+                requirement
+                    .first_stack()
+                    .map(|(item, count)| (item.to_owned(), count)),
+                l.printer.block_data(rel, entry),
+            )
+        } else {
+            (None, None)
+        };
         let total = flight_ticks(self.pos, target);
         self.flying.push(Flying {
             target,
             state,
             belt_to,
             casings,
+            stack,
             data,
             entity: None,
             total,
@@ -1698,6 +1731,7 @@ mod tests {
         external: u32,
         items: HashMap<String, u32>,
         blocks: HashMap<[i32; 3], u32>,
+        landed_stack: Option<(String, u32)>,
         structure: Structure,
         entries: Vec<Entry>,
         loads: u32,
@@ -1764,6 +1798,16 @@ mod tests {
         fn place(&mut self, pos: [i32; 3], state: u32) {
             self.blocks.insert(pos, state);
         }
+        fn place_data(
+            &mut self,
+            pos: [i32; 3],
+            state: u32,
+            stack: Option<(&str, u32)>,
+            _data: Option<&crate::schematic::Nbt>,
+        ) {
+            self.landed_stack = stack.map(|(item, count)| (item.to_owned(), count));
+            self.place(pos, state);
+        }
         fn fired(&mut self, now: u64) {
             self.fired.push(now);
         }
@@ -1792,6 +1836,7 @@ mod tests {
             external: 0,
             items: HashMap::from([("item5".to_owned(), 64)]),
             blocks: HashMap::new(),
+            landed_stack: None,
             structure: s,
             entries: vec![entry(5, false)],
             loads: 0,
@@ -1843,6 +1888,25 @@ mod tests {
         // Woken only to shoot, to land a block and to finish: far fewer than the 96 ticks.
         assert!(ticks <= 10, "{ticks} ticks");
         assert_eq!(c.next_wake(100), None, "idle again");
+    }
+
+    #[test]
+    fn a_shot_keeps_its_first_required_stack_until_landing() {
+        let mut f = fake(1);
+        let first = ("slab_item".to_owned(), 2);
+        f.entries[0].requirement = Requirement::Items(vec![first.clone(), ("item5".to_owned(), 1)]);
+        f.items.insert(first.0.clone(), first.1);
+        let mut c = Cannon::new([0, 0, 0], Options::default());
+        c.tick(1, &mut f);
+        c.configure(2, Configure::Play);
+        c.tick(2, &mut f);
+        assert_eq!(c.flying[0].stack.as_ref(), Some(&first));
+        assert_eq!(f.items[&first.0], 0);
+        assert_eq!(f.landed_stack, None);
+        let land_at = c.flying[0].land_at;
+        c.tick(land_at, &mut f);
+        assert_eq!(f.landed_stack, Some(first));
+        assert_eq!(f.blocks.get(&[10, 0, 0]), Some(&5));
     }
 
     #[test]

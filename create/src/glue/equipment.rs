@@ -612,17 +612,21 @@ impl ItemPart for PlacedBacktank {
         else {
             return;
         };
-        let (air, capacity) = (stack_air(event.stack), capacity(event.stack));
-        let pos = event.pos;
-        with_world(|w| {
-            if let Some(b) = w.dims[dim].backtanks.get_mut(&pos) {
-                b.air = air;
-                b.capacity = capacity;
-                w.backtank_changed(dim, pos);
-                w.dims[dim].analog_checks.push(pos);
-            }
-        });
+        backtank_placed_by(dim, event.pos, event.stack);
     }
+}
+
+/// `BacktankBlock.setPlacedBy`, which also accepts a stack placed without a player.
+pub(crate) fn backtank_placed_by(dim: usize, pos: [i32; 3], stack: &ItemStack) {
+    let (air, capacity) = (stack_air(stack), capacity(stack));
+    with_world(|w| {
+        if let Some(b) = w.dims[dim].backtanks.get_mut(&pos) {
+            b.air = air;
+            b.capacity = capacity;
+            w.backtank_changed(dim, pos);
+            w.dims[dim].analog_checks.push(pos);
+        }
+    });
 }
 
 fn player_dim(host: &dyn ServerHost, player: PlayerRef) -> Option<usize> {
