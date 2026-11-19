@@ -3,10 +3,9 @@
 //! uses it: `backtank_bar`), the diving helmet's breathing, the extendo grip's reach (blocks and,
 //! as Create's client pick and `ExtendoGripInteractionPacket` give, entities as far), its +2
 //! knockback and its wear on any damage its holder deals, paid with backtank air when there is
-//! some. The grip's entity reach is the game's entity interaction range lent the distance
-//! Create picks to (the block reach, half a block less out of creative), so an entity nearer
-//! than a block behind it is picked, where Create picks entities only past a missed block (no
-//! client pick hook: `API_GAPS.md`, Client).
+//! some. The grip lends the game's entity interaction range the reach Create picks to (the
+//! block reach, half a block less out of creative). On the pick used by clicks, a block still
+//! wins over an entity hit that needed the added reach, as in Create's supplemental ray.
 //! A whole netherite diving set makes its wearer immune to fire (`NetheriteDivingHandler`), and a
 //! diving helmet sees further under water, the netherite one in lava (`getFogDensity`). The
 //! extendo grip is drawn by a special item model (`GripModel`) posed as Create's: an item model
@@ -56,8 +55,13 @@ const KEY: &str = "create_equipment";
 
 const BLOCK_RANGE: &str = "minecraft:block_interaction_range";
 const ENTITY_RANGE: &str = "minecraft:entity_interaction_range";
+/// Vanilla's entity interaction range bounds (`RangedAttribute::sanitizeValue`).
+/// The pinned SDK has no read for the registered bounds.
+const ENTITY_RANGE_BOUNDS: (f64, f64) = (0.0, 64.0);
 /// The port's entity reach for a held grip (`dontMissEntitiesWhenYouHaveHighReachDistance`).
-const ENTITY_REACH: &str = "create:extendo_entity_range";
+static ENTITY_REACH: std::sync::LazyLock<Identifier> = std::sync::LazyLock::new(|| {
+    Identifier::parse("create:extendo_entity_range").expect("valid grip reach identifier")
+});
 
 /// The extendo grip's item key, requested at registration.
 static GRIP_ITEM: std::sync::OnceLock<ItemKey> = std::sync::OnceLock::new();
@@ -901,6 +905,82 @@ fn hands(host: &dyn ServerHost, living: LivingRef) -> (Gear, Gear) {
     )
 }
 
+/// `dontMissEntitiesWhenYouHaveHighReachDistance`: keep the ordinary block hit when only the
+/// grip made the entity reachable.
+pub(crate) fn grip_pick(host: &dyn mod_api::ClientHost, event: &mut mod_api::ClientPickEvent<'_>) {
+    use mod_api::CrosshairTarget;
+
+    // Use the current eye position only for a non-interpolated pick. Inputs read the tick's
+    // pick (partial_tick = 1), not the frame highlight.
+    if event.partial_tick != 1.0
+        || *event.result != event.original
+        || event.original != event.entity_candidate
+    {
+        return;
+    }
+    let (Some(CrosshairTarget::Entity { point, .. }), Some(block @ CrosshairTarget::Block { .. })) =
+        (event.original, event.block_candidate)
+    else {
+        return;
+    };
+    let (Some(&grip), Some(player)) = (GRIP_ITEM.get(), host.local_player()) else {
+        return;
+    };
+    let entity = player.entity();
+    if host.camera_entity() != Some(entity) {
+        return;
+    }
+    let Some(living) = host.living(entity) else {
+        return;
+    };
+    if ![Hand::Main, Hand::Off].into_iter().any(|hand| {
+        living
+            .hand_item(host, hand)
+            .is_some_and(|stack| stack.item() == grip)
+    }) {
+        return;
+    }
+    let (Some(eye), Some(base), Some(modifiers)) = (
+        entity.eye_position(host),
+        living.attribute_base(host, ENTITY_RANGE),
+        living.attribute_modifiers(host, ENTITY_RANGE),
+    ) else {
+        return;
+    };
+    if entity_range_without_grip(base, &modifiers)
+        .is_some_and(|range| eq::grip_pick_preserves_block(eye, point, range))
+    {
+        *event.result = Some(block);
+    }
+}
+
+/// Re-evaluate the synced attribute with only the grip's modifier removed. Subtracting its
+/// amount from the effective value would also undo the wrong amount under a multiplier.
+fn entity_range_without_grip(base: f64, modifiers: &[AttributeModifier]) -> Option<f64> {
+    let id = &*ENTITY_REACH;
+    if !modifiers.iter().any(|m| &m.id == id) {
+        return None;
+    }
+
+    let amounts = |operation| {
+        modifiers
+            .iter()
+            .filter(move |m| m.operation == operation && &m.id != id)
+            .map(|m| m.amount)
+    };
+    let additive = amounts(AttributeOperation::AddValue).fold(base, |sum, amount| sum + amount);
+    let scaled = amounts(AttributeOperation::AddMultipliedBase)
+        .fold(additive, |sum, amount| sum + additive * amount);
+    let range = amounts(AttributeOperation::AddMultipliedTotal)
+        .fold(scaled, |value, amount| value * (1.0 + amount));
+    let (min, max) = ENTITY_RANGE_BOUNDS;
+    Some(if range.is_nan() {
+        min
+    } else {
+        range.clamp(min, max)
+    })
+}
+
 /// `holdingExtendoGripIncreasesRange`: +3 block reach with a grip in one hand, +5 with two.
 fn extendo_reach(host: &mut dyn ServerHost, player: PlayerRef) {
     let Some(living) = host.living(player.entity()) else {
@@ -952,19 +1032,18 @@ fn extendo_reach(host: &mut dyn ServerHost, player: PlayerRef) {
     } else {
         entity
     };
-    if let Ok(id) = Identifier::parse(ENTITY_REACH) {
-        let now = living
-            .attribute_modifiers(&*host, ENTITY_RANGE)
-            .and_then(|m| m.iter().find(|m| m.id == id).map(|m| m.amount));
-        if entity == 0.0 && now.is_some() {
-            living.remove_attribute_modifier(host, ENTITY_RANGE, &id);
-        } else if entity > 0.0 && now != Some(entity) {
-            if now.is_some() {
-                living.remove_attribute_modifier(host, ENTITY_RANGE, &id);
-            }
-            let m = AttributeModifier::new(id, entity, AttributeOperation::AddValue);
-            living.add_attribute_modifier(host, ENTITY_RANGE, m, ModifierLifetime::Transient);
+    let id = &*ENTITY_REACH;
+    let now = living
+        .attribute_modifiers(&*host, ENTITY_RANGE)
+        .and_then(|m| m.iter().find(|m| &m.id == id).map(|m| m.amount));
+    if entity == 0.0 && now.is_some() {
+        living.remove_attribute_modifier(host, ENTITY_RANGE, id);
+    } else if entity > 0.0 && now != Some(entity) {
+        if now.is_some() {
+            living.remove_attribute_modifier(host, ENTITY_RANGE, id);
         }
+        let m = AttributeModifier::new(id.clone(), entity, AttributeOperation::AddValue);
+        living.add_attribute_modifier(host, ENTITY_RANGE, m, ModifierLifetime::Transient);
     }
     REACH.with_borrow_mut(|r| {
         r.retain(|p| *p != uuid);
@@ -1313,6 +1392,42 @@ impl mod_api::SpecialModelRenderer for GripModel {
             .translate([0.0, -1.0 / 16.0, 0.0]);
         parts.push(cog_pose.part(&item("cog")));
         Ok(parts)
+    }
+}
+
+#[cfg(test)]
+mod grip_pick_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_entity_range_excludes_only_the_grip_and_keeps_other_modifiers() {
+        let modifier = |id, amount, operation| {
+            AttributeModifier::new(Identifier::parse(id).unwrap(), amount, operation)
+        };
+        let other = [
+            modifier("test:flat", 1.0, AttributeOperation::AddValue),
+            modifier(
+                "test:base_scale",
+                0.25,
+                AttributeOperation::AddMultipliedBase,
+            ),
+            modifier(
+                "test:total_scale",
+                0.5,
+                AttributeOperation::AddMultipliedTotal,
+            ),
+        ];
+        assert_eq!(entity_range_without_grip(3.0, &other), None);
+        let mut all = other.to_vec();
+        all.push(AttributeModifier::new(
+            ENTITY_REACH.clone(),
+            4.0,
+            AttributeOperation::AddValue,
+        ));
+        // (3 + 1) * (1 + 0.25) * (1 + 0.5).
+        assert_eq!(entity_range_without_grip(3.0, &all), Some(7.5));
+        assert_eq!(entity_range_without_grip(-10.0, &all), Some(0.0));
+        assert_eq!(entity_range_without_grip(60.0, &all), Some(64.0));
     }
 }
 

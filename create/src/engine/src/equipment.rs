@@ -268,6 +268,13 @@ pub fn extendo_reach(main: bool, off: bool) -> (bool, bool) {
     ((main ^ off) && !dual, dual)
 }
 
+/// `dontMissEntitiesWhenYouHaveHighReachDistance`: keep the block if the entity's ray hit
+/// is outside the effective reach the player would have without the grip.
+pub fn grip_pick_preserves_block(eye: [f64; 3], hit: [f64; 3], ordinary_reach: f64) -> bool {
+    let distance_squared: f64 = eye.into_iter().zip(hit).map(|(a, b)| (a - b).powi(2)).sum();
+    distance_squared > ordinary_reach.powi(2)
+}
+
 /// The first-person grip's extension (`ExtendoGripRenderHandler`).
 #[derive(Clone, Copy, Default)]
 pub struct GripSwing {
@@ -574,6 +581,16 @@ mod tests {
         // One full copper tank pays for 1000 actions: one air each.
         assert_eq!(absorb_cost(MAX_EXTENDO_GRIP_ACTIONS), 1);
         assert_eq!(absorb_cost(200), 4);
+    }
+
+    #[test]
+    fn grips_preserve_block_hits_only_beyond_ordinary_entity_reach() {
+        let eye = [10.0, 20.0, 30.0];
+        assert!(!grip_pick_preserves_block(eye, [10.0, 20.0, 32.0], 3.0));
+        assert!(!grip_pick_preserves_block(eye, [10.0, 20.0, 33.0], 3.0));
+        let hit = [13.0, 24.0, 30.0];
+        assert!(grip_pick_preserves_block(eye, hit, 3.0));
+        assert!(!grip_pick_preserves_block(eye, hit, 5.0));
     }
 
     #[test]

@@ -211,6 +211,10 @@ impl Hooks for Create {
         }
     }
 
+    fn client_pick(&self, host: &mut dyn ClientHost, event: &mut mod_api::ClientPickEvent<'_>) {
+        glue::equipment::grip_pick(host, event);
+    }
+
     fn model_baking_completed(
         &self,
         host: &mut dyn ClientHost,
