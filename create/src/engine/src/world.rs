@@ -3537,6 +3537,18 @@ impl CreateWorld {
         Some((c, b))
     }
 
+    /// `BeltBlockEntity.destroy` while the slicer sets the clicked START to air: the block
+    /// entity is still the controller, so `getInventory().ejectAll()` takes every item off the
+    /// belt and drops it where it is (against the `beltLength` the slicer has just zeroed).
+    pub fn destroy_belt(&mut self, dim: usize, belt: &mut Belt) {
+        let d = &mut self.dims[dim];
+        let controller = belt.chain[0];
+        for item in belt.items.eject_all() {
+            d.belt_drops.push((controller, belt.segment, 0, item));
+        }
+        d.belt_saved_changes.insert(controller);
+    }
+
     /// The belt segment at `pos` leaves without breaking its neighbours or dropping anything
     /// (the slicer's `UPDATE_MOVE_BY_PISTON`).
     pub fn remove_belt_quietly(&mut self, dim: usize, pos: [i32; 3]) {
@@ -3544,7 +3556,9 @@ impl CreateWorld {
     }
 
     /// The belt whose controller will be `controller` takes `items` once its chain forms; its
-    /// segments `chain` look for their chain after the tick.
+    /// segments `chain` look for their chain after the tick. An empty inventory is kept: its
+    /// direction flag is part of what `BeltBlockEntity.write` saves (`BeltSlicer` lengthening a
+    /// belt at its END keeps the controller's `BeltInventory`).
     pub fn reform_belt(
         &mut self,
         dim: usize,
@@ -3553,9 +3567,7 @@ impl CreateWorld {
         items: crate::belt::Inventory,
     ) {
         let d = &mut self.dims[dim];
-        if !items.is_empty() {
-            d.belt_saved.insert(controller, items);
-        }
+        d.belt_saved.insert(controller, items);
         d.belt_dirty.extend_from_slice(chain);
     }
 
@@ -5414,6 +5426,31 @@ mod tests {
         states::clear_range();
     }
 
+    /// Java #130: `BeltSlicer` sets the clicked START to air, which runs
+    /// `BeltBlockEntity.destroy` -> `getInventory().ejectAll()`: the items leave the belt as
+    /// entities and the transfer that follows finds an emptied inventory (f1: an iron stack of
+    /// 15 at 0.1625 is gone from the shortened 3-long belt the next tick).
+    #[test]
+    fn slicer_shorten_from_start_ejects_the_controller_inventory() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = long_belt_world(5, 32.0);
+        let c = [0, 8, 0];
+        let mut item = crate::belt::Item::new("minecraft:iron_ingot", 15, 0, false);
+        item.position = 0.16249985;
+        w.dims[0].belts.get_mut(&c).unwrap().items =
+            crate::belt::Inventory::from_saved(vec![item], false);
+        let (_, mut taken) = w.take_belt(0, c).unwrap();
+        // The slicer's `UPDATE_MOVE_BY_PISTON` write: no cascade, but `destroy` still runs.
+        w.remove_belt_quietly(0, c);
+        w.destroy_belt(0, &mut taken);
+        assert!(taken.items.items.is_empty());
+        let drops = &w.dims[0].belt_drops;
+        assert_eq!(drops.len(), 1);
+        assert_eq!((drops[0].0, drops[0].2), (c, 0));
+        assert_eq!((drops[0].3.item.as_str(), drops[0].3.count), ("minecraft:iron_ingot", 15));
+        states::clear_range();
+    }
+
     /// Java #131: the slicer detaches every segment before it changes states, and a segment whose
     /// part changed drops its controller (`clearKineticInformation`), so `propagateRotationTo`
     /// joins neither the old belt to the new half nor the two halves. f2: the second half of a
@@ -5446,6 +5483,32 @@ mod tests {
         let saved = w.dims[0].kinetics.saved_state(start_of_second, 0).unwrap();
         assert_eq!((saved.source, saved.network), (None, None));
         assert_eq!(w.dims[0].belts[&start_of_second].chain.len(), 4);
+        states::clear_range();
+    }
+
+    /// Java #132: a controller the slicer makes anew gets a fresh `BeltInventory`
+    /// (`beltMovementPositive` false, f3), while one that stays keeps its inventory and flag
+    /// even when empty (f3b: a belt lengthened at its END stays positive).
+    #[test]
+    fn slicer_new_controller_starts_with_an_empty_direction_but_keeps_an_old_one() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = long_belt_world(4, 0.0);
+        let c = [0, 8, 0];
+        w.dims[0].belts.get_mut(&c).unwrap().items =
+            crate::belt::Inventory::from_saved(Vec::new(), true);
+        let (_, mut taken) = w.take_belt(0, c).unwrap();
+        assert!(
+            w.dims[0].belt_of.get(&[0, 8, 1]).is_none(),
+            "the belt is taken apart"
+        );
+        let chain = taken.chain.clone();
+        w.reform_belt(0, c, &chain, std::mem::take(&mut taken.items));
+        w.settle_belts(0);
+        let saved = w.column_belts(0, 0, 0);
+        assert!(saved.iter().find(|(p, _)| *p == c).unwrap().1.positive);
+        // A controller made anew: `Inventory::fresh` is `new BeltInventory`, flag false.
+        let fresh = crate::belt::Inventory::fresh(Vec::new());
+        assert!(!fresh.positive);
         states::clear_range();
     }
 

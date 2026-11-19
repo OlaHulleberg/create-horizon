@@ -932,6 +932,20 @@ impl Inventory {
         }
     }
 
+    /// `new BeltInventory(be)`: the inventory a controller that has just become one gets
+    /// (`BeltSlicer` sets `inventory = null`, so `getInventory` makes a fresh one). Its
+    /// `beltMovementPositive` is false until a tick turns it, and these items are already on
+    /// the belt.
+    pub fn fresh(items: Vec<Item>) -> Inventory {
+        Inventory::from_saved(items, false)
+    }
+
+    /// `BeltInventory.ejectAll`: every transported item leaves the belt. Items still waiting to
+    /// be inserted are not among them (Java leaves them in the dropped inventory).
+    pub fn eject_all(&mut self) -> Vec<Item> {
+        std::mem::take(&mut self.items)
+    }
+
     /// What a save keeps: the items and those still waiting to go on (`write` inserts them).
     pub fn to_save(&self) -> Inventory {
         let mut copy = self.clone();
