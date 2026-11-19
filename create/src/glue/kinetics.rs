@@ -436,18 +436,13 @@ fn saved_from_nbt(data: &Compound) -> Option<SavedKineticState> {
     })
 }
 
-/// What feeds a level's solve: cranks and valves turning down, water wheels' flow, split shafts
-/// following redstone (set before solving, so the change turns the network in this tick's
-/// solve), chain drives' places and sequenced gearshifts.
+/// What feeds a level's solve: split shafts following redstone (set before solving, so the
+/// change turns the network in this tick's solve) and their scheduled re-attach, cranks and
+/// valves turning down, water wheels' flow, chain drives' places and sequenced gearshifts.
 fn tick_inputs(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
-    with_world(|w| w.tick_cranks(dim));
-    // Water wheels whose surroundings changed, and one in 60 of the others each tick.
-    let now = lv.game_time() as u64;
-    for (pos, axis, large) in with_world(|w| w.take_wheel_checks(dim, now)).unwrap_or_default() {
-        super::sources::waterwheels::determine_flow(lv, pos, axis, large);
-    }
-    // Clutches and gearshifts follow redstone (`ClutchBlock.neighborChanged`): `powered` is set
+    // Clutches and gearshifts follow redstone (`ClutchBlock.neighborChanged`): the callback
+    // runs with the block change, before any block entity of this tick. `powered` is set
     // before solving, so the change turns the network in this tick's solve.
     for pos in with_world(|w| w.take_redstone(dim)).unwrap_or_default() {
         let state = lv.block(pos);
@@ -478,6 +473,17 @@ fn tick_inputs(lv: &mut ServerLevel<'_>) {
             let signal = lv.best_neighbor_signal(pos);
             with_world(|w| w.set_chain_signal(dim, pos, signal));
         }
+    }
+    // The scheduled block ticks the detach owes (`GearshiftBlock.tick`): the level runs them
+    // before block entities tick, so the transmission re-attaches before any base tick.
+    let mut scheduled = Vec::new();
+    with_world(|w| w.reattach_scheduled_transmissions(dim, &mut scheduled));
+    apply_events(lv, scheduled);
+    with_world(|w| w.tick_cranks(dim));
+    // Water wheels whose surroundings changed, and one in 60 of the others each tick.
+    let now = lv.game_time() as u64;
+    for (pos, axis, large) in with_world(|w| w.take_wheel_checks(dim, now)).unwrap_or_default() {
+        super::sources::waterwheels::determine_flow(lv, pos, axis, large);
     }
     // Encased chain drives placed or beside a change take their place in their chain
     // (`ChainDriveBlock.updateShape`).

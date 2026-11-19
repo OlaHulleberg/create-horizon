@@ -200,9 +200,13 @@ pub struct Dimension {
     pub sequencers: HashMap<[i32; 3], crate::sequencer::Sequencer>,
     /// Sequenced gearshifts whose instruction runs: the only ones that tick.
     sequencing: Vec<[i32; 3]>,
-    /// `SequencedGearshiftBlock`'s scheduled block ticks: a neighbour change makes the block
-    /// look at its power in the next tick's block-tick phase, unless it is due this tick.
-    sequencer_checks: crate::scheduled::ScheduledTicks,
+    /// `LevelChunkTicks` for Create's blocks: a neighbour change makes a block look again in
+    /// the next tick's block-tick phase, before block entities tick. `GearshiftBlock`'s
+    /// `detachKinetics` schedules its re-attach at `TickPriority.EXTREMELY_HIGH` and
+    /// `SequencedGearshiftBlock` its power check at `NORMAL`, so the queue runs the re-attach
+    /// first. The ticks belong to the block change, not the entities: a reload that replaces
+    /// every block entity still owes them (issue #95).
+    block_ticks: crate::scheduled::ScheduledTicks,
     /// Steps sequenced gearshifts took when their speed changed, for their blocks to show.
     sequencer_steps: Vec<([i32; 3], crate::sequencer::Step)>,
     /// Depots and their held stack's motion; the stacks are in their block entities' slots.
@@ -1377,7 +1381,34 @@ impl CreateWorld {
             .block_at(dim, pos)
             .is_some_and(|b| matches!(b, Block::Clutch | Block::Gearshift))
         {
-            self.dims[dim].kinetics.detach_transmission(pos);
+            let d = &mut self.dims[dim];
+            d.kinetics.detach_transmission(pos);
+            // `worldIn.scheduleTick(pos, this, 1, TickPriority.EXTREMELY_HIGH)`.
+            d.block_ticks
+                .schedule_at(pos, crate::scheduled::TickPriority::ExtremelyHigh);
+        }
+    }
+
+    /// The level's block-tick phase for Create's transmissions: `GearshiftBlock.tick`, one
+    /// tick after `transmission_power_changing` detached the transmission. The level runs it
+    /// before any block entity ticks, so hosts owe this call at the start of the level tick,
+    /// before any base tick runs (issue #95: after a reload, the re-attach joins the
+    /// still-fresh entities to the network before the first of them initializes it). The
+    /// schedule belongs to the block change, not the entities: a reload that replaces every
+    /// block entity still owes it. The queue also holds the sequenced gearshifts' checks,
+    /// which run after these at their `NORMAL` priority (`take_sequencer_checks`).
+    pub fn reattach_scheduled_transmissions(&mut self, dim: usize, events: &mut Vec<Event>) {
+        let d = &mut self.dims[dim];
+        let due = d.block_ticks.due().to_vec();
+        for pos in due {
+            let is_transmission = d
+                .states
+                .get(&pos)
+                .and_then(|&state| self.table.get(state))
+                .is_some_and(|(block, _)| matches!(block, Block::Clutch | Block::Gearshift));
+            if is_transmission {
+                d.kinetics.reattach_transmission(pos, events);
+            }
         }
     }
 
@@ -2292,7 +2323,7 @@ impl CreateWorld {
         // Block entities tick now: the block-tick phase is over, so a block change from here on
         // schedules the sequenced gearshift's next tick (`LevelTicks.tick` clears the ticks it
         // ran and the set `willTickThisTick` reads before block entities tick).
-        self.dims[dim].sequencer_checks.phase_ended();
+        self.dims[dim].block_ticks.phase_ended();
         if std::mem::take(&mut self.dims[dim].cranks_due) {
             self.run_cranks(dim);
         }
@@ -2802,7 +2833,7 @@ impl CreateWorld {
             // `DeployerBlock.neighborChanged` → `redstoneUpdate`.
             Some(Block::Deployer) => self.dims[dim].deployer_power_checks.push(pos),
             // `SequencedGearshiftBlock.neighborChanged`: a scheduled tick, one tick later.
-            Some(Block::SequencedGearshift) => self.dims[dim].sequencer_checks.schedule(pos),
+            Some(Block::SequencedGearshift) => self.dims[dim].block_ticks.schedule(pos),
             Some(Block::WaterWheel) => self.dims[dim].wheel_checks.push(pos),
             Some(Block::LargeWaterWheel) => schedule_large_wheel(&mut self.dims[dim], pos),
             // `WaterWheelStructuralBlock.updateShape`: the cell looks at its wheel now, and
@@ -3134,11 +3165,13 @@ impl CreateWorld {
 
     /// The sequenced gearshifts whose scheduled tick is due, their block-tick phase
     /// (`SequencedGearshiftBlock.tick`), with whether each runs (its block's `state` is not 0).
+    /// Runs after `reattach_scheduled_transmissions`: the gearshifts' `EXTREMELY_HIGH` ticks
+    /// come before these `NORMAL` ones in the level's queue.
     pub fn take_sequencer_checks(&mut self, dim: usize) -> Vec<([i32; 3], bool)> {
         let d = &mut self.dims[dim];
-        d.sequencer_checks.due();
+        d.block_ticks.due();
         let mut checks = Vec::new();
-        for &pos in d.sequencer_checks.running() {
+        for &pos in d.block_ticks.running() {
             let Some(&state) = d.states.get(&pos) else {
                 continue;
             };
@@ -8940,6 +8973,84 @@ mod tests {
         let saved = w.dims[0].kinetics.saved_state(gearshift, 0).unwrap();
         assert_eq!((saved.speed, saved.needs_speed_update), (-32.0, false));
         assert_eq!(saved.source.map(|s| s.pos), Some(shaft));
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_gearshifts_scheduled_reattach_runs_before_the_sequencers_check() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            (
+                "create:gearshift",
+                vec![("axis", "x"), ("powered", "false")],
+            ),
+            ("create:gearshift", vec![("axis", "x"), ("powered", "true")]),
+            ("create:shaft", vec![("axis", "x")]),
+            ("create:creative_motor", vec![("facing", "east")]),
+            (
+                "create:sequenced_gearshift",
+                vec![("axis", "x"), ("state", "0"), ("vertical", "false")],
+            ),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let motor = [-2, 0, 0];
+        let gearshift = [0, 0, 0];
+        let output = [1, 0, 0];
+        let sequencer = [5, 0, 0];
+        w.block_changed(0, motor, 0, 13);
+        w.block_changed(0, [-1, 0, 0], 0, 12);
+        w.block_changed(0, gearshift, 0, 10);
+        w.block_changed(0, output, 0, 12);
+        w.block_changed(0, sequencer, 0, 14);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, output), Some(16.0));
+        // The gearshift powers in the block change (`GearshiftBlock.neighborChanged`): its
+        // re-attach is scheduled at EXTREMELY_HIGH, the sequenced gearshift's power check at
+        // NORMAL and the state change commits before either runs.
+        w.neighbor_changed(0, sequencer, 14);
+        w.transmission_power_changing(0, gearshift);
+        w.block_changed(0, gearshift, 10, 11);
+        assert_eq!(
+            w.speed(0, output),
+            Some(0.0),
+            "detached until its block tick"
+        );
+        assert!(
+            w.dims[0].block_ticks.running().is_empty(),
+            "nothing runs before the level's block-tick phase"
+        );
+        let mut events = Vec::new();
+        w.reattach_scheduled_transmissions(0, &mut events);
+        // The queue runs the gearshift's EXTREMELY_HIGH tick before the sequencer's NORMAL
+        // one, whichever was scheduled first.
+        assert_eq!(w.dims[0].block_ticks.running(), [gearshift, sequencer]);
+        assert_eq!(
+            w.speed(0, output),
+            Some(-16.0),
+            "the re-attach ran with the powered state"
+        );
+        // The level collects the block types' ticks once: the sequencer's check is still due
+        // after the earlier consumer read the phase.
+        assert_eq!(w.take_sequencer_checks(0), [(sequencer, false)]);
+        w.reattach_scheduled_transmissions(0, &mut events);
+        assert_eq!(
+            w.take_sequencer_checks(0),
+            [(sequencer, false)],
+            "a second read of the phase changes nothing"
+        );
+        w.tick(0, &mut Vec::new());
+        // The phase is over: a neighbour change after it is due at the next tick's phase.
+        w.neighbor_changed(0, sequencer, 14);
+        w.neighbor_changed(0, sequencer, 14);
+        assert_eq!(
+            w.take_sequencer_checks(0),
+            [(sequencer, false)],
+            "one tick per position"
+        );
         states::clear_range();
     }
 

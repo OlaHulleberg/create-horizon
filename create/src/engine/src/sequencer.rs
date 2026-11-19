@@ -589,6 +589,20 @@ mod tests {
     }
 
     #[test]
+    fn a_standstill_duration_wraps_as_java_s_int() {
+        // Instruction.getDuration is `(int) Math.ceil(target / perTick) + 2`; Java's cast of
+        // an infinite double is Integer.MAX_VALUE, so a TURN_ANGLE re-timed at 0 RPM saves
+        // -2147483647 (create-fuzz seed 1012's first gearshift: `onSpeedChanged` runs `run(-1)`
+        // on a lost speed and then re-times the old turn against 0). `-1` is not that value:
+        // it means no timed instruction, as the constructor and `run`'s end set it and AWAIT
+        // returns it.
+        let turn = Instruction::new(Kind::TurnAngle, 360);
+        assert_eq!(turn.duration(0.0, 0.0), i32::MIN + 1);
+        assert_eq!(Instruction::new(Kind::Await, 1).duration(0.0, 0.0), -1);
+        assert_eq!(Sequencer::default().saved_run().duration, -1);
+    }
+
+    #[test]
     fn a_pulse_runs_the_default_sequence_once() {
         let mut s = Sequencer {
             speed: 16.0,
