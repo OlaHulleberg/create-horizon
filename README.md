@@ -27,12 +27,12 @@ brings it to Minecraft 26.3 in Rust. It is built on the game's mod SDK (`mod_api
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/media/readme/panel-machines.webp" alt="A Create factory hall with belts, mechanical arms, presses, mixers on blaze burners and nixie tubes"></td>
-    <td width="50%"><img src="docs/media/readme/panel-trains.webp" alt="A copper-and-brass locomotive coming off a viaduct towards the camera"></td>
+    <td width="50%"><img src="docs/media/readme/panel-machines.avif" alt="A Create factory hall with belts, mechanical arms, presses, mixers on blaze burners, a chain conveyor carrying packages and a display board"></td>
+    <td width="50%"><img src="docs/media/readme/panel-trains.avif" alt="A copper-and-brass locomotive on large bogeys on a stone viaduct, a harbour crane and windmill behind"></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/media/readme/panel-kinetics.webp" alt="An eight-bladed windmill on a tall tower at sunset"></td>
-    <td width="50%"><img src="docs/media/readme/panel-world.webp" alt="Aerial view of a train on a coastal viaduct, a factory hall and a windmill"></td>
+    <td width="50%"><img src="docs/media/readme/panel-kinetics.avif" alt="An eight-bladed windmill turning on a tall tower against the sunset"></td>
+    <td width="50%"><img src="docs/media/readme/panel-world.avif" alt="Aerial view of a coastal Create works: a train leaving along the viaduct, a slewing crane, the hall, a windmill and water wheels"></td>
   </tr>
 </table>
 
