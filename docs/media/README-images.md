@@ -13,15 +13,26 @@ in a stream and an eight-bladed windmill on a tall tower. In front, a stone viad
 where a copper-and-brass locomotive on large bogeys pulls a coach and a cargo wagon (barrels,
 item vaults) between three stations.
 
+The four feature panels come from a newer scene, built on the same seed at spawn (the sand bay
+west of the forest): an open-fronted timber hall under a copper-shingle roof (three belts on the
+floor and one under the tie beams, presses and deployers on line shafts, mixers on lit blaze
+burners meshed by a cog row, millstones, mechanical crafters, large cogs on the back wall and the
+overhead shaft, a display board reading "SUNRISE WORKS / NATIVE RUST - NO JAVA"), a big gear on a
+mechanical bearing turning on the gable, a works yard with two mechanical arms, nixie tubes and a
+chain conveyor loop on four spinning poles carrying packages between two packager/frogport
+stations, a windmill on the point, three large water wheels under a flume, a brick chimney, a
+slewing harbour crane on a girder tower (geared down to 4 rpm), and the viaduct with a
+locomotive, coach and cargo wagon between the Works and Pier stations.
+
 ## Files
 
 | File | Size | Shows | Goes |
 |---|---|---|---|
 | `banner.webp` | 1600x600 | The train on the viaduct into the sunset, the factory hall and windmill; title "Create / for Sunrise & Horizon" | Top of the README, `width="100%"` |
-| `readme/panel-machines.webp` | 1200x760 | The factory hall: belts, arms, presses, mixers on blaze burners, nixie tubes, display board | Feature grid, row 1 left |
-| `readme/panel-trains.webp` | 1200x760 | The locomotive head-on, coming off the viaduct past the hall | Feature grid, row 1 right |
-| `readme/panel-kinetics.webp` | 1200x760 | The eight-bladed windmill against the sunset | Feature grid, row 2 left |
-| `readme/panel-world.webp` | 1200x760 | Aerial: the train on the viaduct, the hall, the windmill, the coast | Feature grid, row 2 right |
+| `readme/panel-machines.avif` | 1200x760, 8 s, 20 fps | Arc over the works yard into the hall: belts at two levels carrying, arms sorting onto depots, presses, deployers, mixers on lit blaze burners, a chain conveyor carrying packages between two frogports, the display board | Feature grid, row 1 left |
+| `readme/panel-trains.avif` | 1200x760, 8 s, 20 fps | Arc round the locomotive standing at the Pier station on the viaduct, the slewing crane, windmill and gable rotor turning behind | Feature grid, row 1 right |
+| `readme/panel-kinetics.avif` | 1200x760, 8 s, 20 fps | Arc round the eight-bladed windmill turning against the sunset, the sea and white cliffs below | Feature grid, row 2 left |
+| `readme/panel-world.avif` | 1200x760, 8 s, 20 fps | Aerial arc over the coast: the train leaving the Works station along the viaduct, the crane, the hall, windmill, water wheels and chimney | Feature grid, row 2 right |
 | `readme/anim-factory.webp` | 960x540, 3.5 s | The hall at work: both belts carrying, arms swinging, mixers and presses turning | "In motion" section |
 | `readme/anim-windmill.webp` | 960x540, 3 s | The windmill turning (seamless loop) | "In motion" section |
 | `readme/anim-train-arrival.webp` | 960x540, 2.6 s | The train running in over the viaduct towards the camera | "In motion" section |
@@ -39,10 +50,10 @@ item vaults) between three stations.
 | File | Alt text | Caption |
 |---|---|---|
 | `banner.webp` | Create for Sunrise: a copper locomotive on a stone viaduct at sunset beside a Create factory and windmill | — |
-| `panel-machines.webp` | A Create factory hall with belts, mechanical arms, presses, mixers on blaze burners and nixie tubes | Every machine, natively in Rust (baked in) |
-| `panel-trains.webp` | A copper-and-brass locomotive coming off a viaduct towards the camera | Trains, contraptions, logistics (baked in) |
-| `panel-kinetics.webp` | An eight-bladed windmill on a tall tower at sunset | Kinetics you can watch (baked in) |
-| `panel-world.webp` | Aerial view of a train on a coastal viaduct, a factory hall and a windmill | Your Create world, no Java (baked in) |
+| `panel-machines.avif` | A Create factory hall with belts, mechanical arms, presses, mixers on blaze burners, a chain conveyor carrying packages and a display board | Every machine, natively in Rust (baked in) |
+| `panel-trains.avif` | A copper-and-brass locomotive on large bogeys on a stone viaduct, a harbour crane and windmill behind | Trains, contraptions, logistics (baked in) |
+| `panel-kinetics.avif` | An eight-bladed windmill turning on a tall tower against the sunset | Kinetics you can watch (baked in) |
+| `panel-world.avif` | Aerial view of a coastal Create works: a train leaving along the viaduct, a slewing crane, the hall, a windmill and water wheels | Your Create world, no Java (baked in) |
 | `anim-factory.webp` | Belts, mechanical arms, mixers and presses working in a factory hall | The factory at work |
 | `anim-windmill.webp` | Windmill sails turning | Windmill bearing |
 | `anim-train-arrival.webp` | A train arriving over a viaduct | A train on its schedule |
@@ -61,11 +72,11 @@ item vaults) between three stations.
 <p align="center"><img src="docs/media/banner.webp" alt="..." width="100%"></p>
 
 <table><tr>
-<td width="50%"><img src="docs/media/readme/panel-machines.webp" alt="..."></td>
-<td width="50%"><img src="docs/media/readme/panel-trains.webp" alt="..."></td>
+<td width="50%"><img src="docs/media/readme/panel-machines.avif" alt="..."></td>
+<td width="50%"><img src="docs/media/readme/panel-trains.avif" alt="..."></td>
 </tr><tr>
-<td width="50%"><img src="docs/media/readme/panel-kinetics.webp" alt="..."></td>
-<td width="50%"><img src="docs/media/readme/panel-world.webp" alt="..."></td>
+<td width="50%"><img src="docs/media/readme/panel-kinetics.avif" alt="..."></td>
+<td width="50%"><img src="docs/media/readme/panel-world.avif" alt="..."></td>
 </tr></table>
 ```
 
@@ -91,13 +102,26 @@ the gallery 2 per row, ending with `<sub>` lines naming the Sunrise build and th
   1.35 MB each. They were captured with the game's tick rate slowed (`/tick rate 8`; windmill
   `4`), because screenshots arrive at about 6 per second. The windmill clip loops on a full
   symmetry period.
+- Feature panels: animated AVIF (SVT-AV1, CRF 24-27, preset 4, yuv420p, looping), about 1.5-2 MB
+  each. Each is a slow arc: the camera circles a fixed focus at constant distance and eye height,
+  15 degrees in all (azimuth `c - 7.5 cos(2 pi i / N)`, so it eases at both ends and returns), over
+  160 frames shown at 20 fps (8 s). The game is frozen (`/tick freeze`) and stepped one tick per
+  frame (`/tick step 1`), so machines move forward a tick between frames while only the camera
+  swings back. Captured at 2400x1220 and downscaled exactly 2x; the caption band is the old still's
+  bottom 150 px pasted onto every frame before encoding. Daylight frozen at `/time set 12100`,
+  FOV 70.
 - Golden hour is `/time set 12000`–`12200` with gamma at max, so the machines stay readable
   against the sky.
 
 ## Limits
 
-- Captures are 1910x1027, the offscreen window's real size: `--width/--height 2560x1440` were
-  ignored and the game has no render scale. Enough for the 1600-wide banner, not true 2x.
+- The older captures are 1910x1027. On the 2d81263 nightly, `--width 2400 --height 1220` with an
+  Xvfb screen larger than the window gives true 2400x1220 frames, used for the feature panels.
+- Not investigated: three times the integrated server dropped ("disconnected: End of stream",
+  no crash report, panic or error in any log) in a frozen take stepped one tick at a time: twice
+  with the train running under its schedule, once in the hall with about 60 items on belts. A
+  retake worked each time. The trains panel shows the train standing at the Pier station (a
+  running train would also jump where the 8 s loop wraps).
 - Rendering bug: a fluid tank with a 2x2 footprint draws only its top layer; the bottom layer is
   invisible although its block states are right (`bottom=true,shape=window_nw`...).
   Single-column tanks render correctly and are what the shots use; the steam engine boiler was
