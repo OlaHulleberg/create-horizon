@@ -262,28 +262,26 @@ pub(super) fn hide(lv: &mut ServerLevel<'_>, anchor: [i32; 3]) {
 }
 
 /// A bearing's structure (offsets from the bearing) turning about its axis through the
-/// bearing's middle: from `turn`'s angle now at its speed, or (a windmill with no actors) from 0
-/// at the bearing's own speed.
+/// bearing's middle: from `turn`'s angle now at its speed (`MechanicalBearingBlockEntity.angle`
+/// and `getAngularSpeed`).
 pub(super) fn show_turn(
     lv: &mut ServerLevel<'_>,
     anchor: [i32; 3],
     blocks: &[([i32; 3], u32)],
     axis: Axis,
-    turn: Option<Turn>,
+    turn: Turn,
 ) {
     let mut c = Compound::new();
     c.insert("Kind".into(), Tag::Int(TURN));
     blocks_tags(&mut c, "", lv, anchor, blocks);
     c.insert("Axis".into(), Tag::Int(axis_index(axis)));
     let now = lv.game_time();
-    c.insert("Angle".into(), float(turn.map_or(0.0, |t| t.angle_at(now))));
-    if let Some(t) = turn {
-        c.insert("Rpm".into(), float(t.rpm));
-        // What is left of a sequenced turn from now.
-        if let Some(l) = t.limit {
-            let left = (l - (t.angle_at(now) - t.angle).abs()).max(0.0);
-            c.insert("Limit".into(), float(left));
-        }
+    c.insert("Angle".into(), float(turn.angle_at(now)));
+    c.insert("Rpm".into(), float(turn.rpm));
+    // What is left of a sequenced turn from now.
+    if let Some(l) = turn.limit {
+        let left = (l - (turn.angle_at(now) - turn.angle).abs()).max(0.0);
+        c.insert("Limit".into(), float(left));
     }
     write(lv, anchor, Some(c));
 }
@@ -472,10 +470,10 @@ enum Shape {
     Turn {
         blocks: Vec<Drawn>,
         axis: [f32; 3],
-        /// The angle at `since`, and the speed from then (none: the block's own speed).
+        /// The angle at `since`, and the speed from then.
         angle: f32,
         since: f64,
-        rpm: Option<f32>,
+        rpm: f32,
         /// The degrees a sequenced turn may still go from `since`.
         limit: Option<f32>,
     },
@@ -537,7 +535,7 @@ fn parse(host: &dyn Host, c: &Compound) -> Option<Shape> {
             axis: axis_vector(int(c, "Axis")?),
             angle: get_float(c, "Angle").unwrap_or(0.0),
             since,
-            rpm: get_float(c, "Rpm"),
+            rpm: get_float(c, "Rpm").unwrap_or(0.0),
             limit: get_float(c, "Limit"),
         },
         GLIDE => Shape::Glide {
@@ -667,9 +665,6 @@ struct Shown {
     shape: Shape,
     /// Where offset 0 of a gliding structure was last drawn, in the world (for clicks).
     drawn_at: Option<[f64; 3]>,
-    /// A windmill's turn as the client runs it: its angle at a time and the speed since, so a
-    /// speed change turns on from where it is (`turn_contraption`).
-    base: Option<(f32, f64, f32)>,
     /// The axis and angle a turning structure with actors or controls was last drawn at (for
     /// clicks).
     turned: Option<(Axis, f32)>,
@@ -1141,17 +1136,6 @@ fn draw_parts(
     }
 }
 
-/// The speed the kinetic data gives the anchor's own part (slot 0).
-fn own_speed(data: &Compound) -> f32 {
-    match data.get(&"Speeds".into()) {
-        Some(Tag::List(l)) => match l.first() {
-            Some(Tag::Float(bits)) => f32::from_bits(*bits),
-            _ => 0.0,
-        },
-        _ => 0.0,
-    }
-}
-
 /// The bearing's separate top model, drawn under the same pose as its structure.
 fn draw_bearing_top(draw: &mut dyn BlockEntityDrawContext, top: Option<(Block, Model)>) {
     if let Some((block, model)) = top
@@ -1185,7 +1169,6 @@ fn submit(
                     rev,
                     shape,
                     drawn_at: None,
-                    base: None,
                     turned: None,
                     floors: Vec::new(),
                     synced: None,
@@ -1197,7 +1180,6 @@ fn submit(
     let partial = draw.partial();
     let camera = host.camera().map(|c| c.position);
     let anim = draw.animation_time();
-    let speed = own_speed(data);
     let view = actor_draw::view(data);
     SHOWN.with_borrow_mut(|s| {
         let Some(shown) = s.get_mut(&pos) else {
@@ -1213,17 +1195,6 @@ fn submit(
                 rpm,
                 limit,
             } => {
-                let (angle, since, rpm) = match rpm {
-                    Some(r) => (*angle, *since, *r),
-                    None => {
-                        let base = shown.base.get_or_insert((*angle, *since, speed));
-                        if base.2 != speed {
-                            let here = (base.0 + base.2 * 0.3 * (now - base.1) as f32) % 360.0;
-                            *base = (here, now, speed);
-                        }
-                        *base
-                    }
-                };
                 let rate = rpm * 0.3;
                 let turned = rate * (now - since) as f32;
                 // A sequenced turn is held where its limit runs out.
