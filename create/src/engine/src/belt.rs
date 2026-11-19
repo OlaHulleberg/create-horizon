@@ -838,7 +838,8 @@ pub fn item_velocity(c: &Segment, length: i32, position: f32, speed: f32) -> cra
 }
 
 /// What lies past the belt's end (`BeltInventory.Ending`), with the margin items stop short of
-/// it by.
+/// it by. `Option<Ending>` is Java's `UNRESOLVED`: the end was not looked at because the item
+/// did not reach it this tick.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ending {
     Eject,
@@ -944,6 +945,11 @@ impl Inventory {
     /// be inserted are not among them (Java leaves them in the dropped inventory).
     pub fn eject_all(&mut self) -> Vec<Item> {
         std::mem::take(&mut self.items)
+    }
+
+    /// `BeltInventory.addItem` for each: on the belt from its next tick.
+    pub fn add_all(&mut self, items: impl IntoIterator<Item = Item>) {
+        self.to_insert.extend(items);
     }
 
     /// What a save keeps: the items and those still waiting to go on (`write` inserts them).
@@ -1214,9 +1220,12 @@ impl Inventory {
                 if limited == movement {
                     return true;
                 }
-                // The end is reached.
-                match ending.unwrap_or(Ending::Eject) {
-                    Ending::Insert => {
+                // The end is reached. An unresolved ending leaves the item where the limited
+                // movement put it, as Java's `Ending.UNRESOLVED` matches none of its branches
+                // (an item already past the end slides back to it and stops there).
+                match ending {
+                    None => {}
+                    Some(Ending::Insert) => {
                         let Some(left) = world.insert(item) else {
                             return true;
                         };
@@ -1229,8 +1238,8 @@ impl Inventory {
                         }
                         item.count = left;
                     }
-                    Ending::Blocked => {}
-                    Ending::Eject => {
+                    Some(Ending::Blocked) => {}
+                    Some(Ending::Eject) => {
                         out.ejected.push(item.clone());
                         out.changed = true;
                         return false;
