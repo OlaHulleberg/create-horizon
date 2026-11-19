@@ -8,6 +8,7 @@
 //! drives the train by them. Nothing runs without a controlling player's word or a click
 //! waiting: each hook's miss is one emptiness check. Carriage seats are `riding`'s.
 
+use super::super::contraptions::controller::release_movement_mappings;
 use super::super::net;
 use super::super::server::ServerLevel;
 use super::super::states;
@@ -126,7 +127,7 @@ impl Subsystem for TrainControls {
     }
 
     fn movement_input(&self, _host: &dyn ClientHost, event: &mut MovementInputEvent) {
-        // `ControlsHandler.tick`'s `setDown(false)`: the six controls move nothing.
+        // Keep this tick's already sampled input from moving the player between clears.
         if !DRIVING.get() {
             return;
         }
@@ -262,7 +263,10 @@ fn net_from_server(host: &mut dyn ClientHost, data: &[u8]) {
         Some(ToClient::Prompt(_)) | None => Vec::new(),
     });
     send_server(host, packets);
-    DRIVING.set(DRIVER.with_borrow(|d| d.controls.is_some()));
+    let driving = DRIVER.with_borrow(|d| d.controls.is_some());
+    if !DRIVING.replace(driving) && driving {
+        release_movement_mappings(host);
+    }
 }
 
 /// A prompt as the HUD shows it (`TrainPromptPacket`'s component), with whether it has a
@@ -330,6 +334,8 @@ fn client_tick(host: &mut dyn ClientHost) {
         packets.push(ToServer::Throttle { target, steps });
     }
     if let Some(target) = DRIVER.with_borrow(|d| d.controls) {
+        // `ControlsHandler.tick`: these are train controls, not player movement.
+        release_movement_mappings(host);
         super::horn::driving_tick(host, target.train);
     }
     send_server(host, packets);
