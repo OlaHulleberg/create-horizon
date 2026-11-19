@@ -296,9 +296,7 @@ fn ours(host: &dyn ClientHost) -> bool {
 }
 
 fn tr(host: &dyn ClientHost, key: &str) -> String {
-    host.translate(key)
-        .or_else(|| create_engine::display::en_us(key).map(str::to_owned))
-        .unwrap_or_else(|| key.to_owned())
+    host.translate(key).unwrap_or_else(|| key.to_owned())
 }
 
 /// `AllGuiTextures.DATA_GATHERER`: the window's size.

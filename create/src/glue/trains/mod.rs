@@ -94,21 +94,23 @@ use mod_api::{BlockState, Host, HostBlockStates, PlayerRef, ServerHost, Text};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-/// `TrainStatusDisplaySource`: the schedule status of the train at the station at `pos`, in
-/// Create's en_us (None: `EMPTY_LINE`).
+/// `TrainStatusDisplaySource`: the schedule status of the train at the station at `pos`
+/// (None: `EMPTY_LINE`).
 pub(crate) fn waiting_status(lv: &super::server::ServerLevel<'_>, pos: [i32; 3]) -> Option<String> {
     let dim = lv.dim;
     let id = assembly::present_train(dim, pos)?;
     let day_time = lv.level.day_time(&*lv.host).unwrap_or(0);
     super::world::with_world(|w| {
         let t = w.dims[dim].railway.trains.iter().find(|t| t.id == id)?;
-        create_engine::display::train_status(
-            t.schedule.as_ref(),
-            &t.runtime,
-            t.players,
-            day_time,
-            &create_engine::display::Lang::EN_US,
-        )
+        super::display::with_language(&*lv.host, |lang| {
+            create_engine::display::train_status(
+                t.schedule.as_ref(),
+                &t.runtime,
+                t.players,
+                day_time,
+                lang,
+            )
+        })
     })
     .flatten()
 }
@@ -124,9 +126,9 @@ pub(crate) fn observed_train_name(
         let r = &w.dims[dim].railway;
         let id = r.observers.get(&pos)?.train?;
         let t = r.trains.iter().find(|t| t.id == id)?;
-        // `Train.name`: an unnamed train is `train.unnamed`, in en_us.
+        // `Train.name`: an unnamed train is `train.unnamed`.
         Some(if t.name.is_empty() {
-            "Unnamed Train".to_owned()
+            super::display::with_language(&*lv.host, |lang| lang.get("create.train.unnamed"))
         } else {
             t.name.clone()
         })
