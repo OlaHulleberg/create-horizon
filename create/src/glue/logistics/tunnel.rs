@@ -60,7 +60,16 @@ pub fn has_distribution(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
         return false;
     };
     let f = flaps(lv, pos, axis, shape);
-    !f.is_empty() && (brass_connected(lv, pos) || f.iter().any(|d| d.axis() != axis))
+    let dim = lv.dim;
+    let connected = with_world(|w| {
+        w.dims[dim]
+            .brass
+            .get(&pos)
+            .is_some_and(|b| b.connected_left || b.connected_right)
+    })
+    .unwrap_or(false)
+        || brass_connected(lv, pos);
+    !f.is_empty() && (connected || f.iter().any(|d| d.axis() != axis))
 }
 
 /// `BrassTunnelBlockEntity.canInsert`: whether an item entering from `side` is accepted by the
@@ -195,14 +204,7 @@ pub fn grab_stacks(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: u128) -> boo
 /// `BrassTunnelBlockEntity.getAdjacent`: the brass tunnel of the same axis beside the one at
 /// `pos` across its axis (`left`: counterclockwise from the axis' positive way).
 fn brass_adjacent(lv: &ServerLevel<'_>, pos: [i32; 3], axis: Axis, left: bool) -> Option<[i32; 3]> {
-    let side = match (axis, left) {
-        (Axis::X, true) => Dir::North,
-        (Axis::X, false) => Dir::South,
-        (_, true) => Dir::East,
-        (_, false) => Dir::West,
-    };
-    let o = side.offset();
-    let next = [pos[0] + o[0], pos[1], pos[2] + o[2]];
+    let next = tunnel::adjacent_pos(pos, axis, left);
     (brass_axis(lv, next) == Some(axis)).then_some(next)
 }
 
@@ -248,13 +250,13 @@ pub fn tick_tunnels(lv: &mut ServerLevel<'_>) {
         let facts = lv.host.block_states();
         state.property(&facts, "casing").ok().flatten() == Some("true")
     };
-    for pos in new {
-        if tunnel_state(lv, pos).is_none() {
+    for pos in &new {
+        if tunnel_state(lv, *pos).is_none() {
             continue;
         }
-        if belt_below(lv, pos).is_some_and(|s| s.slope == Slope::Horizontal) && !cased(lv, pos) {
+        if belt_below(lv, *pos).is_some_and(|s| s.slope == Slope::Horizontal) && !cased(lv, *pos) {
             // `BeltTunnelItem`: the tunnel's own kind of casing.
-            let brass = super::info_at(lv, pos).is_some_and(|(b, _)| b == Block::BrassTunnel);
+            let brass = super::info_at(lv, *pos).is_some_and(|(b, _)| b == Block::BrassTunnel);
             let kind = if brass { "brass" } else { "andesite" };
             super::belt::set_casing(lv, [pos[0], pos[1] - 1, pos[2]], Some(kind));
         }
@@ -267,6 +269,7 @@ pub fn tick_tunnels(lv: &mut ServerLevel<'_>) {
     // A fresh look wins over a kept one for the same tunnel.
     checks.sort_by_key(|c| (c.0, !c.1));
     checks.dedup_by_key(|c| c.0);
+    let check_positions: Vec<[i32; 3]> = checks.iter().map(|c| c.0).collect();
     for (pos, at_once) in checks {
         let Some(now) = tunnel_state(lv, pos) else {
             continue;
@@ -330,6 +333,58 @@ pub fn tick_tunnels(lv: &mut ServerLevel<'_>) {
             lv.set_state(pos, next, update_all());
         }
     }
+    // `BrassTunnelBlockEntity.updateTunnelConnections`: newly placed tunnels run before neighbour
+    // shape updates (matching `onPlace` before `updateShape`), so a joining tunnel takes the
+    // group's mode.
+    let mut conn_checks = new;
+    for p in check_positions {
+        if !conn_checks.contains(&p) {
+            conn_checks.push(p);
+        }
+    }
+    let brass_info = collect_brass_info(lv, &conn_checks);
+    if !brass_info.is_empty() {
+        with_world(|w| {
+            let d = &mut w.dims[dim];
+            let mut changed = Vec::new();
+            for p in conn_checks {
+                tunnel::update_connections(
+                    p,
+                    &mut d.brass,
+                    &|q| brass_info.get(&q).copied(),
+                    &mut changed,
+                );
+            }
+            for p in changed {
+                w.mark_unsaved(dim, p);
+            }
+        });
+    }
+}
+
+/// Collects `(axis, has_flaps)` for every brass tunnel reachable from `roots` across its axis.
+fn collect_brass_info(
+    lv: &ServerLevel<'_>,
+    roots: &[[i32; 3]],
+) -> std::collections::HashMap<[i32; 3], (Axis, bool)> {
+    let mut brass_info = std::collections::HashMap::new();
+    let mut stack = roots.to_vec();
+    while let Some(p) = stack.pop() {
+        if brass_info.contains_key(&p) {
+            continue;
+        }
+        let Some(axis) = brass_axis(lv, p) else {
+            continue;
+        };
+        let Some((_, shape)) = tunnel_state(lv, p) else {
+            continue;
+        };
+        brass_info.insert(p, (axis, has_flaps(lv, p, axis, shape)));
+        for left in [true, false] {
+            stack.push(tunnel::adjacent_pos(p, axis, left));
+        }
+    }
+    brass_info
 }
 
 /// A player's click on a brass tunnel's side filter slot (`SidedFilteringBehaviour` through
@@ -413,17 +468,19 @@ pub fn show_tunnel_filters(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 /// `selectionMode.withCallback`: the brass tunnel at `pos` and those connected with it take
 /// mode `mode`.
 pub fn set_brass_mode(lv: &ServerLevel<'_>, pos: [i32; 3], mode: tunnel::Mode) {
-    let group = match tunnel_state(lv, pos) {
-        Some((axis, _)) if brass_connected(lv, pos) => brass_group(lv, pos, axis),
-        _ => vec![pos],
-    };
+    let brass_info = collect_brass_info(lv, &[pos]);
     let dim = lv.dim;
     with_world(|w| {
-        for p in group {
-            if let Some(b) = w.dims[dim].brass.get_mut(&p) {
-                b.mode = mode;
-                w.mark_unsaved(dim, p);
-            }
+        let mut changed = Vec::new();
+        tunnel::set_group_mode(
+            pos,
+            mode,
+            &mut w.dims[dim].brass,
+            &|q| brass_info.get(&q).copied(),
+            &mut changed,
+        );
+        for p in changed {
+            w.mark_unsaved(dim, p);
         }
     });
 }

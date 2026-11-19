@@ -223,6 +223,9 @@ pub struct Brass {
     pub stack_progress: Option<crate::sequenced::Progress>,
     /// `syncedOutputActive`: a synchronizing group of tunnels all hold a stack and hand it out.
     pub synced: bool,
+    /// `connectedLeft` / `connectedRight`: connected to an adjacent brass tunnel across its axis.
+    pub connected_left: bool,
+    pub connected_right: bool,
 }
 
 impl Default for Brass {
@@ -236,6 +239,8 @@ impl Default for Brass {
             mode: Mode::Split,
             stack_progress: None,
             synced: false,
+            connected_left: false,
+            connected_right: false,
         }
     }
 }
@@ -251,6 +256,97 @@ impl Brass {
     /// synchronized group.
     pub fn can_take(&self) -> bool {
         self.stack.is_none() && !self.synced
+    }
+}
+
+/// `BrassTunnelBlockEntity.getAdjacent`: the adjacent position across `axis` (`left` is
+/// counter-clockwise from the axis' positive direction).
+pub fn adjacent_pos(pos: [i32; 3], axis: Axis, left: bool) -> [i32; 3] {
+    let side = match (axis, left) {
+        (Axis::X, true) => Dir::North,
+        (Axis::X, false) => Dir::South,
+        (_, true) => Dir::East,
+        (_, false) => Dir::West,
+    };
+    let o = side.offset();
+    [pos[0] + o[0], pos[1], pos[2] + o[2]]
+}
+
+/// `BrassTunnelBlockEntity`'s `selectionMode.withCallback`: propagates `mode` across connected
+/// brass tunnels. Records every tunnel whose mode changed.
+pub fn set_group_mode(
+    pos: [i32; 3],
+    mode: Mode,
+    tunnels: &mut std::collections::HashMap<[i32; 3], Brass>,
+    info: &impl Fn([i32; 3]) -> Option<(Axis, bool)>,
+    changed: &mut Vec<[i32; 3]>,
+) {
+    let Some(b) = tunnels.get_mut(&pos) else {
+        return;
+    };
+    if b.mode == mode {
+        return;
+    }
+    b.mode = mode;
+    changed.push(pos);
+    let (left, right) = (b.connected_left, b.connected_right);
+    let Some((axis, _)) = info(pos) else {
+        return;
+    };
+    for (is_left, connected) in [(true, left), (false, right)] {
+        if !connected {
+            continue;
+        }
+        let adj = adjacent_pos(pos, axis, is_left);
+        if info(adj).is_some_and(|(ax, _)| ax == axis) {
+            set_group_mode(adj, mode, tunnels, info, changed);
+        }
+    }
+}
+
+/// `BrassTunnelBlockEntity.updateTunnelConnections`: updates `connected_left`/`connected_right`
+/// from `info` (`Some((axis, has_flaps))` for brass tunnels), notifies newly connected or
+/// disconnected neighbours, and hands this tunnel's mode onto them (so a tunnel joining an
+/// existing group takes the group's mode when the neighbour updates back).
+pub fn update_connections(
+    pos: [i32; 3],
+    tunnels: &mut std::collections::HashMap<[i32; 3], Brass>,
+    info: &impl Fn([i32; 3]) -> Option<(Axis, bool)>,
+    changed: &mut Vec<[i32; 3]>,
+) {
+    let Some((axis, has_flaps)) = info(pos) else {
+        return;
+    };
+    for is_left in [true, false] {
+        let now_connected = has_flaps && {
+            let adj = adjacent_pos(pos, axis, is_left);
+            info(adj).is_some_and(|(ax, adj_flaps)| ax == axis && adj_flaps)
+        };
+        let was_connected = tunnels.get(&pos).map(|b| {
+            if is_left {
+                b.connected_left
+            } else {
+                b.connected_right
+            }
+        });
+        if was_connected == Some(now_connected) {
+            continue;
+        }
+        if let Some(b) = tunnels.get_mut(&pos) {
+            if is_left {
+                b.connected_left = now_connected;
+            } else {
+                b.connected_right = now_connected;
+            }
+            changed.push(pos);
+        }
+        let adj = adjacent_pos(pos, axis, is_left);
+        if info(adj).is_some_and(|(ax, _)| ax == axis) {
+            update_connections(adj, tunnels, info, changed);
+            if let Some(mode) = tunnels.get(&pos).map(|b| b.mode) {
+                set_group_mode(adj, mode, tunnels, info, changed);
+            }
+        }
     }
 }
 
@@ -530,5 +626,38 @@ mod tests {
         assert!(
             b.contains(&[2., 10., 14., 14., 16., 16.]) && b.contains(&[2., -5., 0., 14., 16., 2.])
         );
+    }
+
+    #[test]
+    fn tunnel_joining_connected_group_takes_groups_mode() {
+        // Observed in t3-brass-mode-on-join: a tunnel at [0, 9, 2] on a Z-axis belt is set to
+        // RoundRobin, then a second tunnel at [1, 9, 2] is placed beside it; updating connections
+        // from the new tunnel connects both and gives [1, 9, 2] the group's RoundRobin mode.
+        let mut tunnels = std::collections::HashMap::new();
+        let a = [0, 9, 2];
+        let b = [1, 9, 2];
+        tunnels.insert(
+            a,
+            Brass {
+                mode: Mode::RoundRobin,
+                ..Default::default()
+            },
+        );
+        tunnels.insert(b, Brass::default());
+        let info = |p: [i32; 3]| (p == a || p == b).then_some((Axis::Z, true));
+        let mut changed = Vec::new();
+        update_connections(b, &mut tunnels, &info, &mut changed);
+        assert!(tunnels[&a].connected_left);
+        assert!(!tunnels[&a].connected_right);
+        assert!(!tunnels[&b].connected_left);
+        assert!(tunnels[&b].connected_right);
+        assert_eq!(tunnels[&a].mode, Mode::RoundRobin);
+        assert_eq!(tunnels[&b].mode, Mode::RoundRobin);
+
+        // Changing the mode on one updates the connected group.
+        changed.clear();
+        set_group_mode(b, Mode::Synchronize, &mut tunnels, &info, &mut changed);
+        assert_eq!(tunnels[&a].mode, Mode::Synchronize);
+        assert_eq!(tunnels[&b].mode, Mode::Synchronize);
     }
 }
