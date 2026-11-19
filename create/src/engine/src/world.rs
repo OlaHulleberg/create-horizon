@@ -2234,9 +2234,14 @@ impl CreateWorld {
             d.sliding.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
         }
         d.block_entities.unload(cx, cz);
-        // Settings are the block entity's own fields (a motor's speed, a wheel's flow, a powered
-        // shaft's engine), which Create writes with the block entity and reads back when its
-        // column loads. The glue restores those it saves; the rest stay as they were.
+        // Each block entity's settings are the entity's own fields, which Create writes with
+        // its data and reads back with it (`KineticBlockEntity.write`/`read`): a motor's speed,
+        // a wheel's flow score, a powered shaft's engine, a crank's use. Nothing of them is
+        // kept for an unloaded column; the glue restores them from that saved data when the
+        // column loads again.
+        d.settings.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+        // Scheduled block ticks stay: the game saves them with the chunk and runs them after
+        // it loads again (`LevelChunkTicks`), as the port's pending lists do.
     }
 
     /// A block entity setting that changes a part (a motor's speed), then re-places the block.
@@ -7614,7 +7619,8 @@ mod tests {
         w.dims[0].kinetics = crate::kinetics::Kinetics::new();
         w.block_loaded(0, wheel, 10);
         assert!(w.dims[0].kinetics.restore_state(wheel, 0, saved));
-        w.set_wheel_flow(0, wheel, i32::from(flow));
+        // `read` puts the saved score in the entity's field; it is not a runtime change.
+        w.restore_wheel_flow(0, wheel, i32::from(flow));
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, wheel), Some(-8.0));
         let reloaded = w.dims[0].kinetics.saved_state(wheel, 0).unwrap();
@@ -7685,6 +7691,7 @@ mod tests {
         let boiler = w.column_boilers(0, 0, 0)[0].1;
         assert_eq!(boiler.water_supply, 10.0);
         let tanks = w.column_tanks(0, 0, 0);
+        let engine_data = [(shaft, w.shaft_steam(0, shaft))];
         w.column_unloaded(0, 0, 0);
         w.dims[0].kinetics = crate::kinetics::Kinetics::new();
         w.load_tanks(0, tanks.into_iter());
@@ -7695,6 +7702,10 @@ mod tests {
         w.block_loaded(0, engine, 11);
         w.block_loaded(0, shaft, 13);
         assert!(w.dims[0].kinetics.restore_state(shaft, 0, saved));
+        // `PoweredShaftBlockEntity.read`: the engine comes back with its power and direction.
+        for (p, out) in engine_data {
+            w.restore_shaft_steam(0, p, out);
+        }
         w.evaluate_boilers(0);
         assert_eq!(w.take_heat_checks(0), vec![(c, 2)]);
         w.set_boiler_heat(0, c, &[1, 1, 1, 1]);
@@ -7706,6 +7717,68 @@ mod tests {
         );
         let reloaded = w.dims[0].kinetics.saved_state(shaft, 0).unwrap();
         assert_eq!(reloaded.network.map(|n| n.size), Some(1));
+        states::clear_range();
+    }
+
+    #[test]
+    fn no_block_entity_setting_outlives_its_unloaded_column() {
+        // Create keeps a motor's speed, a wheel's flow score and a powered shaft's engine in
+        // the block entity (`KineticBlockEntity.write`/`read`): none of them stays in the level
+        // once the column unloads, and each comes back only from that saved data.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:creative_motor", vec![("facing", "east")]),
+            ("create:water_wheel", vec![("facing", "east")]),
+            ("create:powered_shaft", vec![("axis", "x")]),
+            (
+                "create:adjustable_chain_gearshift",
+                vec![("axis", "x"), ("powered", "false")],
+            ),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (motor, wheel, shaft, shift) = ([0, 8, 0], [3, 8, 0], [6, 8, 0], [9, 8, 0]);
+        w.block_changed(0, motor, 0, 10);
+        w.block_changed(0, wheel, 0, 11);
+        w.block_changed(0, shaft, 0, 12);
+        w.block_changed(0, shift, 0, 13);
+        w.board_motor(0, motor, crate::board::Settings { row: 1, value: 32 });
+        w.set_wheel_flow(0, wheel, -1);
+        w.set_chain_signal(0, shift, 11);
+        let engine = crate::steam::Output {
+            direction: -1,
+            efficiency: 1.0,
+        };
+        w.restore_shaft_steam(0, shaft, engine);
+        // What each block entity writes with its column or its own data.
+        let motors = w.column_settings(0, 0, 0);
+        let flow = w.wheel_flow(0, wheel);
+        let engines = [(shaft, w.shaft_steam(0, shaft))];
+        let signal = w.saved_chain_signal(0, shift);
+        assert_eq!(motors, vec![(motor, 32)]);
+        assert_eq!(flow, Some(-1));
+        assert_eq!(engines.as_slice(), [(shaft, engine)]);
+        assert_eq!(signal, Some(11));
+        w.column_unloaded(0, 0, 0);
+        assert!(
+            w.dims[0].settings.is_empty(),
+            "a block entity's fields do not stay behind when its column unloads"
+        );
+        // They come back with the saved data and the blocks.
+        w.load_settings(0, motors.into_iter());
+        for (p, s) in [(motor, 10), (wheel, 11), (shaft, 12), (shift, 13)] {
+            w.block_loaded(0, p, s);
+        }
+        w.restore_wheel_flow(0, wheel, i32::from(flow.unwrap()));
+        w.restore_shaft_steam(0, shaft, engine);
+        w.restore_chain_signal(0, shift, signal.unwrap());
+        assert_eq!(w.motor_setting(0, motor), Some(32.0));
+        assert_eq!(w.wheel_flow(0, wheel), Some(-1));
+        assert_eq!(w.shaft_steam(0, shaft), engine);
+        assert_eq!(w.saved_chain_signal(0, shift), signal);
         states::clear_range();
     }
 
