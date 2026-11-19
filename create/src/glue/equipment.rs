@@ -910,12 +910,7 @@ fn hands(host: &dyn ServerHost, living: LivingRef) -> (Gear, Gear) {
 pub(crate) fn grip_pick(host: &dyn mod_api::ClientHost, event: &mut mod_api::ClientPickEvent<'_>) {
     use mod_api::CrosshairTarget;
 
-    // Use the current eye position only for a non-interpolated pick. Inputs read the tick's
-    // pick (partial_tick = 1), not the frame highlight.
-    if event.partial_tick != 1.0
-        || *event.result != event.original
-        || event.original != event.entity_candidate
-    {
+    if *event.result != event.original || event.original != event.entity_candidate {
         return;
     }
     let (Some(CrosshairTarget::Entity { point, .. }), Some(block @ CrosshairTarget::Block { .. })) =
@@ -940,15 +935,14 @@ pub(crate) fn grip_pick(host: &dyn mod_api::ClientHost, event: &mut mod_api::Cli
     }) {
         return;
     }
-    let (Some(eye), Some(base), Some(modifiers)) = (
-        entity.eye_position(host),
+    let (Some(base), Some(modifiers)) = (
         living.attribute_base(host, ENTITY_RANGE),
         living.attribute_modifiers(host, ENTITY_RANGE),
     ) else {
         return;
     };
     if entity_range_without_grip(base, &modifiers)
-        .is_some_and(|range| eq::grip_pick_preserves_block(eye, point, range))
+        .is_some_and(|range| eq::grip_pick_preserves_block(event.origin, point, range))
     {
         *event.result = Some(block);
     }
