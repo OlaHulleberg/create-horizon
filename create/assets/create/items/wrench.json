@@ -1,0 +1,9 @@
+{
+  "model": {
+    "type": "minecraft:special",
+    "base": "create:item/wrench/item",
+    "model": {
+      "type": "create:wrench"
+    }
+  }
+}
