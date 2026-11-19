@@ -215,10 +215,8 @@ pub fn crusher_put(lv: &mut ServerLevel<'_>, pos: [i32; 3], item: &str, count: u
 /// `CrushingWheelControllerBlockEntity.CRUSHER_DAMAGE` (`crushingDamage`, 4 by default).
 const CRUSHING_DAMAGE: f32 = 4.0;
 
-/// The damage the wheels deal. Create's own `create:crush` (through armour, `bypasses_armor`)
-/// is not among the world's damage types: a native mod's `data/<ns>/damage_type` files are not
-/// read (API_GAPS.md), so vanilla's cramming, which also goes through armour, stands in.
-const CRUSH: &str = "minecraft:cramming";
+/// The damage the wheels deal: Create's own `create:crush`.
+const CRUSH: &str = "create:crush";
 
 /// `CrushingWheelControllerBlock.checkEntityForProcessing` for what is not an item: the first
 /// living entity in the controller's cell, but a creative player or any player on peaceful.
