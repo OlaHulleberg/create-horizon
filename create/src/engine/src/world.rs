@@ -1578,13 +1578,6 @@ impl CreateWorld {
                 .get(s)
                 .is_some_and(|(b, _)| b == Block::FluidTank)
         };
-        // `ShaftBlock.pickCorrectShaftType`: a shaft placed in front of a steam engine is its
-        // powered shaft (the swap `shaft_changes` makes; a placement can't answer another block).
-        if self.table.get(new).is_some_and(|(b, _)| b == Block::Shaft)
-            && self.table.get(old).map(|(b, _)| b) != Some(Block::Shaft)
-        {
-            self.dims[dim].engine_shafts.push(pos);
-        }
         let (was_tank, is_tank) = (tank(old), tank(new));
         if was_tank != is_tank {
             if is_tank {
@@ -7117,6 +7110,31 @@ mod tests {
              are not changes"
         );
         assert!(w.dims[0].kinetics.is_empty(), "a door is no kinetic block");
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_direct_shaft_write_does_not_run_placement_selection() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names = [
+            (
+                "create:steam_engine",
+                vec![("face", "wall"), ("facing", "south")],
+            ),
+            ("create:shaft", vec![("axis", "x")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let engine = [0, 64, 0];
+        let shaft = [0, 64, 2];
+        w.block_changed(0, engine, 0, 10);
+        assert!(w.shaft_changes(0).is_empty());
+        w.block_changed(0, shaft, 0, 11);
+        assert!(w.shaft_changes(0).is_empty());
+        assert_eq!(w.state_at(0, shaft), Some(11));
         states::clear_range();
     }
 

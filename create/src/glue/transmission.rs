@@ -342,6 +342,15 @@ fn place_helped(
     at: [i32; 3],
     axis: Axis,
 ) -> InteractionResult {
+    // The pole helper transforms the shaft before writing the placement state.
+    let block = if block == Block::Shaft {
+        with_world(|w| {
+            create_engine::steam::shaft_for_placement(at, axis, |p| w.engine_at(lv.dim, p))
+        })
+        .unwrap_or(block)
+    } else {
+        block
+    };
     let water = lv
         .block_state(at)
         .and_then(|s| lv.host.block_state_string(s))

@@ -226,7 +226,24 @@ impl BlockPart for Placement {
         } else {
             default
         };
-        placed_state(block, default, water, pos, ctx, &set, &neighbours)
+        let placement = placed_state(block, default, water, pos, ctx, &set, &neighbours);
+        if let (Block::Shaft, Some(Some(shaft))) = (block, placement)
+            && let Some((_, info)) = states::level_info(level, shaft)
+            && let Some(axis) = info.axis
+            && create_engine::steam::shaft_for_placement(pos, axis, |p| {
+                let (block, info) = info_at(p)?;
+                (block == Block::SteamEngine).then_some(())?;
+                Some(create_engine::steam::connected_direction(
+                    info.face?,
+                    info.facing?,
+                ))
+            }) == Block::PoweredShaft
+            && let Some(powered) = level.block_state_default(states::key(Block::PoweredShaft))
+        {
+            let powered = set(powered, "axis", axis_name(axis));
+            return Some(Some(set(powered, "waterlogged", flag(info.waterlogged))));
+        }
+        placement
     }
 }
 
