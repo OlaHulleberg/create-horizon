@@ -26,11 +26,11 @@
 //! (`prepareBlockEntityData`: blocks tagged `create:safe_nbt`, such as signs, banners, placards
 //! and links, and copycats; not a chest's items), merged into the placed block entity.
 //!
-//! Left out, for want of API:
-//! - Past `maxSchematics` uploads, the player's oldest is not deleted
-//!   (`tryDeleteOldestSchematic`): a mod's data files can be written but not removed.
-//! - A schematic palette state's `isRedstoneConductor` (not yet in the world) is read as a full
-//!   collision cube: the host answers conduction only for a placed cell.
+//! Table and instant uploads keep the player's latest schematics in the mod's game data folder
+//! (`ServerSchematicLoader`, `maxSchematics`).
+//!
+//! Left out, for want of API: a schematic palette state's `isRedstoneConductor` (not yet in the
+//! world) is read as a full collision cube: the host answers conduction only for a placed cell.
 
 pub mod body;
 mod deploy;
@@ -2006,8 +2006,8 @@ fn save(
     let size = body::size(&*lv.host, &file).unwrap_or(0);
     match (uploaded(name, &file), holding) {
         (Some(target), Some((slot, _))) if sch::size_allowed(size) => {
-            match body::write_structure(&*lv.host, &target, &tag) {
-                Ok(_) => {
+            match body::upload(&*lv.host, &file, &target) {
+                Ok(()) => {
                     let Some(mut stack) = packages::body::new_stack(&*lv.host, SCHEMATIC, 1) else {
                         return lines;
                     };
@@ -2073,7 +2073,7 @@ fn upload(lv: &mut ServerLevel<'_>, player: &str, pos: [i32; 3], file: &str) -> 
     if !sch::size_allowed(size) {
         return vec![too_large(size)];
     }
-    if let Err(e) = body::copy(host, file, &target) {
+    if let Err(e) = body::upload(host, file, &target) {
         crate::create_log!("[create] Exception Thrown when starting Upload: {player}/{file}: {e}");
         return vec![format!("upload of {file} failed")];
     }
