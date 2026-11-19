@@ -394,7 +394,14 @@ impl Subsystem for Schematics {
     }
 
     /// A cannon placed or gone.
-    fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+    fn block_changed(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+        old: u32,
+        new: u32,
+        _: mod_api::BlockUpdateFlags,
+    ) {
         let (was, is) = (
             block_of(old) == Some(Block::Schematicannon),
             block_of(new) == Some(Block::Schematicannon),

@@ -218,7 +218,14 @@ impl Subsystem for Processing {
 
     /// A toolbox's block replaced by anything but a toolbox (`ToolboxBlock.onRemove` removing
     /// its block entity): its compartment kinds and id go with it.
-    fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+    fn block_changed(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+        old: u32,
+        new: u32,
+        _: mod_api::BlockUpdateFlags,
+    ) {
         let toolbox =
             |s: u32| super::packages::block_of(s).is_some_and(create_engine::dye::is_toolbox);
         if toolbox(old) && !toolbox(new) {

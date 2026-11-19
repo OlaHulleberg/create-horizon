@@ -42,7 +42,15 @@ pub trait Subsystem: Sync {
     /// A committed block change in level `dim`, in engine ids (0 for any block not Create's).
     /// At least one of `old` and `new` is Create's. Runs inside the write: change the world from
     /// the level tick, not here.
-    fn block_changed(&self, _dim: usize, _pos: [i32; 3], _old: u32, _new: u32) {}
+    fn block_changed(
+        &self,
+        _dim: usize,
+        _pos: [i32; 3],
+        _old: u32,
+        _new: u32,
+        _: mod_api::BlockUpdateFlags,
+    ) {
+    }
 
     /// A neighbour of the Create block `state` at `pos` changed. Inside the write, as above.
     fn neighbor_changed(&self, _dim: usize, _pos: [i32; 3], _state: u32) {}

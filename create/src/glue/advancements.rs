@@ -929,7 +929,14 @@ impl Subsystem for Owners {
 
     /// A placed block takes its placer; a block replaced by another (its block entity gone)
     /// forgets its owner.
-    fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+    fn block_changed(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+        old: u32,
+        new: u32,
+        _: mod_api::BlockUpdateFlags,
+    ) {
         let placed = PENDING.with_borrow_mut(|p| {
             let i = p.iter().position(|e| e.0 == dim && e.1 == pos)?;
             Some(p.swap_remove(i).2)

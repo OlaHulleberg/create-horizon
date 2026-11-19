@@ -257,7 +257,14 @@ impl Subsystem for Redstone {
         carried::carry_in(lv, pos, block, data);
     }
 
-    fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+    fn block_changed(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+        old: u32,
+        new: u32,
+        _: mod_api::BlockUpdateFlags,
+    ) {
         let block = |s: u32| info(s).map(|(b, _)| b);
         if old == 0 || new == 0 || block(old) != block(new) {
             analog::block_changed(dim, pos);

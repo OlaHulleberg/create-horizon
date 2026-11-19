@@ -378,7 +378,14 @@ impl Subsystem for Packages {
     }
 
     /// Ours placed or gone are handled at the level's tick.
-    fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+    fn block_changed(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+        old: u32,
+        new: u32,
+        _: mod_api::BlockUpdateFlags,
+    ) {
         let (o, n) = (
             block_of(old).filter(|b| ours(*b)),
             block_of(new).filter(|b| ours(*b)),

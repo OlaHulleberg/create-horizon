@@ -244,7 +244,14 @@ impl Subsystem for Copycats {
     }
 
     /// One state lookup for each Create block changed.
-    fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+    fn block_changed(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+        old: u32,
+        new: u32,
+        _: mod_api::BlockUpdateFlags,
+    ) {
         if is_copycat_id(old) || is_copycat_id(new) {
             with(dim, |d| d.changes.push((pos, old, new)));
         }

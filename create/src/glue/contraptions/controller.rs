@@ -251,7 +251,14 @@ impl Subsystem for Controller {
     }
 
     /// A committed change on the server: a lectern controller placed or removed.
-    fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+    fn block_changed(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+        old: u32,
+        new: u32,
+        _: mod_api::BlockUpdateFlags,
+    ) {
         let lectern = |s: u32| create_info(s).map(|(b, _)| b) == Some(Block::LecternController);
         let (was, is) = (lectern(old), lectern(new));
         if was != is {

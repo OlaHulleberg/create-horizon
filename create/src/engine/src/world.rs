@@ -939,7 +939,7 @@ impl CreateWorld {
         }
     }
 
-    fn place(&mut self, dim: usize, pos: [i32; 3], state: u32) {
+    fn place(&mut self, dim: usize, pos: [i32; 3], state: u32, skip_shape_updates: bool) {
         let Some((block, &info)) = self.table.get(state) else {
             return;
         };
@@ -1344,8 +1344,10 @@ impl CreateWorld {
         // The block entity survives (another valve colour too); `KineticBlock.onPlace` still
         // treats a different block as non-equivalent.
         let same = previous.is_some_and(|(b, _)| keeps_block_entity(b, block));
-        let equivalent =
-            previous.is_some_and(|(b, old)| kinetically_equivalent(b, old, block, info));
+        // `KineticBlock.updateIndirectNeighbourShapes` clears the old kinetic information.
+        // A known-shape write skips it, leaving a retained block entity's information intact.
+        let retain_kinetics = skip_shape_updates
+            || previous.is_some_and(|(b, old)| kinetically_equivalent(b, old, block, info));
         if !same {
             d.kinetics.remove(pos);
         }
@@ -1359,24 +1361,12 @@ impl CreateWorld {
         for (sub, part) in [(0, a), (1, b)] {
             if let Some(part) = part {
                 if same {
-                    d.kinetics.change_block_state(pos, sub, part, equivalent);
+                    d.kinetics
+                        .change_block_state(pos, sub, part, retain_kinetics);
                 } else {
                     d.kinetics.set(pos, sub, part);
                 }
             }
-        }
-    }
-
-    /// A `Level.setBlock` with `UPDATE_KNOWN_SHAPE` (`ChainGearshiftBlock.neighborChanged`):
-    /// `updateIndirectNeighbourShapes` doesn't run, so the block entity keeps its kinetic
-    /// information though the states aren't equivalent. Call it just before committing the
-    /// state: the host's `block_changed` that follows then finds the state already taken. (The
-    /// hook doesn't say a change's update flags: API_GAPS.)
-    pub fn setting_known_shape(&mut self, dim: usize, pos: [i32; 3], new: u32) {
-        if let Some(old) = self.dims[dim].states.get_mut(&pos)
-            && self.table.get(*old).map(|(b, _)| b) == self.table.get(new).map(|(b, _)| b)
-        {
-            *old = new;
         }
     }
 
@@ -1427,12 +1417,26 @@ impl CreateWorld {
         }
     }
 
-    /// A committed block change. The first lines are the hot path: two
-    /// range tests that miss for every non-Create block.
+    #[cfg(test)]
+    pub(crate) fn block_changed(&mut self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+        self.apply_block_change(dim, pos, old, new, false);
+    }
+
+    /// A committed block change. `skip_shape_updates` means the write was applied with
+    /// `UPDATE_KNOWN_SHAPE`, so its neighbor shape passes do not run.
     #[inline]
-    pub fn block_changed(&mut self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+    pub fn apply_block_change(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        old: u32,
+        new: u32,
+        skip_shape_updates: bool,
+    ) {
         self.register_block_entity(dim, pos, old, new);
-        self.chain_shapes_due(dim, pos, old, new);
+        if !skip_shape_updates {
+            self.chain_shapes_due(dim, pos, old, new);
+        }
         let affects_fluid = [old, new].into_iter().any(|state| {
             self.table
                 .get(state)
@@ -1728,7 +1732,7 @@ impl CreateWorld {
                 d.wheel_checks.push(pos);
                 schedule_large_wheel(d, pos);
             }
-            self.place(dim, pos, new);
+            self.place(dim, pos, new, skip_shape_updates);
         } else {
             if let Some(c) = self.engine_of(Some(old)) {
                 self.engine_removed(dim, pos, c);
@@ -2016,7 +2020,7 @@ impl CreateWorld {
             self.dims[dim].block_entities.register(pos, view);
         }
         if self.table.is_kinetic(state) {
-            self.place(dim, pos, state);
+            self.place(dim, pos, state, false);
         }
     }
 
@@ -2281,7 +2285,7 @@ impl CreateWorld {
                 return;
             }
         }
-        self.place(dim, pos, state);
+        self.place(dim, pos, state, false);
     }
 
     /// `SequencedGearshiftBlockEntity.tick`: the base kinetic tick attaches first;
@@ -3069,9 +3073,7 @@ impl CreateWorld {
 
     /// The chain-drive shape updates a block change is due: a drive placed takes its placement
     /// shape (`ChainDriveBlock.getStateForPlacement`), then the drives beside the change are
-    /// told (`Level.setBlock` → `updateNeighbourShapes` → `updateShape`). A change made with
-    /// `UPDATE_KNOWN_SHAPE` ([`Self::setting_known_shape`]: its state is already taken) tells
-    /// no one.
+    /// told (`Level.setBlock` → `updateNeighbourShapes` → `updateShape`).
     #[inline]
     fn chain_shapes_due(&mut self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
         if old == new || self.dims[dim].states.get(&pos) == Some(&new) {
@@ -3473,7 +3475,7 @@ impl CreateWorld {
                     ..old
                 },
             );
-            self.place(dim, p, state);
+            self.place(dim, p, state, false);
             // BeltBlock.initBelt attaches each member before inventory.tick.
             self.dims[dim].kinetics.attach_belt(p);
         }
@@ -3573,7 +3575,7 @@ impl CreateWorld {
                 },
             );
         }
-        self.place(dim, pos, state);
+        self.place(dim, pos, state, false);
     }
 
     /// Items saved with belts in a column (`chunk_data_save`), for when their chains form.
@@ -8138,8 +8140,7 @@ mod tests {
                 let signal = strengths[(tick - 38) / 4];
                 let next = if signal == 0 { 11 } else { 12 };
                 if next != state {
-                    w.setting_known_shape(0, pos, next);
-                    w.block_changed(0, pos, state, next);
+                    w.apply_block_change(0, pos, state, next, true);
                     state = next;
                 }
                 w.set_chain_signal(0, pos, signal);
@@ -8216,6 +8217,29 @@ mod tests {
         // A neighbour's `neighborChanged` shapes nothing (`updateShape` alone does).
         w.neighbor_changed(0, [0, 0, 1], 11);
         assert!(w.take_chain_shapes(0).is_empty());
+        states::clear_range();
+    }
+
+    #[test]
+    fn committed_known_shape_change_keeps_the_written_state_without_reshaping_the_chain() {
+        use crate::{chain::Part, kinetics::Axis};
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut w, id) = chain_world();
+        let state = id("create:encased_chain_drive", Axis::X, false, Part::None);
+        let first = [0, 64, 0];
+        let second = [0, 64, 1];
+        w.block_changed(0, first, 0, state);
+        assert!(w.take_chain_shapes(0).is_empty());
+
+        w.apply_block_change(0, second, 0, state, true);
+        assert_eq!(w.state_at(0, second), Some(state));
+        assert!(w.take_chain_shapes(0).is_empty());
+
+        w.block_changed(0, second, state, 0);
+        w.block_changed(0, second, 0, state);
+        let shapes = w.take_chain_shapes(0);
+        assert!(shapes.iter().any(|(p, _)| *p == first));
+        assert!(shapes.iter().any(|(p, _)| *p == second));
         states::clear_range();
     }
 

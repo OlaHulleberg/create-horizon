@@ -194,9 +194,22 @@ impl Subsystem for Kinetics {
         }
     }
 
-    fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+    fn block_changed(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+        old: u32,
+        new: u32,
+        flags: mod_api::BlockUpdateFlags,
+    ) {
         let watched = with_world(|w| {
-            w.block_changed(dim, pos, old, new);
+            w.apply_block_change(
+                dim,
+                pos,
+                old,
+                new,
+                flags.contains(mod_api::BlockUpdateFlags::KNOWN_SHAPE),
+            );
             [old, new].iter().any(|&s| {
                 matches!(
                     w.table.get(s).map(|(b, _)| b),
@@ -450,9 +463,6 @@ fn tick_inputs(lv: &mut ServerLevel<'_>) {
                     .block_state(pos)
                     .and_then(|s| s.with(&lv.host.block_states(), "powered", value).ok())
                 {
-                    with_world(|w| {
-                        w.setting_known_shape(dim, pos, super::states::id_or_none(next))
-                    });
                     lv.set_state(
                         pos,
                         next,
