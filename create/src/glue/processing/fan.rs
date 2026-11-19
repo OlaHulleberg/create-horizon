@@ -3,9 +3,8 @@
 //! ground and on depots and belts in it; and the nozzle on its front (`NozzleBlockEntity`).
 //! The processing types' effects on the other entities in a current (`affectEntity`): blasting
 //! and smoking set them alight and hurt them, washing puts them out and hurts endermen, snow
-//! golems and blazes, haunting blinds and slows them. Create's own damage types (`fan_lava`,
-//! `fan_fire`) are stood in for by vanilla's `lava` and `in_fire` (`API_GAPS.md`: a native
-//! mod's damage types). A horse haunted for 100 ticks turns into a skeleton horse made from its
+//! golems and blazes, haunting blinds and slows them. Blasting and smoking hurt with
+//! Create's `fan_lava` and `fan_fire` damage types. A horse haunted for 100 ticks turns into a skeleton horse made from its
 //! saved data (`Haunted`, its progress kept on the horse as Create's `CreateHaunting`).
 //! The processing particles of the items in a current (`spawnProcessingParticles`) are sent from
 //! here; the clients get the currents to push their own players and draw the air (`super::air`).
@@ -643,14 +642,14 @@ fn affect_entity(lv: &mut ServerLevel<'_>, entity: EntityRef, kind: Kind) {
         Kind::Blasting => {
             if entity.fire_immune(&*host) != Some(true) {
                 ignite(host, 200);
-                let _ = entity.hurt(host, "minecraft:lava", 4.0, None, None);
+                let _ = entity.hurt(host, "create:fan_lava", 4.0, None, None);
             }
         }
         // `SmokingType`: 2 s of fire and 2 fire damage (`fanFire`), unless fire-immune.
         Kind::Smoking => {
             if entity.fire_immune(&*host) != Some(true) {
                 ignite(host, 40);
-                let _ = entity.hurt(host, "minecraft:in_fire", 2.0, None, None);
+                let _ = entity.hurt(host, "create:fan_fire", 2.0, None, None);
             }
         }
         // `SplashingType`: drowning hurts endermen, snow golems and blazes; a burning entity is

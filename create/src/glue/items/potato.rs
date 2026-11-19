@@ -15,9 +15,8 @@
 //! `startConverting` sets it).
 //!
 //! Left out, for want of API:
-//! - Create's own entity type (`create:potato_projectile`) and damage type
-//!   (`create:potato_cannon`): the shot is a snowball and hurts as `minecraft:thrown` from it and
-//!   the shooter. A save keeps the snowballs, not the glue's flights: one flying when the world
+//! - Create's own entity type (`create:potato_projectile`): the shot is a snowball and hurts as
+//!   `create:potato_cannon` from it and the shooter. A save keeps the snowballs, not the glue's flights: one flying when the world
 //!   is saved comes back as a plain snowball showing its item.
 //! - The cannon's recoil in the hand (`PotatoCannonRenderHandler`: a special item model is
 //!   asked once per stack, `API_GAPS.md`) and the `potato_cannon_collide` advancement (shots of two types meeting), not wired. A monster killed or another player hit gives `potato_cannon`.
@@ -747,7 +746,13 @@ fn impact(
     }
     let enderman = event.entity_kind == "minecraft:enderman";
     let (damage, knockback, invulnerable) = potato::hit(shot.kind);
-    let hurt = target.hurt(lv.host, "minecraft:thrown", damage, projectile, shot.owner);
+    let hurt = target.hurt(
+        lv.host,
+        "create:potato_cannon",
+        damage,
+        projectile,
+        shot.owner,
+    );
     if hurt != Some(true) {
         discard(&mut lv, projectile);
         return None;

@@ -328,7 +328,11 @@ fn c_tag_files(files: &BTreeMap<String, Vec<u8>>) -> Vec<(String, Value)> {
 /// condition form, `neoforge:mod_loaded`, naming a mod id no mod has. `None` where the mod cannot: tags merge and have no removal in
 /// 26.3, and a mod's files stay in its own namespace (the jar's `data/neoforge/data_maps` load).
 fn left_out(path: &str, bytes: &[u8]) -> Option<Value> {
-    if !path.starts_with("data/create/") || path.contains("/tags/") {
+    // Create's damage types load as the jar has them: `EntityRef::hurt` takes a data-driven type.
+    if !path.starts_with("data/create/")
+        || path.contains("/tags/")
+        || path.starts_with("data/create/damage_type/")
+    {
         return None;
     }
     if path.contains("/data_maps/") {
@@ -699,6 +703,7 @@ mod tests {
         .unwrap();
         assert_eq!(map, json!({ "remove": ["create:a", "create:b"] }));
         assert!(left_out("data/create/tags/item/x.json", b"{}").is_none());
+        assert!(left_out("data/create/damage_type/crush.json", b"{}").is_none());
         assert!(left_out("data/neoforge/data_maps/block/waxables.json", b"{}").is_none());
     }
 

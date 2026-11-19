@@ -2156,7 +2156,7 @@ fn drawing_entity(kind: &str) -> bool {
 
 /// `BlockBreakingMovementBehaviour.damageEntities` at block `pos`: every entity in it but items
 /// and the structure's own (its drawing, what rides it, its cart) is hurt by `damage` (Create's
-/// drill, saw and roller damage types are stood in for by `generic`, `API_GAPS.md`) and
+/// drill, saw and roller damage types) and
 /// thrown by `boost`; a player's own client throws it (`push_player`). A plough throwing an
 /// anvil hard enough gives `ANVIL_PLOUGH` to the players within 32 blocks.
 fn hit_entities(
@@ -2194,7 +2194,13 @@ fn hit_entities(
             continue;
         }
         if let Some(d) = damage {
-            let _ = e.hurt(&mut *lv.host, "minecraft:generic", d, None, None);
+            let damage_type = match a.kind {
+                Kind::Drill => "create:mechanical_drill",
+                Kind::Saw => "create:mechanical_saw",
+                Kind::Roller => "create:mechanical_roller",
+                _ => continue,
+            };
+            let _ = e.hurt(&mut *lv.host, damage_type, d, None, None);
         }
         if kind == "minecraft:player" {
             if let Some(p) = e.uuid(&mut *lv.host).and_then(|u| lv.host.player(u)) {
