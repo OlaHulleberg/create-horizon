@@ -323,7 +323,10 @@ impl Subsystem for Controller {
             ToClient::LecternOff(_) => c.deactivate_in_lectern(),
         });
         send_server(host, packets);
-        ACTIVE.set(CLIENT.with_borrow(Client::active));
+        let active = CLIENT.with_borrow(Client::active);
+        if !ACTIVE.replace(active) && active {
+            release_movement_mappings(host);
+        }
         true
     }
 
@@ -439,6 +442,18 @@ fn send_server(host: &mut dyn ClientHost, packets: Vec<ToServer>) {
 // ---------------------------------------------------------------------------------------------
 // Client
 
+/// `ControlsUtil.getControls().forEach(kb -> kb.setDown(false))`: clear logical movement
+/// without releasing the physical inputs that drive controllers and trains.
+pub(crate) fn release_movement_mappings(host: &mut dyn ClientHost) {
+    for mapping in MAPPINGS {
+        if let Err(error) = host.set_mapping_down(mapping, false)
+            && error != mod_api::MappingError::NoWorld
+        {
+            crate::create_log!("[create] could not clear movement mapping {mapping}: {error:?}");
+        }
+    }
+}
+
 /// `LinkedControllerClientHandler.tick`: idle again when a screen opens, escape is down, the
 /// player is a spectator or no longer holds a controller (in neither hand, not at a lectern);
 /// else the held buttons go to the server. Nothing runs while idle.
@@ -462,6 +477,7 @@ fn client_tick(host: &mut dyn ClientHost) {
     let held = if stop {
         0
     } else {
+        release_movement_mappings(host);
         (0..ct::KEYS.len())
             .filter(|&b| host.is_key_down(ct::KEYS[b]))
             .fold(0u8, |m, b| m | 1 << b)
