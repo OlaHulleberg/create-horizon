@@ -365,8 +365,18 @@ fn generated_tree(local: Option<&Path>) -> Result<BTreeMap<String, String>, Stri
         let url = format!(
             "https://api.github.com/repos/Creators-of-Create/Create/git/trees/{GENERATED_TREE}?recursive=1"
         );
-        ureq::get(&url)
-            .set("User-Agent", "create-data")
+        // Send the CI credential only to the pinned GitHub API URL, never to a redirect.
+        let agent = ureq::AgentBuilder::new()
+            .user_agent("create-data")
+            .redirects(0)
+            .build();
+        let mut request = agent.get(&url);
+        if let Ok(token) = std::env::var("GITHUB_TOKEN")
+            && !token.is_empty()
+        {
+            request = request.set("Authorization", &format!("Bearer {token}"));
+        }
+        request
             .call()
             .map_err(|e| format!("{url}: {e}"))?
             .into_reader()
