@@ -56,12 +56,6 @@ pub(super) fn register(r: &mut dyn Registrar) {
     r.block_part(key(Block::MechanicalBearing), MechanicalBearingPart);
 }
 
-/// `MechanicalBearingBlockEntity.onSpeedChanged` (a mechanical bearing's assembly, a windmill's
-/// angle at its new speed): looked at on the next tick.
-pub(super) fn bearing_speed_changed(dim: usize, pos: [i32; 3]) {
-    with_world(|w| w.dims[dim].bearing_checks.push(pos));
-}
-
 // ---------------------------------------------------------------------------------------------
 // Chassis
 
@@ -636,8 +630,8 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
         else {
             continue;
         };
-        // One loaded turning has no speed until its network's first solve, which looks at it
-        // again: Create's block entity loads with its speed, and goes on turning.
+        // A part not yet solved has no speed to act on; its first solve's `onSpeedChanged`
+        // queues it again when it gets one.
         if super::unsolved(dim, pos) {
             continue;
         }
@@ -1807,9 +1801,10 @@ fn windmills_from_nbt(
             actors::storage_from_nbt(lv, pos, c.get(&"storage".into()));
             let limit = super::limit_from_nbt(lv.dim, pos, c);
             // Which bearing it turns on (`isWindmill`), and `read`'s `Angle` (the `turn` tag,
-            // falling back to the angle a save before turns wrote). A windmill's speed is its
-            // sails' (`getGeneratedSpeed`), which its network's solve confirms; a mechanical
-            // bearing's comes back with its network's, so it waits at none.
+            // falling back to the angle a save before turns wrote). It turns on at the speed it
+            // was saved turning at: a windmill's sails' (`getGeneratedSpeed`), a mechanical
+            // bearing's the `Speed` its block entity loads (`KineticBlockEntity.read`;
+            // `getAngularSpeed` reads `getSpeed`), until an `onSpeedChanged`.
             let kind = if sails.get(3) == Some(&1) {
                 create_engine::world::BearingKind::Mechanical
             } else {
@@ -1818,16 +1813,12 @@ fn windmills_from_nbt(
             let turn = match c.get(&"turn".into()) {
                 Some(Tag::IntArray(t)) if t.len() == 4 => {
                     let since = (i64::from(t[2]) << 32) | i64::from(t[1] as u32);
-                    let mut turn = Turn {
+                    Turn {
                         angle: f32::from_bits(t[0] as u32),
                         since: since.min(now),
                         rpm: f32::from_bits(t[3] as u32),
                         limit,
-                    };
-                    if kind == create_engine::world::BearingKind::Mechanical {
-                        turn.rebase(now, 0.0);
                     }
-                    turn
                 }
                 _ => Turn {
                     angle: f32::from_bits(sails.get(2).copied().unwrap_or(0) as u32),

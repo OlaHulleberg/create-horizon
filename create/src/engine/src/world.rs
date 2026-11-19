@@ -351,7 +351,8 @@ pub struct Dimension {
     pub deployer_power_checks: Vec<[i32; 3]>,
     pub gantry_assemble: Vec<[i32; 3]>,
     pub gantries: Vec<crate::gantry::Moving>,
-    /// Mechanical bearings whose speed changed (`assembleNextTick`).
+    /// Mechanical and windmill bearings whose speed changed (`onSpeedChanged`:
+    /// `assembleNextTick`) or that were right-clicked.
     pub bearing_checks: Vec<[i32; 3]>,
     pub tunnel_fresh: Vec<[i32; 3]>,
     /// Brass tunnels and what they hold to hand out, and those holding a stack (the only ones
@@ -1233,10 +1234,10 @@ impl CreateWorld {
             && !d.windmills.contains_key(&pos)
             && let Some(w) = d.windmill_saved.remove(&pos)
         {
+            // `MechanicalBearingBlockEntity.read`: it goes on turning as saved, with the speed
+            // its block entity loads (no `onSpeedChanged`).
             d.windmills.insert(pos, w);
             d.windmill_changes.push(pos);
-            // Its speed is looked at again (`onSpeedChanged`).
-            d.bearing_checks.push(pos);
         }
         if block == Block::WindmillBearing
             && !d.windmills.contains_key(&pos)
@@ -4958,6 +4959,19 @@ impl CreateWorld {
                 pointer.speed_changed(speed);
                 d.kinetics.mark_saved_changed(pos);
             }
+            // `MechanicalBearingBlockEntity.onSpeedChanged` (a windmill's too):
+            // `assembleNextTick = true`, looked at in its next tick. A bearing loaded with its
+            // speed (`KineticBlockEntity.read`) has none, so a powered one standing apart stays
+            // apart across a reload.
+            if d.states
+                .get(&pos)
+                .and_then(|&s| self.table.get(s))
+                .is_some_and(|(b, _)| {
+                    matches!(b, Block::MechanicalBearing | Block::WindmillBearing)
+                })
+            {
+                d.bearing_checks.push(pos);
+            }
         }
     }
 
@@ -7959,6 +7973,50 @@ mod tests {
         w.column_unloaded(0, 1, 2);
         assert_eq!(w.speed(0, [18, 64, 32]), None);
         assert!(w.dims[0].kinetics.is_empty());
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_bearing_loaded_with_its_speed_is_not_queued_to_assemble() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names = [
+            ("create:creative_motor", vec![("facing", "up")]),
+            ("create:mechanical_bearing", vec![("facing", "up")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (motor, bearing) = ([0, 7, 0], [0, 8, 0]);
+        w.block_changed(0, motor, 0, 10);
+        w.tick(0, &mut Vec::new());
+        // Placed on a turning motor: `RotationPropagator.propagateNewSource` sets its speed and
+        // calls `onSpeedChanged`, so it assembles on its next tick (`assembleNextTick`).
+        w.block_changed(0, bearing, 0, 11);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, bearing), Some(16.0));
+        assert_eq!(std::mem::take(&mut w.dims[0].bearing_checks), vec![bearing]);
+        // Taken apart (nothing running) and its column saved and loaded again: Create's
+        // `KineticBlockEntity.read` restores `Speed` 16 and no `onSpeedChanged` comes, so the
+        // bearing stays apart (Java: a reloaded powered bearing standing apart keeps whatever
+        // is in front of it in the world).
+        let saved = [motor, bearing].map(|p| w.dims[0].kinetics.saved_state(p, 0).unwrap());
+        w.column_unloaded(0, 0, 0);
+        for ((p, state), kinetic) in [motor, bearing].into_iter().zip([10, 11]).zip(saved) {
+            w.block_loaded(0, p, state);
+            assert!(w.dims[0].kinetics.restore_state(p, 0, kinetic));
+        }
+        for _ in 0..3 {
+            w.tick(0, &mut Vec::new());
+        }
+        assert_eq!(w.speed(0, bearing), Some(16.0));
+        assert_eq!(w.dims[0].bearing_checks, Vec::<[i32; 3]>::new());
+        // Its motor removed: `removeSource` → `onSpeedChanged`, queued again.
+        w.block_changed(0, motor, 10, 0);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, bearing), Some(0.0));
+        assert_eq!(w.dims[0].bearing_checks, vec![bearing]);
         states::clear_range();
     }
 
