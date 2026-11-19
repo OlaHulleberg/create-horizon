@@ -7,8 +7,8 @@ Checked on 2026-11-19 (Linux x86_64, Rust 1.99.1, a fresh build directory), pinn
 No SDK mirror or trusted-key override is used. Mixins stays at
 `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`, as the release SDK specifies.
 
-The in-game rows are historical: the developer build was `b77574e` and the "Sunrise nightly pin" smoke test was on
-`2d81263`. The mod was not tried in game for the `ed3ac19` pin move.
+The in-game rows below the registry smoke test are historical: the developer build was `b77574e` and the
+"Sunrise nightly pin" smoke test was on `2d81263`. The `ed3ac19` pin update was not itself tried in game.
 
 ## Checks
 
@@ -17,13 +17,26 @@ The in-game rows are historical: the developer build was `b77574e` and the "Sunr
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `create/` | `cargo +1.99.1 test` | Pass (97 glue tests) |
-| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (778 engine tests) |
+| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (779 engine tests) |
 | `create/` | `cargo sunrise-mod check` | Pass (official ed3ac19 SDK) |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/src/engine/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 fmt --check` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 clippy --locked --all-targets -- -D warnings` | Pass |
-| `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (49 tests, `committed_assets` included, with `CREATE_JAR` set to the pinned Create jar) |
+| `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (51 tests, `committed_assets` included, with `CREATE_JAR` set to the pinned Create jar) |
+| `tools/create-data/` | `cargo run --locked -- registry --out ../../create --check` | Pass; also rejected a stale recipe and an altered item definition in a scratch copy |
+
+## Registry package smoke test on `ed3ac19`
+
+From a clean `git archive` of the registry data commit, with the signed release SDK and no `create-data prepare`
+outputs: `cargo sunrise-mod build`, `cargo sunrise-mod check` and `cargo sunrise-mod check` on the `.smod` passed.
+The package carries `LICENSE` and `NOTICE.md`. The `[[jar]]` entry references the player's verified Create
+1.21.1-6.0.10 jar; no jar is in the package. `cargo sunrise-mod run --resources <vanilla resources> -- <game args>`
+under Xvfb and llvmpipe, without the launcher, staged the package's data and assets unchanged and opened a new
+creative world. `/give @s create:cogwheel`, and the same command for `create:zinc_ingot` and `create:wrench`,
+all succeeded. The cogwheel, motor and depot drew in the world, and the cogwheel and zinc ingot drew in the hotbar.
+The wrench occupied a slot but had no icon or held model. Custom item models, flattened/tinted models, texture
+copies, connected textures and model-derived placement ghosts still need the player's local `prepare` step.
 
 ## In game
 
