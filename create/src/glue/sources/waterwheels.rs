@@ -18,8 +18,8 @@ use create_engine::kinetics::{Axis, Dir};
 use create_engine::waterwheel::{DEFAULT_WOOD, wood_of_planks};
 use mod_api::{
     BlockEntityPart, BlockEntitySubmitEvent, BlockPart, BlockState, CanSurviveEvent, ClientHost,
-    Compound, Flow, Hand, HostBlockStates, InteractionResult, LevelHost, Registrar,
-    RightClickBlockEvent, ServerHost, Tag, UseItemOnEvent,
+    Compound, Flow, Hand, HostBlockStates, InteractionResult, Registrar, RightClickBlockEvent,
+    ServerHost, Tag, UseItemOnEvent,
 };
 
 /// The key of a wheel's material in its block entity data (`WaterWheelBlockEntity.write`).
@@ -152,14 +152,15 @@ struct Spaced;
 
 #[mod_api::sunrise_part]
 impl BlockPart for Spaced {
-    fn can_survive(&self, level: &dyn LevelHost, event: &mut CanSurviveEvent) -> Option<bool> {
-        let facing_of = |state: BlockState| {
-            let id = states::id(state)?;
-            with_world(|w| match w.table.get(id) {
-                Some((Block::WaterWheel, i)) => i.facing,
-                _ => None,
-            })
-            .flatten()
+    fn can_survive(
+        &self,
+        level: mod_api::LevelSide<'_>,
+        event: &mut CanSurviveEvent,
+    ) -> Option<bool> {
+        let (level, _) = states::level_view(level);
+        let facing_of = |state: BlockState| match states::level_info(level, state)? {
+            (Block::WaterWheel, info) => info.facing,
+            _ => None,
         };
         let axis = facing_of(event.state)?.axis();
         let pos = [event.pos.x, event.pos.y, event.pos.z];

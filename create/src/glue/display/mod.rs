@@ -62,9 +62,9 @@ use create_engine::display::{
 use create_engine::kinetics::Dir;
 use mod_api::{
     BlockClick, BlockPart, BlockState, ClientHost, Command, CommandArgumentValue, Compound, Flow,
-    InteractionResult, ItemStack, LevelHost, PlayerRef, RegisterCommandsEvent, Registrar,
-    RegistrationContext, RunModCommandEvent, ScreenCharTypedPreEvent, ScreenClosingEvent,
-    ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
+    InteractionResult, ItemStack, PlayerRef, RegisterCommandsEvent, Registrar, RegistrationContext,
+    RunModCommandEvent, ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
+    ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
     ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, StateForPlacementEvent, Tag,
     Text, UseItemOnEvent, UseWithoutItemEvent,
 };
@@ -1829,10 +1829,11 @@ impl BlockPart for DisplayBlock {
 
     fn state_for_placement(
         &self,
-        level: &dyn LevelHost,
+        level: mod_api::LevelSide<'_>,
         event: &mut StateForPlacementEvent<'_>,
     ) -> Option<Option<BlockState>> {
-        let (block, _) = states::id(event.state).and_then(info)?;
+        let (level, _) = states::level_view(level);
+        let block = states::level_block(level, event.state)?;
         let c = event.context;
         let clicked = Dir::ALL[c.face as usize];
         let facing = match block {
@@ -1841,8 +1842,7 @@ impl BlockPart for DisplayBlock {
                 let on = super::redstone::offset([c.pos.x, c.pos.y, c.pos.z], clicked.opposite());
                 let against = level
                     .block_state(on)
-                    .and_then(states::id)
-                    .and_then(info)
+                    .and_then(|state| states::level_info(level, state))
                     .filter(|(b, _)| *b == Block::DisplayBoard)
                     .and_then(|(_, i)| i.facing);
                 match against {

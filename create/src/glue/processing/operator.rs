@@ -12,7 +12,6 @@
 use super::super::items::{creative, obstructed, sneaking};
 use super::super::server::ServerLevel;
 use super::super::states;
-use super::super::world::with_world;
 use create_engine::Block;
 use create_engine::belt::Slope;
 use create_engine::kinetics::Dir;
@@ -113,7 +112,6 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
     let block = OPERATORS
         .into_iter()
         .find(|b| event.stack.item().id(&*lv.host) == format!("create:{}", b.name()))?;
-    let dim = lv.dim;
     // `getPlacementState` with the click on the top face of the spot.
     let state = {
         let facts = lv.host.block_states();
@@ -135,20 +133,15 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
             sneaking: sneaking(&*lv.host, player),
             clicked_face: Dir::Up,
         };
-        let info_at = |p: [i32; 3]| {
-            let id = lv.block(p);
-            (id != 0)
-                .then(|| with_world(|w| w.table.get(id).map(|(b, i)| (b, *i))).flatten())
-                .flatten()
-        };
+        let neighbours = create_engine::place::Neighbours(&|pos| lv.info(pos));
         match super::super::logistics::placement::placed_state(
             block,
             default,
             water,
-            (dim, up),
+            up,
             ctx,
             &set,
-            &info_at,
+            &neighbours,
         ) {
             Some(None) => return Some(InteractionResult::Fail),
             Some(Some(s)) => s,

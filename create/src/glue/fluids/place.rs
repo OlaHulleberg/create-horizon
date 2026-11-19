@@ -2,7 +2,7 @@
 //! toward the player's view when nothing is around (`FluidPipeBlock`), pumps turned to a pipe
 //! beside them (`PumpBlock`), valves, smart pipes and hose pulleys by the shafts and pipes
 //! around them, and steam engines and whistles on a tank (refused without one).
-//! Read from the server's world; a client predicts the template's state and is corrected.
+//! Placement reads the same neighbouring block states on both sides.
 
 use super::super::states;
 use super::super::world::{level_index, with_world};
@@ -11,7 +11,7 @@ use create_engine::Block;
 use create_engine::fluids::{self, Cell, Gate};
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::parts::StateInfo;
-use create_engine::place::{horizontal_direction, ordered_by_nearest};
+use create_engine::place::{Neighbours, horizontal_direction, ordered_by_nearest};
 use create_engine::steam::Face;
 use mod_api::{BlockPart, BlockState, LevelHost, StateForPlacementEvent};
 
@@ -32,12 +32,11 @@ fn flag(b: bool) -> &'static str {
     if b { "true" } else { "false" }
 }
 
-/// The Create block at `p` as the server's world numbers it.
+/// The Create block and its properties read from the placement's level.
 fn create_block(level: &dyn LevelHost, p: [i32; 3]) -> Option<(Block, StateInfo, BlockState)> {
     let state = level.block_state(p)?;
-    let id = states::id(state)?;
-    let (b, i) = with_world(|w| w.table.get(id).map(|(b, i)| (b, *i))).flatten()?;
-    Some((b, i, state))
+    let (block, info) = states::level_info(level, state)?;
+    Some((block, info, state))
 }
 
 /// A pipe state's open sides, read from its properties.
@@ -106,12 +105,11 @@ fn set(level: &dyn LevelHost, state: BlockState, props: &[(&str, &str)]) -> Bloc
 impl BlockPart for Placement {
     fn state_for_placement(
         &self,
-        level: &dyn LevelHost,
+        level: mod_api::LevelSide<'_>,
         event: &mut StateForPlacementEvent<'_>,
     ) -> Option<Option<BlockState>> {
-        let id = states::id(event.state)?;
-        let (block, _) = with_world(|w| w.table.get(id).map(|(b, i)| (b, *i))).flatten()?;
-        let dim = level_index(event.dimension.key().id())?;
+        let (level, _) = states::level_view(level);
+        let block = states::level_block(level, event.state)?;
         let c = event.context;
         let pos = [c.pos.x, c.pos.y, c.pos.z];
         let looking = ordered_by_nearest(c.yaw, c.pitch);
@@ -119,9 +117,8 @@ impl BlockPart for Placement {
         let horizontal = horizontal_direction(c.yaw);
         let clicked = Dir::ALL[c.face as usize];
         let joins = |d: Dir| fluids::connects(cell(level, offset(pos, d)), d);
-        let shaft = |d: Dir| {
-            with_world(|w| w.has_shaft_towards(dim, offset(pos, d), d.opposite())).unwrap_or(false)
-        };
+        let neighbours = Neighbours(&|p| states::level_info_at(level, p));
+        let shaft = |d: Dir| neighbours.has_shaft_towards(offset(pos, d), d.opposite());
         let state = event.state;
         // `withWater` (pipes and pumps are `ProperWaterloggedBlock`s).
         let water = crate::glue::logistics::placement::in_water(level, event);

@@ -1,14 +1,14 @@
 # Validation
 
-Checked on 2026-11-19 at `bbeafd6` (Linux x86_64, Rust 1.99.1, a fresh build directory), pinned to Sunrise
-`2d8126336e579777eabf9b2fd8b3d476236a04f2` in `create/sunrise-mod.toml`.
+Checked on 2026-11-19 (Linux x86_64, Rust 1.99.1, a fresh build directory), pinned to Sunrise
+`ed3ac19558d8dc1092c431312848cbb58fb01e41` in `create/sunrise-mod.toml`.
 `cargo sunrise-mod check` uses the official release tool and signed SDK from
-`sdk-2d8126336e579777eabf9b2fd8b3d476236a04f2`, with its built-in published keys.
+`sdk-ed3ac19558d8dc1092c431312848cbb58fb01e41`, with its built-in published keys.
 No SDK mirror or trusted-key override is used. Mixins stays at
 `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`, as the release SDK specifies.
 
-In-game rows up to the pin move were checked on the previous `b77574e` developer build; the nightly smoke check is
-the "Sunrise nightly pin" row.
+The in-game rows are historical: the developer build was `b77574e` and the "Sunrise nightly pin" smoke test was on
+`2d81263`. The mod was not tried in game for the `ed3ac19` pin move.
 
 ## Checks
 
@@ -18,12 +18,12 @@ the "Sunrise nightly pin" row.
 | `create/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `create/` | `cargo +1.99.1 test` | Pass (97 glue tests) |
 | `create/` | `cargo +1.99.1 test -p create-engine` | Pass (778 engine tests) |
-| `create/` | `cargo sunrise-mod check` | Pass (official 2d81263 SDK) |
+| `create/` | `cargo sunrise-mod check` | Pass (official ed3ac19 SDK) |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/src/engine/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 fmt --check` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 clippy --locked --all-targets -- -D warnings` | Pass |
-| `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (49 tests, `committed_assets` included, with Create's jar in the `prepare` cache) |
+| `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (49 tests, `committed_assets` included, with `CREATE_JAR` set to the pinned Create jar) |
 
 ## In game
 

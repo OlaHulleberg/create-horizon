@@ -538,6 +538,8 @@ impl BlockEntityPart for ToolboxMenu {
                 .collect(),
             inventory_y: toolbox::INVENTORY_Y,
             inventory_x: toolbox::INVENTORY_X,
+            title_label: None,
+            inventory_label: None,
             own_labels: true,
             own_background: true,
             recipe_book: None,
@@ -635,14 +637,14 @@ impl BlockEntityPart for ToolboxMenu {
     /// The deposit button's `create.toolbox.depositBox`.
     fn screen_tooltip(
         &self,
-        host: &dyn mod_api::ClientHost,
+        _host: &dyn mod_api::ClientHost,
         event: &mut mod_api::ScreenTooltipEvent<'_>,
     ) {
         if toolbox_block(event.block).is_some() && on_button(TOOLBOX_DEPOSIT, event.at) {
-            event.lines.push(
-                host.translate("create.toolbox.depositBox")
-                    .unwrap_or_default(),
-            );
+            event.lines.push((
+                mod_api::Text::translate("create.toolbox.depositBox", vec![]),
+                0xFFFF_FFFF,
+            ));
         }
     }
 

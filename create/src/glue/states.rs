@@ -9,8 +9,9 @@
 //! when the first world opens, from the host's block-state facts.
 
 use create_engine::Block;
+use create_engine::parts::StateInfo;
 use create_engine::world::StateTable;
-use mod_api::{BlockKey, BlockState, Host, HostBlockStates, Registrar};
+use mod_api::{BlockKey, BlockState, Host, HostBlockStates, LevelHost, LevelSide, Registrar};
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::{OnceLock, RwLock};
@@ -407,6 +408,32 @@ pub fn split(text: &str) -> (&str, Vec<(&str, &str)>) {
             (name, props)
         }
     }
+}
+
+/// The placement or survival callback's level and whether it is authoritative.
+pub fn level_view(side: LevelSide<'_>) -> (&dyn LevelHost, bool) {
+    match side {
+        LevelSide::Server(level) => (level, true),
+        LevelSide::Client(level) => (level, false),
+    }
+}
+
+/// A block's Create id from a read-only level on either side.
+pub fn level_block(level: &dyn LevelHost, state: BlockState) -> Option<Block> {
+    Block::from_name(level.state_block(state)?.strip_prefix("create:")?)
+}
+
+/// Properties for the placement and survival callbacks, which run without a server world on clients.
+pub fn level_info(level: &dyn LevelHost, state: BlockState) -> Option<(Block, StateInfo)> {
+    let block = level_block(level, state)?;
+    let text = level.state_string(state)?;
+    let (_, properties) = split(&text);
+    Some((block, StateInfo::read(properties.into_iter())))
+}
+
+/// The Create block at `pos` and its state as seen by this level.
+pub fn level_info_at(level: &dyn LevelHost, pos: [i32; 3]) -> Option<(Block, StateInfo)> {
+    level_info(level, level.block_state(pos)?)
 }
 
 /// Builds the numbering for the world being opened (on the server, or on a client joining one)

@@ -65,10 +65,11 @@ struct Placement;
 impl mod_api::BlockPart for Placement {
     fn state_for_placement(
         &self,
-        level: &dyn LevelHost,
+        level: mod_api::LevelSide<'_>,
         event: &mut StateForPlacementEvent<'_>,
     ) -> Option<Option<BlockState>> {
-        let (block, _) = block_of(states::id(event.state)?)?;
+        let (level, _) = states::level_view(level);
+        let block = states::level_block(level, event.state)?;
         let c = event.context;
         let clicked = dir(c.face);
         let state = event.state;
@@ -108,8 +109,7 @@ impl mod_api::BlockPart for Placement {
                 let p = [c.pos.x - o[0], c.pos.y - o[1], c.pos.z - o[2]];
                 let behind = level
                     .block_state(p)
-                    .and_then(states::id)
-                    .and_then(block_of)
+                    .and_then(|state| states::level_info(level, state))
                     .filter(|(b, _)| *b == Block::EncasedFan)
                     .and_then(|(_, i)| i.facing);
                 if !create_engine::nozzle::survives(clicked, behind) {
@@ -257,10 +257,11 @@ struct LenientSupport;
 impl mod_api::BlockPart for LenientSupport {
     fn can_survive(
         &self,
-        level: &dyn LevelHost,
+        level: mod_api::LevelSide<'_>,
         event: &mut mod_api::CanSurviveEvent,
     ) -> Option<bool> {
-        let (_, info) = block_of(states::id(event.state)?)?;
+        let (level, _) = states::level_view(level);
+        let (_, info) = states::level_info(level, event.state)?;
         let offset = create_engine::factory::connected_direction(info.face?, info.facing?)
             .opposite()
             .offset();

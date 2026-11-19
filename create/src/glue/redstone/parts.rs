@@ -229,10 +229,11 @@ impl BlockPart for RedstoneBlock {
     /// what it will watch once placed (`place_detectors`).
     fn state_for_placement(
         &self,
-        level: &dyn LevelHost,
+        level: mod_api::LevelSide<'_>,
         event: &mut StateForPlacementEvent<'_>,
     ) -> Option<Option<BlockState>> {
-        let (block, _) = states::id(event.state).and_then(info)?;
+        let (level, server) = states::level_view(level);
+        let block = states::level_block(level, event.state)?;
         let c = event.context;
         match block {
             Block::ControllerRail => {
@@ -258,7 +259,8 @@ impl BlockPart for RedstoneBlock {
                 )?;
                 Some(Some(state))
             }
-            Block::ContentObserver | Block::StockpileSwitch => {
+            // The server selects the first adjacent inventory it can watch after placing.
+            Block::ContentObserver | Block::StockpileSwitch if server => {
                 let pos = [c.pos.x, c.pos.y, c.pos.z];
                 PLACING.with_borrow_mut(|p| {
                     p.push(Placing {

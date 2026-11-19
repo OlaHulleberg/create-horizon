@@ -623,9 +623,10 @@ struct BurnerPlacement;
 impl BlockPart for BurnerPlacement {
     fn state_for_placement(
         &self,
-        level: &dyn mod_api::LevelHost,
+        level: mod_api::LevelSide<'_>,
         event: &mut mod_api::StateForPlacementEvent<'_>,
     ) -> Option<Option<mod_api::BlockState>> {
+        let (level, _) = crate::glue::states::level_view(level);
         let c = event.context;
         let facing = create_engine::decor::horizontal_facing(c.yaw).opposite();
         let state = level.state_with_property(event.state, "blaze", "smouldering")?;

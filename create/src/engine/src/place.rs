@@ -4,6 +4,42 @@
 
 use crate::Block;
 use crate::kinetics::{Axis, Dir};
+use crate::parts::StateInfo;
+
+/// Placement reads kinetic connections from the neighbouring block states on either side.
+pub struct Neighbours<'a>(pub &'a dyn Fn([i32; 3]) -> Option<(Block, StateInfo)>);
+
+impl Neighbours<'_> {
+    pub fn at(&self, pos: [i32; 3]) -> Option<(Block, StateInfo)> {
+        (self.0)(pos)
+    }
+
+    pub fn has_shaft_towards(&self, pos: [i32; 3], face: Dir) -> bool {
+        let Some((block, info)) = self.at(pos) else {
+            return false;
+        };
+        crate::parts::has_shaft_towards(block, &info, face)
+    }
+
+    pub fn cog_at(&self, pos: [i32; 3]) -> Option<(bool, Axis)> {
+        let (block, info) = self.at(pos)?;
+        crate::parts::cog(block, &info)
+    }
+
+    /// `CogWheelBlock.isValidCogwheelPosition`: neither cog may be large if they are
+    /// adjacent in the plane of both cogs.
+    pub fn valid_cog_position(&self, pos: [i32; 3], large: bool, axis: Axis) -> bool {
+        Dir::ALL.into_iter().filter(|d| d.axis() != axis).all(|d| {
+            let o = d.offset();
+            let at = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+            self.at(at).is_none_or(|(block, info)| {
+                info.axis == Some(d.axis())
+                    || crate::parts::cog(block, &info)
+                        .is_none_or(|(other_large, _)| !other_large && !large)
+            })
+        })
+    }
+}
 
 /// What a placement knows of the player: their view and whether they sneak, and the face of the
 /// block they clicked (`BlockPlaceContext`).
@@ -594,6 +630,37 @@ mod tests {
             sneaking,
             clicked_face: Dir::Up,
         }
+    }
+
+    #[test]
+    fn placement_reads_shafts_and_cogs_from_neighbour_states() {
+        let read = |p: [i32; 3]| match p {
+            [0, -1, 0] => Some((
+                Block::BrassEncasedLargeCogwheel,
+                StateInfo::read([("axis", "y"), ("top_shaft", "true")].into_iter()),
+            )),
+            [1, 0, 0] => Some((
+                Block::Belt,
+                StateInfo::read(
+                    [
+                        ("facing", "north"),
+                        ("part", "start"),
+                        ("slope", "horizontal"),
+                    ]
+                    .into_iter(),
+                ),
+            )),
+            _ => None,
+        };
+        let nearby = Neighbours(&read);
+        assert!(nearby.has_shaft_towards([0, -1, 0], Dir::Up));
+        assert!(!nearby.has_shaft_towards([0, -1, 0], Dir::Down));
+        assert!(nearby.has_shaft_towards([1, 0, 0], Dir::West));
+        assert!(!nearby.has_shaft_towards([1, 0, 0], Dir::North));
+        assert_eq!(nearby.cog_at([0, -1, 0]), Some((true, Axis::Y)));
+        assert_eq!(nearby.cog_at([1, 0, 0]), None);
+        assert!(nearby.valid_cog_position([0, 0, 0], false, Axis::X));
+        assert!(!nearby.valid_cog_position([0, -1, 1], false, Axis::X));
     }
 
     #[test]
