@@ -16,11 +16,12 @@ use mod_api::{
     KeyMappingPreEvent, LeftClickBlockEvent, LevelHost, LevelLoadEvent, LevelSaveEvent,
     LevelTickPostEvent, LevelTicksHost, MenuClosedEvent, MouseScrollingEvent, MovementInputEvent,
     NeighborChangedEvent, PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerLoggedInEvent,
-    PlayerTickPostEvent, RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
-    RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ScreenCharTypedPreEvent,
-    ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
-    ScreenMouseButtonReleasedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
-    ServerHost, StandaloneModelsEvent, TagsUpdatedEvent, WorldLifecycleEvent, WorldPhase,
+    PlayerLoggedOutEvent, PlayerTickPostEvent, RegisterCommandsEvent, Registrar,
+    RegistrationContext, RenderGuiPostEvent, RightClickBlockEvent, RightClickItemEvent,
+    RunModCommandEvent, ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
+    ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
+    ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, StandaloneModelsEvent,
+    TagsUpdatedEvent, WorldLifecycleEvent, WorldPhase,
 };
 
 #[derive(Default)]
@@ -203,6 +204,10 @@ impl Hooks for Create {
         for s in SUBSYSTEMS {
             s.player_joined(host, player);
         }
+    }
+
+    fn player_logged_out(&self, _host: &mut dyn ServerHost, event: &mut PlayerLoggedOutEvent<'_>) {
+        glue::equipment::player_logged_out(event.player);
     }
 
     fn client_tick_post(&self, host: &mut dyn ClientHost, _event: &mut ClientTickPostEvent) {
@@ -405,14 +410,6 @@ impl Hooks for Create {
         for s in SUBSYSTEMS {
             s.render_fog(host, event);
         }
-    }
-
-    fn extract_block_screen_effect(
-        &self,
-        host: &dyn ClientHost,
-        event: &mut mod_api::ExtractBlockScreenEffectEvent,
-    ) -> Flow {
-        until_cancel(|s| s.screen_effect(host, event))
     }
 
     fn register_commands(&self, host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {

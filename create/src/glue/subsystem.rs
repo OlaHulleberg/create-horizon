@@ -319,16 +319,6 @@ pub trait Subsystem: Sync {
     ) {
     }
 
-    /// `Hooks::extract_block_screen_effect`: a first-person overlay (fire, water, a block) is
-    /// about to be drawn; the first subsystem to answer `Flow::Cancel` leaves it out.
-    fn screen_effect(
-        &self,
-        _host: &dyn ClientHost,
-        _event: &mut mod_api::ExtractBlockScreenEffectEvent,
-    ) -> Flow {
-        Flow::Continue
-    }
-
     /// `Hooks::register_commands`: push this subsystem's commands.
     fn register_commands(
         &self,

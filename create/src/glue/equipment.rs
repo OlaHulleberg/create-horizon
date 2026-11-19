@@ -39,8 +39,8 @@ use create_engine::equipment::{
 };
 use mod_api::{
     AttributeModifier, AttributeOperation, BlockDropsEvent, BreakBlockEvent, Compound,
-    EntityPlaceEvent, EquipmentSlot, Flow, GameMode, Hand, HostSide, HostTransaction, Identifier,
-    ItemKey, ItemPart, ItemPlace, ItemStack, LevelHost, LivingRef, ModifierLifetime,
+    EntityPlaceEvent, EntityRef, EquipmentSlot, Flow, GameMode, Hand, HostSide, HostTransaction,
+    Identifier, ItemKey, ItemPart, ItemPlace, ItemStack, LevelHost, LivingRef, ModifierLifetime,
     OnBlockPlacedByEvent, PlayerRef, PlayerTickPostEvent, Registrar, RegistrationContext,
     ServerHost, SoundSource, StackError, Tag,
 };
@@ -88,7 +88,8 @@ thread_local! {
     static HITTERS: RefCell<Vec<(i32, u8)>> = const { RefCell::new(Vec::new()) };
     /// Players wearing a whole netherite diving set, by entity id: fire can't hurt them
     /// (`NetheriteDivingHandler.setFireImmune`).
-    static FIRE_IMMUNE: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+    static SERVER_FIRE_GRANTS: RefCell<HashMap<u128, EntityRef>> = RefCell::new(HashMap::new());
+    static CLIENT_FIRE_GRANT: std::cell::Cell<Option<EntityRef>> = const { std::cell::Cell::new(None) };
     /// Backtanks a player is breaking with air in them, by level and position: their drop takes
     /// the air (`CopyComponentsFunction` of `BACKTANK_AIR`).
     static BREAKING: RefCell<HashMap<(usize, [i32; 3]), eq::Backtank>> = RefCell::new(HashMap::new());
@@ -229,7 +230,7 @@ impl Subsystem for Equipment {
         GEAR.with_borrow_mut(HashMap::clear);
         REACH.with_borrow_mut(Vec::clear);
         HITTERS.with_borrow_mut(Vec::clear);
-        FIRE_IMMUNE.with_borrow_mut(Vec::clear);
+        SERVER_FIRE_GRANTS.with_borrow_mut(HashMap::clear);
         BREAKING.with_borrow_mut(HashMap::clear);
     }
 
@@ -373,13 +374,28 @@ impl Subsystem for Equipment {
 
     fn client_reset(&self) {
         GRIP_RENDER.set(GripRender::default());
+        CLIENT_FIRE_GRANT.set(None);
     }
 
-    /// The start of the local player's tick on its client (`EntityTickEvent.Pre`): the diving
-    /// boots' sinking.
+    /// The start of the local player's tick on its client: diving boots and fire prediction.
     fn player_tick_pre(&self, host: HostSide, event: &mut mod_api::PlayerTickPreEvent) {
         if let HostSide::Client(host) = host {
-            diving_boots(host, event.player);
+            let player = event.player;
+            diving_boots(host, player);
+            if host.local_player() != Some(player) {
+                return;
+            }
+            let entity = player.entity();
+            if full_netherite(host, player) {
+                if (CLIENT_FIRE_GRANT.get() == Some(entity)
+                    || entity.fire_immune(host) != Some(true))
+                    && entity.set_client_fire_immunity(host, true)
+                {
+                    CLIENT_FIRE_GRANT.set(Some(entity));
+                }
+            } else if CLIENT_FIRE_GRANT.take() == Some(entity) {
+                entity.set_client_fire_immunity(host, false);
+            }
         }
     }
 
@@ -418,32 +434,14 @@ impl Subsystem for Equipment {
         netherite_set(host, player);
     }
 
-    /// A player in a whole netherite diving set takes no fire damage (`Entity.fireImmune` with
-    /// Create's `CreateFireImmune`: `isInvulnerableTo` any `#minecraft:is_fire` damage).
+    /// `bufferLivingAttackEvent`: damage a player caused wears the grip they hold.
     fn living_incoming_damage(
         &self,
         _level: &mut dyn mod_api::HitHost,
         event: &mut mod_api::LivingIncomingDamageEvent<'_>,
     ) -> Flow {
-        let fire = matches!(
-            event.source.damage_type,
-            "minecraft:in_fire"
-                | "minecraft:campfire"
-                | "minecraft:on_fire"
-                | "minecraft:lava"
-                | "minecraft:hot_floor"
-                | "minecraft:fireball"
-                | "minecraft:unattributed_fireball"
-        );
-        // `bufferLivingAttackEvent`: damage a player caused wears the grip they hold.
         if event.source.causing != 0 {
             HITTERS.with_borrow_mut(|h| h.push((event.source.causing, 0)));
-        }
-        let Ok(id) = u32::try_from(event.entity) else {
-            return Flow::Continue;
-        };
-        if fire && FIRE_IMMUNE.with_borrow(|f| f.contains(&id)) {
-            return Flow::Cancel;
         }
         Flow::Continue
     }
@@ -475,20 +473,6 @@ impl Subsystem for Equipment {
             mod_api::SpecialModelPolicy::Stack,
             std::sync::Arc::new(GripModel),
         );
-    }
-
-    /// A player immune to fire is never set alight, so their view shows no flames.
-    fn screen_effect(
-        &self,
-        host: &dyn mod_api::ClientHost,
-        event: &mut mod_api::ExtractBlockScreenEffectEvent,
-    ) -> Flow {
-        if event.effect == mod_api::BlockScreenEffect::Fire
-            && host.local_player().is_some_and(|p| full_netherite(host, p))
-        {
-            return Flow::Cancel;
-        }
-        Flow::Continue
     }
 
     /// `ClientEvents.getFogDensity`: under water a diving helmet sees 6.25 times as far; in lava
@@ -774,19 +758,21 @@ fn full_netherite(host: &dyn mod_api::Host, player: PlayerRef) -> bool {
 /// fire-resistant (netherite) leggings and boots make the wearer immune to fire; while they are,
 /// they stop burning.
 fn netherite_set(host: &mut dyn ServerHost, player: PlayerRef) {
-    let full = full_netherite(&*host, player);
-    let id = player.entity().id();
-    FIRE_IMMUNE.with_borrow_mut(|f| {
-        let was = f.contains(&id);
-        if full && !was {
-            f.push(id);
-        } else if !full && was {
-            f.retain(|e| *e != id);
+    let entity = player.entity();
+    let uuid = player.uuid();
+    if full_netherite(&*host, player) {
+        let own = SERVER_FIRE_GRANTS.with_borrow(|grants| grants.get(&uuid) == Some(&entity));
+        if (own || entity.fire_immune(&*host) != Some(true)) && entity.set_fire_immunity(host, true)
+        {
+            SERVER_FIRE_GRANTS.with_borrow_mut(|grants| grants.insert(uuid, entity));
         }
-    });
-    if full {
-        player.entity().clear_fire(host);
+    } else if SERVER_FIRE_GRANTS.with_borrow_mut(|grants| grants.remove(&uuid)) == Some(entity) {
+        entity.set_fire_immunity(host, false);
     }
+}
+
+pub(crate) fn player_logged_out(uuid: u128) {
+    SERVER_FIRE_GRANTS.with_borrow_mut(|grants| grants.remove(&uuid));
 }
 
 /// `DivingHelmetItem.breatheUnderwater`: one air a second from the emptiest tank, and breath.
