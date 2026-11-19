@@ -73,8 +73,7 @@ impl BlockPart for Placement {
         level: mod_api::LevelSide<'_>,
         event: &mut StateForPlacementEvent<'_>,
     ) -> Option<Option<BlockState>> {
-        let server = matches!(level, mod_api::LevelSide::Server(_));
-        let (mod_api::LevelSide::Server(level) | mod_api::LevelSide::Client(level)) = level;
+        let (level, server) = states::level_view(level);
         let block = states::level_block(level, event.state)?;
         let info_at = |p| states::level_info(level, level.block_state(p)?);
         let c = event.context;

@@ -11,7 +11,7 @@
 use create_engine::Block;
 use create_engine::parts::StateInfo;
 use create_engine::world::StateTable;
-use mod_api::{BlockKey, BlockState, Host, HostBlockStates, LevelHost, Registrar};
+use mod_api::{BlockKey, BlockState, Host, HostBlockStates, LevelHost, LevelSide, Registrar};
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::{OnceLock, RwLock};
@@ -407,6 +407,14 @@ pub fn split(text: &str) -> (&str, Vec<(&str, &str)>) {
                 .collect();
             (name, props)
         }
+    }
+}
+
+/// The placement or survival callback's level and whether it is authoritative.
+pub fn level_view(side: LevelSide<'_>) -> (&dyn LevelHost, bool) {
+    match side {
+        LevelSide::Server(level) => (level, true),
+        LevelSide::Client(level) => (level, false),
     }
 }
 

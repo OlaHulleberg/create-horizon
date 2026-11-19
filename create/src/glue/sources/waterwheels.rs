@@ -157,7 +157,7 @@ impl BlockPart for Spaced {
         level: mod_api::LevelSide<'_>,
         event: &mut CanSurviveEvent,
     ) -> Option<bool> {
-        let (mod_api::LevelSide::Server(level) | mod_api::LevelSide::Client(level)) = level;
+        let (level, _) = states::level_view(level);
         let facing_of = |state: BlockState| match states::level_info(level, state)? {
             (Block::WaterWheel, info) => info.facing,
             _ => None,

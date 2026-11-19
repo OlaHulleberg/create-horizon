@@ -1832,7 +1832,7 @@ impl BlockPart for DisplayBlock {
         level: mod_api::LevelSide<'_>,
         event: &mut StateForPlacementEvent<'_>,
     ) -> Option<Option<BlockState>> {
-        let (mod_api::LevelSide::Server(level) | mod_api::LevelSide::Client(level)) = level;
+        let (level, _) = states::level_view(level);
         let block = states::level_block(level, event.state)?;
         let c = event.context;
         let clicked = Dir::ALL[c.face as usize];

@@ -218,7 +218,7 @@ impl BlockPart for Supported {
         level: mod_api::LevelSide<'_>,
         event: &mut CanSurviveEvent,
     ) -> Option<bool> {
-        let (mod_api::LevelSide::Server(level) | mod_api::LevelSide::Client(level)) = level;
+        let (level, _) = states::level_view(level);
         let facing = states::level_info(level, event.state)?.1.facing?;
         let o = facing.opposite().offset();
         let p = [event.pos.x + o[0], event.pos.y + o[1], event.pos.z + o[2]];

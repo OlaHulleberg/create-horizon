@@ -626,7 +626,7 @@ impl BlockPart for BurnerPlacement {
         level: mod_api::LevelSide<'_>,
         event: &mut mod_api::StateForPlacementEvent<'_>,
     ) -> Option<Option<mod_api::BlockState>> {
-        let (mod_api::LevelSide::Server(level) | mod_api::LevelSide::Client(level)) = level;
+        let (level, _) = crate::glue::states::level_view(level);
         let c = event.context;
         let facing = create_engine::decor::horizontal_facing(c.yaw).opposite();
         let state = level.state_with_property(event.state, "blaze", "smouldering")?;

@@ -246,7 +246,7 @@ impl BlockPart for CopycatBlock {
         level: mod_api::LevelSide<'_>,
         event: &mut StateForPlacementEvent<'_>,
     ) -> Option<Option<BlockState>> {
-        let (mod_api::LevelSide::Server(level) | mod_api::LevelSide::Client(level)) = level;
+        let (level, _) = states::level_view(level);
         let block = copycat_block(event.state.block())?;
         let c = event.context;
         let nearest = create_engine::place::ordered_by_nearest(c.yaw, c.pitch)[0];

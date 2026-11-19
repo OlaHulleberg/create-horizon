@@ -52,7 +52,7 @@ impl mod_api::BlockPart for Ladder {
         level: mod_api::LevelSide<'_>,
         event: &mut CanSurviveEvent,
     ) -> Option<bool> {
-        let (mod_api::LevelSide::Server(level) | mod_api::LevelSide::Client(level)) = level;
+        let (level, _) = states::level_view(level);
         let text = level.state_string(event.state)?;
         let facing = facing_in(&text)?;
         let above = level.block_state([event.pos.x, event.pos.y + 1, event.pos.z])?;

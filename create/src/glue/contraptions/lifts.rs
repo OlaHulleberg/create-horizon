@@ -1626,9 +1626,10 @@ impl BlockPart for ContactPart {
     ) -> Option<Option<BlockState>> {
         // RedstoneContactItem chooses an elevator contact if it faces a live elevator column.
         // The port tracks those columns in the server's lift state, not on the client.
-        let mod_api::LevelSide::Server(level) = level else {
+        let (level, server) = states::level_view(level);
+        if !server {
             return None;
-        };
+        }
         let name = level.state_block(event.state)?;
         if name != "create:redstone_contact" {
             return None;

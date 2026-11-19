@@ -68,7 +68,7 @@ impl mod_api::BlockPart for Placement {
         level: mod_api::LevelSide<'_>,
         event: &mut StateForPlacementEvent<'_>,
     ) -> Option<Option<BlockState>> {
-        let (mod_api::LevelSide::Server(level) | mod_api::LevelSide::Client(level)) = level;
+        let (level, _) = states::level_view(level);
         let block = states::level_block(level, event.state)?;
         let c = event.context;
         let clicked = dir(c.face);
@@ -260,7 +260,7 @@ impl mod_api::BlockPart for LenientSupport {
         level: mod_api::LevelSide<'_>,
         event: &mut mod_api::CanSurviveEvent,
     ) -> Option<bool> {
-        let (mod_api::LevelSide::Server(level) | mod_api::LevelSide::Client(level)) = level;
+        let (level, _) = states::level_view(level);
         let (_, info) = states::level_info(level, event.state)?;
         let offset = create_engine::factory::connected_direction(info.face?, info.facing?)
             .opposite()
