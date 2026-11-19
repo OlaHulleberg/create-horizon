@@ -8275,7 +8275,7 @@ mod tests {
 
     #[test]
     fn a_drive_freed_by_its_partner_s_removal_joins_the_one_above_at_once() {
-        // create-horizon#94: Java at tick 30 and, after the gearshift north is removed, 32.
+        // create-sunrise#94: Java at tick 30 and, after the gearshift north is removed, 32.
         use crate::chain::{Drive, Part};
         use crate::kinetics::Axis;
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -8308,7 +8308,7 @@ mod tests {
 
     #[test]
     fn a_lone_drive_wrenched_into_line_joins_the_chain_at_once() {
-        // create-horizon#97: Java at tick 46, then 48 after the wrench on the drive's top.
+        // create-sunrise#97: Java at tick 46, then 48 after the wrench on the drive's top.
         use crate::chain::{Drive, Part};
         use crate::kinetics::Axis;
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -8345,7 +8345,7 @@ mod tests {
 
     #[test]
     fn a_drive_placed_as_its_column_unloads_still_joins() {
-        // create-horizon#98: Java at tick 6 and, after the drive is placed and the column
+        // create-sunrise#98: Java at tick 6 and, after the drive is placed and the column
         // reloads in the same tick, 7.
         use crate::chain::{Drive, Part};
         use crate::kinetics::Axis;

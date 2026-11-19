@@ -108,7 +108,7 @@ mod tests {
     }
 
     /// `onBlockActivated` hands the click to the block's use whatever the hand holds but the
-    /// wrench: the crank turns for a sneaking extendo grip (create-horizon issue #96's case,
+    /// wrench: the crank turns for a sneaking extendo grip (create-sunrise issue #96's case,
     /// where Java answers `Crank { in_use: 9, backwards: true }`), the valve handles and the
     /// lever the same, and the wrench keeps its own use on every one of them.
     #[test]

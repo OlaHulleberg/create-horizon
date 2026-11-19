@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 publish = false
-description = "Create for Horizon: the native mod (game glue on the mod API)"
+description = "Create for Sunrise: the native mod (game glue on the mod API)"
 
 [dependencies]
 # The pinned SDK's API crate, fetched into .sunrise/sdk/ by any `cargo sunrise-mod` command.

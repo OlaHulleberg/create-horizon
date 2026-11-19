@@ -354,7 +354,7 @@ mod tests {
 
     #[test]
     fn a_wrenched_drive_starts_over_from_its_default_state() {
-        // ChainDriveBlock.updateAfterWrenched, as Java 6.0.11 shows it (create-horizon#97): a
+        // ChainDriveBlock.updateAfterWrenched, as Java 6.0.11 shows it (create-sunrise#97): a
         // lone z drive turned onto x beside an x gearshift to its north ends a chain along z.
         let gearshift = drive(Axis::X, Part::None, true);
         let wrenched =
