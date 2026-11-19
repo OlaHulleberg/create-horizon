@@ -50,6 +50,7 @@ pub mod glue;
 pub mod graph;
 pub mod gzip;
 pub mod hose;
+pub mod item_use_overrides;
 pub mod kinetics;
 pub mod lamp;
 pub mod latch;

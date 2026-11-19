@@ -63,7 +63,7 @@ pub(super) fn detector_signal(
 
 /// `AnalogLeverBlock.useWithoutItem` (any item but the wrench, `ItemUseOverrides`): one up, or
 /// down while sneaking; the click's sound at the new state's pitch. True when it was taken.
-pub(super) fn use_lever(lv: &mut ServerLevel<'_>, pos: [i32; 3], back: bool, wrench: bool) -> bool {
+pub(crate) fn use_lever(lv: &mut ServerLevel<'_>, pos: [i32; 3], back: bool, wrench: bool) -> bool {
     if wrench {
         return false;
     }
