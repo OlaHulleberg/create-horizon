@@ -1092,7 +1092,14 @@ pub(super) fn belts_to_nbt(belts: &[([i32; 3], create_engine::belt::Inventory)])
                     Tag::List(
                         inv.items
                             .iter()
-                            .map(|i| Tag::String(i.item.as_str().into()))
+                            .map(|i| {
+                                let id = if i.count == 0 {
+                                    "minecraft:air"
+                                } else {
+                                    i.item.as_str()
+                                };
+                                Tag::String(id.into())
+                            })
                             .collect(),
                     ),
                 );
@@ -1158,13 +1165,12 @@ pub(super) fn belts_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::b
                 .zip(ids)
                 .filter_map(|(n, id)| {
                     let Tag::String(id) = id else { return None };
-                    // `ItemStack`'s codec takes a count from 1; an empty stack (which the
-                    // funnel's remainder or a pickup leaves for a tick) is `minecraft:air`
-                    // with 0.
-                    let empty = id.to_string_lossy() == "minecraft:air";
-                    let count = n[3].clamp(i32::from(!empty), 255) as u8;
-                    let mut item =
-                        create_engine::belt::Item::new(&id.to_string_lossy(), count, n[2], false);
+                    let mut item = create_engine::belt::Item::from_saved(
+                        id.to_string_lossy(),
+                        n[3],
+                        n[2],
+                        false,
+                    );
                     item.position = f32::from_bits(n[0] as u32);
                     item.side_offset = f32::from_bits(n[1] as u32);
                     item.locked = n[4] != 0;
@@ -1271,5 +1277,16 @@ mod belt_save_tests {
         let data = Compound::from([("belts".into(), belts_to_nbt(&[([0, 8, 0], inv)]))]);
         let saved = belts_from_nbt(&data);
         assert_eq!(saved[0].1.items[0], item);
+    }
+
+    #[test]
+    fn emptied_belt_stack_round_trips_empty() {
+        let mut item = create_engine::belt::Item::new("minecraft:iron_ingot", 0, 180, false);
+        item.position = 1.9708341;
+        let inv = create_engine::belt::Inventory::from_saved(vec![item], true);
+        let data = Compound::from([("belts".into(), belts_to_nbt(&[([0, 8, 0], inv)]))]);
+        let saved = belts_from_nbt(&data);
+        assert_eq!(saved[0].1.items[0].item, "minecraft:air");
+        assert_eq!(saved[0].1.items[0].count, 0);
     }
 }
