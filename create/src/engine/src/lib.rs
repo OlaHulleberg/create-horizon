@@ -82,6 +82,7 @@ pub mod rail;
 pub mod runtime_data;
 pub mod saw;
 pub mod schedule;
+pub mod scheduled;
 pub mod schematic;
 pub mod schematicannon;
 pub mod seat;
