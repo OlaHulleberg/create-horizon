@@ -1334,16 +1334,11 @@ impl CreateWorld {
             d.wheels.push(pos);
             d.wheel_checks.push(pos);
         }
-        if block == Block::Belt && !d.belt_of.contains_key(&pos) {
-            d.belt_dirty.push(pos);
-        }
         if block == Block::Depot && !d.depots.contains_key(&pos) {
             // Placed or loaded: clients draw what its block entity holds.
             d.depots.insert(pos, None);
             d.depot_changes.push(pos);
         }
-        let settings = d.settings.get(&pos).copied().unwrap_or_default();
-        let [a, b] = parts(block, info, &settings);
         let previous = d.states.get(&pos).and_then(|s| self.table.get(*s));
         // The block entity survives (another valve colour too); `KineticBlock.onPlace` still
         // treats a different block as non-equivalent.
@@ -1352,6 +1347,24 @@ impl CreateWorld {
         // A known-shape write skips it, leaving a retained block entity's information intact.
         let retain_kinetics = skip_shape_updates
             || previous.is_some_and(|(b, old)| kinetically_equivalent(b, old, block, info));
+        // A state write that is not kinetically equivalent runs `clearKineticInformation`, which
+        // a belt segment overrides to drop its `controller`, `beltLength` and `index` too. It is
+        // no segment of a belt until `initBelt` looks again, and `getController()` is itself
+        // meanwhile, so it is no neighbour of the belt's other segments.
+        if same && block == Block::Belt && !retain_kinetics {
+            d.belt_of.remove(&pos);
+            if let Some(s) = d.settings.get_mut(&pos) {
+                s.belt = Some(pos);
+            }
+            if !d.belt_dirty.contains(&pos) {
+                d.belt_dirty.push(pos);
+            }
+        }
+        if block == Block::Belt && !d.belt_of.contains_key(&pos) && !d.belt_dirty.contains(&pos) {
+            d.belt_dirty.push(pos);
+        }
+        let settings = d.settings.get(&pos).copied().unwrap_or_default();
+        let [a, b] = parts(block, info, &settings);
         if !same {
             d.kinetics.remove(pos);
         }
@@ -3517,6 +3530,7 @@ impl CreateWorld {
         for p in &b.chain {
             d.belt_of.remove(p);
             d.belt_dirty.push(*p);
+            d.kinetics.detach_kinetics(*p);
         }
         d.belt_changes.push(c);
         d.belt_saved_changes.insert(c);
@@ -5315,6 +5329,48 @@ mod tests {
         w
     }
 
+    /// The parts of `long_belt_world`'s belt states.
+    const BELT_START: u32 = 11;
+    const BELT_MIDDLE: u32 = 12;
+    const BELT_END: u32 = 13;
+
+    /// One belt of `length` segments along +z from `[0, 8, 0]` (facing south), its creative
+    /// motor at `[-1, 8, 0]` turning the START.
+    fn long_belt_world(length: i32, rpm: f32) -> CreateWorld {
+        let belt = |part| {
+            (
+                "create:belt",
+                vec![("facing", "south"), ("slope", "horizontal"), ("part", part)],
+            )
+        };
+        let names = [
+            ("create:creative_motor", vec![("facing", "east")]),
+            belt("start"),
+            belt("middle"),
+            belt("end"),
+        ];
+        states::set_range(10, 4);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        for i in 0..length {
+            let state = if i == 0 {
+                BELT_START
+            } else if i == length - 1 {
+                BELT_END
+            } else {
+                BELT_MIDDLE
+            };
+            w.block_changed(0, [0, 8, i], 0, state);
+        }
+        w.block_changed(0, [-1, 8, 0], 0, 10);
+        w.set_motor(0, [-1, 8, 0], rpm);
+        w.settle_belts(0);
+        w.tick(0, &mut Vec::new());
+        w
+    }
+
     #[test]
     fn registrations_include_only_create_block_entities() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -5355,6 +5411,41 @@ mod tests {
         assert!(w.dims[0].block_entities.registration_order(a) > original);
         w.block_changed(0, [6, 0, 0], 16, 13);
         assert_eq!(w.dims[0].block_entities.registration_order([6, 0, 0]), None);
+        states::clear_range();
+    }
+
+    /// Java #131: the slicer detaches every segment before it changes states, and a segment whose
+    /// part changed drops its controller (`clearKineticInformation`), so `propagateRotationTo`
+    /// joins neither the old belt to the new half nor the two halves. f2: the second half of a
+    /// split at segment 3 of an 8-long belt has speed 0 and no source while the first half
+    /// keeps turning at 32.
+    #[test]
+    fn slicer_split_leaves_the_cut_off_half_stopped() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = long_belt_world(8, 32.0);
+        let middle = [0, 8, 3];
+        let start_of_second = [0, 8, 4];
+        // `BeltSlicer`: `detachKinetics` + `beltLength = 0`, then each half re-forms.
+        let (controller, taken) = w.take_belt(0, middle).unwrap();
+        w.switching_block_state(0, middle, BELT_END);
+        w.block_changed(0, middle, BELT_MIDDLE, BELT_END);
+        w.switching_block_state(0, start_of_second, BELT_START);
+        w.block_changed(0, start_of_second, BELT_MIDDLE, BELT_START);
+        assert!(w.dims[0].belt_of.get(&start_of_second).is_none());
+        let (first, second) = taken.chain.split_at(4);
+        w.reform_belt(0, controller, first, taken.items);
+        w.reform_belt(
+            0,
+            start_of_second,
+            second,
+            crate::belt::Inventory::from_saved(Vec::new(), false),
+        );
+        w.settle_belts(0);
+        assert_eq!(w.speed(0, [0, 8, 0]), Some(32.0));
+        assert_eq!(w.speed(0, start_of_second), Some(0.0));
+        let saved = w.dims[0].kinetics.saved_state(start_of_second, 0).unwrap();
+        assert_eq!((saved.source, saved.network), (None, None));
+        assert_eq!(w.dims[0].belts[&start_of_second].chain.len(), 4);
         states::clear_range();
     }
 
@@ -5833,6 +5924,9 @@ mod tests {
         }
         w.switching_block_state(0, middle, 14);
         w.block_changed(0, middle, 12, 14);
+        // `BeltBlockEntity.clearKineticInformation` drops the segment's controller, so its next
+        // tick runs `initBelt` again (the glue settles belts before each solve).
+        w.settle_belts(0);
         for _ in 0..100 {
             w.tick(0, &mut events);
             assert_eq!(w.speed(0, middle), Some(32.0));

@@ -897,6 +897,20 @@ impl Kinetics {
         }
     }
 
+    /// `KineticBlockEntity.detachKinetics`: `RotationPropagator.handleRemoved` for the part at
+    /// `pos` — what it drives loses its source, while the part itself keeps its speed and
+    /// source until it is attached again (`BeltBlock.initBelt`'s `attachKinetics`).
+    pub fn detach_kinetics(&mut self, pos: [i32; 3]) {
+        let Some(ids) = self.at.get(&pos).copied() else {
+            return;
+        };
+        let mut events = Vec::new();
+        for id in ids.into_iter().filter(|id| *id != NONE) {
+            self.handle_removed(id, &mut events);
+        }
+        self.pending_events.extend(events);
+    }
+
     /// `GearshiftBlock.detachKinetics` (with `reAttachNextTick`): remove downstream rotation,
     /// retaining the entity's own source and network. The re-attach is a scheduled block
     /// tick (`worldIn.scheduleTick(pos, this, 1, TickPriority.EXTREMELY_HIGH)`, run as
