@@ -38,7 +38,7 @@ item vaults) between three stations.
 
 | File | Alt text | Caption |
 |---|---|---|
-| `banner.webp` | Create for Sunrise & Horizon: a copper locomotive on a stone viaduct at sunset beside a Create factory and windmill | — |
+| `banner.webp` | Create for Sunrise: a copper locomotive on a stone viaduct at sunset beside a Create factory and windmill | — |
 | `panel-machines.webp` | A Create factory hall with belts, mechanical arms, presses, mixers on blaze burners and nixie tubes | Every machine, natively in Rust (baked in) |
 | `panel-trains.webp` | A copper-and-brass locomotive coming off a viaduct towards the camera | Trains, contraptions, logistics (baked in) |
 | `panel-kinetics.webp` | An eight-bladed windmill on a tall tower at sunset | Kinetics you can watch (baked in) |

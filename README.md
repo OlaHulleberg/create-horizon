@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/media/banner.webp" alt="Create for Sunrise &amp; Horizon: a copper locomotive on a stone viaduct at sunset beside a Create factory and windmill" width="100%">
+  <img src="docs/media/banner.webp" alt="Create for Sunrise: a copper locomotive on a stone viaduct at sunset beside a Create factory and windmill" width="100%">
 </p>
 
 <p align="center">
@@ -14,10 +14,10 @@
   <a href="https://playsunrise.net"><img src="https://img.shields.io/badge/runs%20on-Sunrise%20(Minecraft%2026.3)-F0795A" alt="Runs on Sunrise, Minecraft 26.3"></a>
 </p>
 
-# Create for Sunrise & Horizon
+# Create for Sunrise
 
 **[Create](https://github.com/Creators-of-Create/Create) 6.0.11, ported to native Rust.** A native mod for
-Sunrise and Horizon. No Java at build time or play time, and no mixins.
+Sunrise. No Java at build time or play time, and no mixins.
 
 - **[Sunrise](https://playsunrise.net)** ([GitHub](https://github.com/sunrise-org/sunrise)): works now.
 - **Horizon**: its mod API has shipped. The port is built and tested on Sunrise and not yet tried on Horizon.
@@ -74,8 +74,8 @@ You need:
 Then:
 
 ```sh
-git clone https://github.com/OlaHulleberg/create-horizon.git
-cd create-horizon/tools/create-data
+git clone https://github.com/OlaHulleberg/create-sunrise.git
+cd create-sunrise/tools/create-data
 
 # Assemble the mod. This downloads Create's official jar from Modrinth into your cache
 # and checks its SHA-512. Offline? Add --jar /path/to/create-1.21.1-6.0.10.jar

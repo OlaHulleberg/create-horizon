@@ -1,6 +1,6 @@
 # Loading saves without kinetic state
 
-This is a migration of create-horizon's previous save format, **not Create behaviour**.
+This is a migration of an older create-sunrise save format, **not Create behaviour**.
 Create's persistence and rotation propagation remain in their own implementation paths.
 The migration is implemented in `create/src/engine/src/kinetics/legacy_load.rs`.
 
