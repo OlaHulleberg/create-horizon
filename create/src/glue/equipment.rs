@@ -24,11 +24,9 @@
 //!
 //! Left out, for want of the API: the helmet keeps the wearer's air full on the server only: a client
 //! cannot set its own player's air (`set_air_supply` is the server's), and the server's value
-//! never changes, so the client's bubbles still run down (no damage is taken). Using a backtank's
-//! air rewrites the worn stack (`set_equipment`), which plays its equip sound each second: Create
-//! changes the stack in place, which the API has no way to do. The Capacity enchantment is read
-//! from a stack's components, but the game's item enchantment table does not hold a native
-//! mod's enchantments, so it is not offered by enchanting tables nor shown in tooltips.
+//! never changes, so the client's bubbles still run down (no damage is taken). The Capacity
+//! enchantment is read from a stack's components, but the game's item enchantment table does not
+//! hold a native mod's enchantments, so it is not offered by enchanting tables nor shown in tooltips.
 //! A placed backtank is put on by a click with the chest free (`BacktankBlock.useItemOn`).
 
 use super::server::ServerLevel;
@@ -41,9 +39,10 @@ use create_engine::equipment::{
 };
 use mod_api::{
     AttributeModifier, AttributeOperation, BlockDropsEvent, BreakBlockEvent, Compound,
-    EntityPlaceEvent, EquipmentSlot, Flow, GameMode, Hand, HostSide, Identifier, ItemKey, ItemPart,
-    ItemStack, LevelHost, LivingRef, ModifierLifetime, OnBlockPlacedByEvent, PlayerRef,
-    PlayerTickPostEvent, Registrar, RegistrationContext, ServerHost, SoundSource, Tag,
+    EntityPlaceEvent, EquipmentSlot, Flow, GameMode, Hand, HostSide, HostTransaction, Identifier,
+    ItemKey, ItemPart, ItemPlace, ItemStack, LevelHost, LivingRef, ModifierLifetime,
+    OnBlockPlacedByEvent, PlayerRef, PlayerTickPostEvent, Registrar, RegistrationContext,
+    ServerHost, SoundSource, StackError, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -73,6 +72,8 @@ const ARMOR: [EquipmentSlot; 4] = [
     EquipmentSlot::Legs,
     EquipmentSlot::Feet,
 ];
+/// `ItemPlace::PlayerSlot` numbers the four armour slots from feet (100) to head.
+const HEAD_INVENTORY_SLOT: i32 = 103;
 
 /// The copper and netherite backtanks' item keys, requested at registration.
 static BACKTANK_ITEMS: std::sync::OnceLock<[ItemKey; 2]> = std::sync::OnceLock::new();
@@ -189,7 +190,11 @@ impl Subsystem for Equipment {
             return Flow::Continue;
         };
         if let Some(tank) = tank {
-            set_stack_air(&mut stack, tank.air);
+            if let Err(error) = set_stack_air(&mut stack, tank.air) {
+                crate::create_log!(
+                    "[create] picked-up backtank air could not be written: {error:?}"
+                );
+            }
             set_capacity(&mut stack, tank.capacity);
         }
         let at = pos.map(|v| f64::from(v) + 0.5);
@@ -557,7 +562,9 @@ impl Subsystem for Equipment {
             .iter_mut()
             .find(|d| Some(d.stack.item()) == item)
         {
-            set_stack_air(&mut drop.stack, tank.air);
+            if let Err(error) = set_stack_air(&mut drop.stack, tank.air) {
+                crate::create_log!("[create] dropped backtank air could not be written: {error:?}");
+            }
             set_capacity(&mut drop.stack, tank.capacity);
         }
         Flow::Continue
@@ -677,7 +684,7 @@ fn stack_air(stack: &ItemStack) -> i32 {
     }
 }
 
-fn set_stack_air(stack: &mut ItemStack, air: i32) {
+fn set_stack_air(stack: &mut ItemStack, air: i32) -> Result<(), StackError> {
     let mut c = match stack
         .components()
         .and_then(|c| c.as_nbt().get(&"minecraft:custom_data".into()))
@@ -687,7 +694,7 @@ fn set_stack_air(stack: &mut ItemStack, air: i32) {
     };
     c.insert(AIR_KEY.into(), Tag::Int(air));
     let patch = Compound::from([("minecraft:custom_data".into(), Tag::Compound(c))]);
-    let _ = stack.apply_components(&patch);
+    stack.apply_components(&patch)
 }
 
 /// The stack's Capacity enchantment level (`getEnchantmentLevel(CAPACITY)`).
@@ -817,8 +824,10 @@ fn breathe(host: &mut dyn ServerHost, player: PlayerRef, fire_resistant: bool) {
         now,
     );
     super::advancements::diving(host, player, breath.refill, breath.lava_diving);
-    if let Some(slot) = breath.consume {
-        consume_air(host, player, slot, 1);
+    if let Some(slot) = breath.consume
+        && !consume_air(host, player, slot, 1)
+    {
+        return;
     }
     if breath.refill {
         // `setRefillAirAmount(getMaxAirSupply())`.
@@ -827,21 +836,32 @@ fn breathe(host: &mut dyn ServerHost, player: PlayerRef, fire_resistant: bool) {
 }
 
 /// `BacktankUtil.consumeAir` on the tank in armour slot `slot`, with its warnings.
-fn consume_air(host: &mut dyn ServerHost, player: PlayerRef, slot: usize, amount: i32) {
-    let Some(living) = host.living(player.entity()) else {
-        return;
+/// A refused write spends no air and grants no protection.
+fn consume_air(host: &mut dyn ServerHost, player: PlayerRef, slot: usize, amount: i32) -> bool {
+    let place = ItemPlace::PlayerSlot {
+        player: player.uuid(),
+        // Our armour order starts at the head; inventory slots count from the feet.
+        slot: HEAD_INVENTORY_SLOT - slot as i32,
     };
-    let Some(mut stack) = living.equipment(&*host, ARMOR[slot]) else {
-        return;
+    let Ok(warnings) = host.transaction(|host, tx| {
+        let mut warnings = None;
+        place
+            .edit(host, tx, |stack| {
+                let (after, triggered) = eq::consume_air(stack_air(stack), capacity(stack), amount);
+                if set_stack_air(stack, after).is_ok() {
+                    warnings = Some(triggered);
+                }
+            })
+            .map_err(|_| ())?;
+        warnings.ok_or(())
+    }) else {
+        return false;
     };
-    let (after, warnings) = eq::consume_air(stack_air(&stack), capacity(&stack), amount);
-    set_stack_air(&mut stack, after);
-    let _ = living.set_equipment(host, ARMOR[slot], Some(stack));
     if warnings.is_empty() {
-        return;
+        return true;
     }
     let Some(name) = player.name(&*host) else {
-        return;
+        return true;
     };
     for w in warnings {
         // sendWarning: DENY and STEAM at the player, then a subtitle under an empty title.
@@ -878,6 +898,7 @@ fn consume_air(host: &mut dyn ServerHost, player: PlayerRef, slot: usize, amount
         ));
         commands.run_command(&format!("title {name} title \"\""));
     }
+    true
 }
 
 /// `BacktankUtil.canAbsorbDamage`: creative players pay nothing; else the emptiest worn tank
@@ -893,8 +914,7 @@ pub(crate) fn absorb(host: &mut dyn ServerHost, player: PlayerRef, uses_per_tank
     let Some(first) = eq::with_air(&tanks).first().copied() else {
         return false;
     };
-    consume_air(host, player, first.slot, eq::absorb_cost(uses_per_tank));
-    true
+    consume_air(host, player, first.slot, eq::absorb_cost(uses_per_tank))
 }
 
 /// The gear in each hand.
