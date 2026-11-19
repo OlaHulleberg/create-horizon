@@ -14,8 +14,8 @@ use create_engine::kinetics::Dir;
 use create_engine::observe::{self, CENTRE_REACH, Seen, Slot, Watch};
 use create_engine::parts::StateInfo;
 use mod_api::{
-    BlockClick, Command, CommandArgumentValue, Flow, HostTransaction, ItemStack, PlayerRef,
-    RegisterCommandsEvent, RunModCommandEvent, ServerHost, Text,
+    BlockClick, Command, CommandArgumentValue, Flow, HostTransaction, InteractionResult, ItemStack,
+    PlayerRef, RegisterCommandsEvent, RunModCommandEvent, ServerHost, Text,
 };
 
 /// `getSignal` / `getDirectSignal` of an analog lever (its block entity's state), a smart
@@ -61,12 +61,18 @@ pub(super) fn detector_signal(
     }
 }
 
-/// `AnalogLeverBlock.useWithoutItem` (any item but the wrench, `ItemUseOverrides`): one up, or
-/// down while sneaking; the click's sound at the new state's pitch. True when it was taken.
-pub(crate) fn use_lever(lv: &mut ServerLevel<'_>, pos: [i32; 3], back: bool, wrench: bool) -> bool {
-    if wrench {
-        return false;
-    }
+/// `AnalogLeverBlock.useItemOn`, which the lever does not override: `BlockBehaviour.useItemOn`
+/// answers `PASS_TO_DEFAULT_BLOCK_INTERACTION` whatever the hand holds, so a click with an item
+/// goes on to `useWithoutItem` for the main hand (`ServerPlayerGameMode.useItemOn`). Only the
+/// wrench gets here with an item: `ItemUseOverrides` takes every other click first, and a
+/// sneaking player's item skips the block. None for an empty hand, whose click is the lever's own.
+pub(crate) fn lever_use_item_on(held: Option<&str>) -> Option<InteractionResult> {
+    held.map(|_| InteractionResult::TryWithEmptyHand)
+}
+
+/// `AnalogLeverBlock.useWithoutItem`: one up, or down while sneaking; the click's sound at the
+/// new state's pitch. True when it was taken.
+pub(crate) fn use_lever(lv: &mut ServerLevel<'_>, pos: [i32; 3], back: bool) -> bool {
     let dim = lv.dim;
     let now = lv.game_time();
     let Some(state) = with_world(|w| w.dims[dim].levers.click(pos, back, now)).flatten() else {
@@ -880,5 +886,25 @@ pub(crate) fn funnel_transfer(lv: &mut ServerLevel<'_>, funnel: [i32; 3], item: 
             lv.set_flags(pos, &[("powered", true)], update_all());
             lv.update_signal_neighbors(pos);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue #111: a wrench used on an analog lever without sneaking clicks it. The lever has
+    /// no `useItemOn` of its own, so the click goes on to `useWithoutItem` (one up) for any
+    /// held item; an empty hand is the lever's own click.
+    #[test]
+    fn a_held_item_goes_on_to_the_levers_use_without_item() {
+        for held in ["create:wrench", "minecraft:stick"] {
+            assert_eq!(
+                lever_use_item_on(Some(held)),
+                Some(InteractionResult::TryWithEmptyHand),
+                "{held}"
+            );
+        }
+        assert_eq!(lever_use_item_on(None), None);
     }
 }
