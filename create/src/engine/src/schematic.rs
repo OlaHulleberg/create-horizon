@@ -845,6 +845,53 @@ pub const MAX_TOTAL_SCHEMATIC_SIZE_KB: u64 = 256;
 /// `CSchematics.maxSchematics`: uploads a player keeps before the oldest is replaced.
 pub const MAX_SCHEMATICS: usize = 10;
 
+/// Whether a same-name file counts toward the limit before an upload.
+#[derive(Clone, Copy)]
+pub enum SchematicUpload {
+    /// `handleNewUpload` removes a same-name file before counting.
+    Table,
+    /// `handleInstantSchematic` counts before replacing a same-name file.
+    Instant,
+}
+
+/// `ServerSchematicLoader`: a player's upload evicts the oldest eligible schematic at the cap.
+/// Holds just one candidate across all pages of the player's upload directory.
+#[derive(Default)]
+pub struct UploadRetention {
+    count: usize,
+    oldest: Option<(u64, String)>,
+}
+
+impl UploadRetention {
+    pub fn record(
+        &mut self,
+        upload: SchematicUpload,
+        incoming: &str,
+        name: String,
+        modified_millis: u64,
+    ) {
+        if (matches!(upload, SchematicUpload::Table) && name == incoming) || !valid_file(&name) {
+            return;
+        }
+        self.count += 1;
+        // For equal modification times, keep the result independent of listing order.
+        let candidate = (modified_millis, name);
+        if self
+            .oldest
+            .as_ref()
+            .is_none_or(|oldest| candidate < *oldest)
+        {
+            self.oldest = Some(candidate);
+        }
+    }
+
+    pub fn evict(self) -> Option<String> {
+        self.oldest
+            .filter(|_| self.count >= MAX_SCHEMATICS)
+            .map(|(_, name)| name)
+    }
+}
+
 pub fn size_allowed(bytes: u64) -> bool {
     bytes <= MAX_TOTAL_SCHEMATIC_SIZE_KB * 1000
 }
@@ -1089,6 +1136,35 @@ pub fn deferred(name: &str, props: &BTreeMap<String, String>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn table_and_instant_uploads_count_same_name_replacements_differently() {
+        use SchematicUpload::{Instant, Table};
+        let eviction = |upload, incoming: &str, count| {
+            let mut retention = UploadRetention::default();
+            for i in 0..count {
+                // File listing order is not age order.
+                retention.record(upload, incoming, format!("{i}.nbt"), 100 - i as u64);
+            }
+            retention.record(upload, incoming, "notes.txt".into(), 0);
+            retention.evict()
+        };
+        let oldest = format!("{}.nbt", MAX_SCHEMATICS - 1);
+        assert_eq!(eviction(Table, "new.nbt", MAX_SCHEMATICS - 1), None);
+        assert_eq!(eviction(Table, "0.nbt", MAX_SCHEMATICS), None);
+        assert_eq!(
+            eviction(Table, "new.nbt", MAX_SCHEMATICS).as_deref(),
+            Some(oldest.as_str())
+        );
+        assert_eq!(
+            eviction(Instant, "0.nbt", MAX_SCHEMATICS).as_deref(),
+            Some(oldest.as_str())
+        );
+        assert_eq!(
+            eviction(Instant, &oldest, MAX_SCHEMATICS).as_deref(),
+            Some(oldest.as_str())
+        );
+    }
 
     fn props(p: &[(&str, &str)]) -> BTreeMap<String, String> {
         p.iter()

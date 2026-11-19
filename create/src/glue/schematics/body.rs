@@ -3,14 +3,14 @@
 //! encoding), a schematic's data on its stack (`minecraft:custom_data`) and each block's
 //! item (`Block.asItem`).
 //!
-//! The files live in the mod's game data folder (`horizon-mod-data/create/schematics/`): the
+//! The files live in the mod's game data folder (`sunrise-mod-data/create/schematics/`): the
 //! API reaches a mod's own folders only, not the game folder's `schematics/` where Create keeps
 //! them.
 
 use crate::glue::packages::body::{CustomData, set_custom};
 use create_engine::gzip;
-use create_engine::schematic::{Nbt, SchematicData};
-use mod_api::{ConfigEntryKind, ConfigFiles, ConfigPath, Host, ItemStack, Tag};
+use create_engine::schematic::{Nbt, SchematicData, SchematicUpload, UploadRetention};
+use mod_api::{ConfigEntryKind, ConfigFileError, ConfigFiles, ConfigPath, Host, ItemStack, Tag};
 use std::collections::HashMap;
 
 /// `SchematicItem.loadSchematic`'s `NbtAccounter.create(0x20000000L)`.
@@ -159,13 +159,46 @@ pub fn size(host: &dyn Host, rel: &str) -> Option<u64> {
     }
 }
 
-pub fn copy(host: &dyn Host, from: &str, to: &str) -> Result<(), String> {
-    let (from, to) = (
-        path(from).ok_or("not a file name")?,
-        path(to).ok_or("not a file name")?,
-    );
-    let bytes = files(host).read(&from).map_err(|e| format!("{e:?}"))?;
-    files(host).write(&to, &bytes).map_err(|e| format!("{e:?}"))
+/// Store a local schematic as its owner's upload, evicting the oldest at the cap.
+/// Table uploads exclude the destination name before counting; instant uploads include it.
+pub(super) fn upload(
+    host: &dyn Host,
+    from: &str,
+    to: &str,
+    upload: SchematicUpload,
+) -> Result<(), ConfigFileError> {
+    let from = path(from).ok_or(ConfigFileError::InvalidPath)?;
+    let to = path(to).ok_or(ConfigFileError::InvalidPath)?;
+    let (folder, name) = to
+        .as_str()
+        .rsplit_once('/')
+        .ok_or(ConfigFileError::InvalidPath)?;
+    let upload_folder = ConfigPath::new(folder)?;
+    let service = files(host);
+    let bytes = service.read(&from)?;
+
+    let mut retention = UploadRetention::default();
+    let mut after = None;
+    loop {
+        let page = match service.list(&upload_folder, after.as_deref(), 256) {
+            Ok(page) => page,
+            Err(ConfigFileError::NotFound) => break,
+            Err(error) => return Err(error),
+        };
+        let Some(last) = page.last() else {
+            break;
+        };
+        after = Some(last.name.clone());
+        for entry in page {
+            if entry.stat.kind == ConfigEntryKind::File {
+                retention.record(upload, name, entry.name, entry.stat.modified_millis);
+            }
+        }
+    }
+    if let Some(oldest) = retention.evict() {
+        service.remove(&ConfigPath::try_from(format!("{folder}/{oldest}"))?)?;
+    }
+    service.write(&to, &bytes)
 }
 
 const KEYS: [&str; 7] = [
