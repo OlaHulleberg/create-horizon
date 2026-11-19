@@ -293,6 +293,25 @@ impl BlockEntityPart for Drawn {
     }
 }
 
+/// `WaterWheelBlockEntity.determineAndApplyFlowScore`: the flow at the cells a wheel turns on
+/// `axis` reads (`getOffsetsToCheck`) sets its flow score, and it earns the water (or lava)
+/// wheel advancement when the flow turns it.
+pub fn determine_flow(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, large: bool) {
+    let offsets = if large {
+        create_engine::waterwheel::large_offsets(axis)
+    } else {
+        create_engine::waterwheel::small_offsets(axis).to_vec()
+    };
+    let samples: Vec<([i32; 3], [f64; 3])> = offsets
+        .into_iter()
+        .map(|o| (o, flow_at(lv, add(pos, o))))
+        .collect();
+    let score = create_engine::waterwheel::flow_score(axis, &samples);
+    super::super::advancements::water_wheel(lv, pos, samples.iter().map(|s| s.0), score != 0);
+    let dim = lv.dim;
+    with_world(|w| w.set_wheel_flow(dim, pos, score));
+}
+
 /// The flow at `at` a wheel reads (`getFlowVectorAtPosition`): the fluid's, or a bubble
 /// column's straight up or down (`DRAG_DOWN`).
 pub fn flow_at(lv: &ServerLevel<'_>, at: [i32; 3]) -> [f64; 3] {

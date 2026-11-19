@@ -177,13 +177,16 @@ pub struct Dimension {
     wheels: Vec<[i32; 3]>,
     /// Water wheels to look at now: placed, or a neighbour changed.
     wheel_checks: Vec<[i32; 3]>,
-    /// Large water wheels placed or whose neighbour changed: their structure and `extension`
-    /// are looked at after the tick (`LargeWaterWheelBlock.onPlace`'s scheduled tick,
-    /// `updateShape`); large wheels removed (with their axis), whose structure goes; structure
-    /// blocks removed (with the way they pointed), whose wheel breaks.
+    /// Large water wheels whose scheduled tick came: a placed one or one whose frame changed
+    /// (`LargeWaterWheelBlock.onPlace`; `WaterWheelStructuralBlock.updateShape` schedules it),
+    /// which rebuilds the frame and looks at the flow after the tick.
     pub large_wheel_checks: Vec<[i32; 3]>,
-    pub large_wheels_gone: Vec<([i32; 3], crate::kinetics::Axis)>,
-    pub wheel_structures_gone: Vec<([i32; 3], crate::kinetics::Dir)>,
+    /// Frame cells whose own scheduled tick came (`WaterWheelStructuralBlock.updateShape`
+    /// schedules it for a cell that no longer holds its wheel; `tick` takes it away).
+    pub frame_ticks: Vec<[i32; 3]>,
+    /// Wheels whose frame cell went while it still held them, for the host to break
+    /// (`WaterWheelStructuralBlock.onRemove`: `level.destroyBlock(master, true)`).
+    broken_wheels: Vec<[i32; 3]>,
     /// Blocks whose redstone power may have changed (a clutch or gearshift that was placed or
     /// whose neighbour changed), checked after the level's tick.
     redstone: Vec<[i32; 3]>,
@@ -869,6 +872,14 @@ fn follows_power(block: Block) -> bool {
 /// the creative motor's and the rotation speed controller's.
 fn has_speed_setting(block: Block) -> bool {
     matches!(block, Block::CreativeMotor | Block::RotationSpeedController)
+}
+
+/// `Level.scheduleTick(pos, LARGE_WATER_WHEEL, 1)` if it is not already due: a wheel's frame and
+/// flow are looked at on its next tick.
+fn schedule_large_wheel(d: &mut Dimension, pos: [i32; 3]) {
+    if !d.large_wheel_checks.contains(&pos) {
+        d.large_wheel_checks.push(pos);
+    }
 }
 
 fn is_chain_drive(block: Block) -> bool {
@@ -1712,25 +1723,21 @@ impl CreateWorld {
                 let d = &mut self.dims[dim];
                 d.wheels.push(pos);
                 d.wheel_checks.push(pos);
-                d.large_wheel_checks.push(pos);
+                schedule_large_wheel(d, pos);
             }
             self.place(dim, pos, new);
         } else {
             if let Some(c) = self.engine_of(Some(old)) {
                 self.engine_removed(dim, pos, c);
             }
-            match self.table.get(old) {
-                Some((Block::LargeWaterWheel, i)) => {
-                    if let Some(a) = i.axis {
-                        self.dims[dim].large_wheels_gone.push((pos, a));
-                    }
-                }
-                Some((Block::WaterWheelStructure, i)) => {
-                    if let Some(f) = i.facing {
-                        self.dims[dim].wheel_structures_gone.push((pos, f));
-                    }
-                }
-                _ => {}
+            // `WaterWheelStructuralBlock.onRemove`: a cell that still holds its wheel takes
+            // the wheel with it. One that does not just goes; the cells around it are told
+            // by their own `updateShape`.
+            if self.table.get(old).map(|(b, _)| b) == Some(Block::WaterWheelStructure)
+                && self.frame_still_valid(dim, pos, old)
+                && let Some(master) = self.wheel_master(dim, pos, old)
+            {
+                self.dims[dim].broken_wheels.push(master);
             }
             match self.table.get(old).map(|(b, _)| b) {
                 Some(Block::FluidTank) => self.dims[dim].boiler_checks.push(pos),
@@ -2779,11 +2786,19 @@ impl CreateWorld {
             Some(Block::Deployer) => self.dims[dim].deployer_power_checks.push(pos),
             Some(Block::SequencedGearshift) => self.dims[dim].sequencer_checks.push(pos),
             Some(Block::WaterWheel) => self.dims[dim].wheel_checks.push(pos),
-            Some(Block::LargeWaterWheel) => self.dims[dim].large_wheel_checks.push(pos),
-            // `WaterWheelStructuralBlock.updateShape`: its wheel looks at its flow again.
+            Some(Block::LargeWaterWheel) => schedule_large_wheel(&mut self.dims[dim], pos),
+            // `WaterWheelStructuralBlock.updateShape`: the cell looks at its wheel now, and
+            // what it decides is a scheduled block tick one later. A frame that still holds
+            // its wheel schedules the wheel's tick (`LargeWaterWheelBlock.tick` rebuilds the
+            // frame and looks at the flow); one that does not schedules its own, which takes
+            // it away unless the frame holds it again by then (`tick`).
             Some(Block::WaterWheelStructure) => {
-                if let Some(master) = self.wheel_master(dim, pos, state) {
-                    self.dims[dim].wheel_checks.push(master);
+                if self.frame_still_valid(dim, pos, state) {
+                    if let Some(master) = self.wheel_master(dim, pos, state) {
+                        schedule_large_wheel(&mut self.dims[dim], master);
+                    }
+                } else if !self.dims[dim].frame_ticks.contains(&pos) {
+                    self.dims[dim].frame_ticks.push(pos);
                 }
             }
             Some(b) if latch_kind(b).is_some() => self.dims[dim].latch_checks.push(pos),
@@ -2878,6 +2893,59 @@ impl CreateWorld {
             }
         }
         None
+    }
+
+    /// `WaterWheelStructuralBlock.stillValid(level, pos, state, false)`: whether the frame cell
+    /// `state` at `pos` reaches a large wheel, directly or through the cell beside it.
+    pub fn frame_still_valid(&self, dim: usize, pos: [i32; 3], state: u32) -> bool {
+        self.frame_holds(dim, pos, state, false)
+    }
+
+    /// `stillValid` with its `directlyAdjacent`: a cell beside the wheel holds it when it points
+    /// at one that turns on another axis, a corner cell when the cell it points at does.
+    fn frame_holds(&self, dim: usize, pos: [i32; 3], state: u32, directly_adjacent: bool) -> bool {
+        let Some((Block::WaterWheelStructure, info)) = self.table.get(state) else {
+            return false;
+        };
+        let Some(facing) = info.facing else {
+            return false;
+        };
+        let o = facing.offset();
+        let target = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+        let target_state = self.dims[dim].states.get(&target).copied();
+        if !directly_adjacent
+            && let Some(inner) = target_state
+            && self.frame_holds(dim, target, inner, true)
+        {
+            return true;
+        }
+        target_state.is_some_and(|s| {
+            self.table.get(s).is_some_and(|(b, i)| {
+                b == Block::LargeWaterWheel && i.axis.is_some_and(|a| a != facing.axis())
+            })
+        })
+    }
+
+    /// Wheels whose frame cell went while it still held them
+    /// (`WaterWheelStructuralBlock.onRemove`), for the host to break with drops.
+    pub fn take_broken_wheels(&mut self, dim: usize) -> Vec<[i32; 3]> {
+        std::mem::take(&mut self.dims[dim].broken_wheels)
+    }
+
+    /// Frame cells whose scheduled tick came (`WaterWheelStructuralBlock.tick`): the ones that
+    /// no longer hold their wheel go; a frame that holds them again leaves them be.
+    pub fn take_frame_ticks(&mut self, dim: usize) -> Vec<[i32; 3]> {
+        let due = std::mem::take(&mut self.dims[dim].frame_ticks);
+        due.into_iter()
+            .filter(|p| {
+                let Some(state) = self.dims[dim].states.get(p) else {
+                    return false;
+                };
+                self.table.get(*state).is_some_and(|(b, _)| {
+                    b == Block::WaterWheelStructure && !self.frame_holds(dim, *p, *state, false)
+                })
+            })
+            .collect()
     }
 
     /// Millstones that turn: the only ones that do anything this tick (Create's tick returns at
@@ -7717,6 +7785,100 @@ mod tests {
         );
         let reloaded = w.dims[0].kinetics.saved_state(shaft, 0).unwrap();
         assert_eq!(reloaded.network.map(|n| n.size), Some(1));
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_large_wheels_frame_goes_a_tick_after_its_update_shape_decided() {
+        // Issue #91, Java ticks 40-41 of create-fuzz seed 436: a large wheel's frame build ran
+        // into a cell it could not replace and broke the wheel (`LargeWaterWheelBlock.tick`),
+        // leaving the cells it had placed. `WaterWheelStructuralBlock.updateShape` decides
+        // at once: the four cells beside the wheel no longer hold it and schedule their own
+        // tick; the corners are not told by the wheel at all, so they go on the tick after the
+        // cells beside it do (`tick`: stillValid, then air).
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let facings = ["down", "up", "north", "south", "east", "west"];
+        let mut names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
+            "create:large_water_wheel",
+            vec![("axis", "y"), ("extension", "false")],
+        )];
+        names.extend(
+            facings
+                .iter()
+                .map(|f| ("create:water_wheel_structure", vec![("facing", *f)])),
+        );
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let cell = |facing: crate::kinetics::Dir| -> u32 {
+            11 + facings
+                .iter()
+                .position(|f| *f == format!("{facing:?}").to_lowercase())
+                .unwrap() as u32
+        };
+        let wheel = [0, 0, 0];
+        w.block_changed(0, wheel, 0, 10);
+        let frame = crate::waterwheel::structure(crate::kinetics::Axis::Y);
+        for (o, f) in &frame {
+            w.block_changed(0, [o[0], o[1], o[2]], 0, cell(*f));
+        }
+        // The frame still holds: a cell's shape update schedules the wheel's tick
+        // (`Level.scheduleTick(master, LARGE_WATER_WHEEL, 1)`), not its own removal.
+        let (side, facing) = frame
+            .iter()
+            .find(|(o, _)| o[0].abs() + o[2].abs() == 1)
+            .map(|(o, f)| (*o, *f))
+            .expect("a cell beside the wheel");
+        w.neighbor_changed(0, side, cell(facing));
+        assert_eq!(w.dims[0].large_wheel_checks, vec![wheel]);
+        w.dims[0].large_wheel_checks.clear();
+        assert!(w.take_frame_ticks(0).is_empty());
+        // The build failed on the east cell: the wheel broke, telling the six blocks around it.
+        w.block_changed(0, wheel, 10, 0);
+        for d in crate::kinetics::Dir::ALL {
+            let q = [d.offset()[0], d.offset()[1], d.offset()[2]];
+            if let Some(s) = w.state_at(0, q) {
+                w.neighbor_changed(0, q, s);
+            }
+        }
+        let adjacent: Vec<[i32; 3]> = frame
+            .iter()
+            .map(|(o, _)| *o)
+            .filter(|o| o[0].abs() + o[2].abs() == 1)
+            .collect();
+        let corners: Vec<[i32; 3]> = frame
+            .iter()
+            .map(|(o, _)| *o)
+            .filter(|o| o[0].abs() == 1 && o[2].abs() == 1)
+            .collect();
+        let mut due = w.take_frame_ticks(0);
+        due.sort();
+        let mut want = adjacent.clone();
+        want.sort();
+        assert_eq!(due, want, "the cells beside the wheel tick next");
+        assert!(
+            w.take_frame_ticks(0).is_empty(),
+            "the corners were not told yet"
+        );
+        // Their tick takes them away, which tells the corners in turn.
+        for p in adjacent {
+            let state = w.state_at(0, p).unwrap();
+            w.block_changed(0, p, state, 0);
+            for d in crate::kinetics::Dir::ALL {
+                let o = d.offset();
+                let q = [p[0] + o[0], p[1] + o[1], p[2] + o[2]];
+                if let Some(s) = w.state_at(0, q) {
+                    w.neighbor_changed(0, q, s);
+                }
+            }
+        }
+        let mut due = w.take_frame_ticks(0);
+        due.sort();
+        let mut want = corners;
+        want.sort();
+        assert_eq!(due, want, "the corners go the tick after");
         states::clear_range();
     }
 

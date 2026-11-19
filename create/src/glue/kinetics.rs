@@ -432,21 +432,7 @@ fn tick_inputs(lv: &mut ServerLevel<'_>) {
     // Water wheels whose surroundings changed, and one in 60 of the others each tick.
     let now = lv.game_time() as u64;
     for (pos, axis, large) in with_world(|w| w.take_wheel_checks(dim, now)).unwrap_or_default() {
-        let offsets = if large {
-            create_engine::waterwheel::large_offsets(axis)
-        } else {
-            create_engine::waterwheel::small_offsets(axis).to_vec()
-        };
-        let samples: Vec<([i32; 3], [f64; 3])> = offsets
-            .into_iter()
-            .map(|o| {
-                let at = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
-                (o, super::sources::waterwheels::flow_at(lv, at))
-            })
-            .collect();
-        let score = create_engine::waterwheel::flow_score(axis, &samples);
-        super::advancements::water_wheel(lv, pos, samples.iter().map(|s| s.0), score != 0);
-        with_world(|w| w.set_wheel_flow(dim, pos, score));
+        super::sources::waterwheels::determine_flow(lv, pos, axis, large);
     }
     // Clutches and gearshifts follow redstone (`ClutchBlock.neighborChanged`): `powered` is set
     // before solving, so the change turns the network in this tick's solve.
