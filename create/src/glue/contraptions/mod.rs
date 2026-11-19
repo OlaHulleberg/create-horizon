@@ -211,16 +211,11 @@ impl Subsystem for Contraptions {
         });
     }
 
-    /// `MechanicalBearingBlockEntity.onSpeedChanged` (`assembleNextTick`; a windmill's angle
-    /// runs on at its network's new speed) and `GantryShaftBlockEntity.onSpeedChanged` (the
-    /// carriages on it try to start), at the next level tick.
+    /// `GantryShaftBlockEntity.onSpeedChanged`: the carriages on it try to start, at the next
+    /// level tick. (A bearing's `onSpeedChanged` is the engine's: `flush_kinetic_callbacks`.)
     fn speed_changed(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], _speed: f32) {
-        match lv.create_block(pos) {
-            Some(Block::MechanicalBearing | Block::WindmillBearing) => {
-                bearings::bearing_speed_changed(lv.dim, pos)
-            }
-            Some(Block::GantryShaft) => bearings::gantry_carriages_on(lv, pos),
-            _ => {}
+        if lv.create_block(pos) == Some(Block::GantryShaft) {
+            bearings::gantry_carriages_on(lv, pos);
         }
     }
 
