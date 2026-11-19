@@ -581,24 +581,6 @@ impl Hooks for Create {
         glue::items::add_reload_listeners(event.listeners);
     }
 
-    fn register_range_select_item_model_property(
-        &self,
-        _context: &RegistrationContext,
-        event: &mut mod_api::RegisterRangeSelectItemModelPropertyEvent<'_>,
-    ) {
-        glue::items::spin_properties(event.properties);
-    }
-
-    fn item_model_range_property(
-        &self,
-        host: &dyn ClientHost,
-        event: &mut mod_api::ItemModelRangePropertyEvent<'_>,
-    ) {
-        if let Some(frame) = glue::items::spin(host, event.property) {
-            event.value = frame;
-        }
-    }
-
     fn item_toss(&self, host: &mut dyn ServerHost, event: &mut mod_api::ItemTossEvent) -> Flow {
         glue::advancements::item_tossed(host, event);
         Flow::Continue
@@ -684,13 +666,18 @@ impl Hooks for Create {
         glue::client_reset(host);
     }
 
-    /// Create's models the glue reads (`glue::models`) are read again from the new resources.
+    fn client_setup(&self, host: &mut dyn ClientHost, _event: &mut mod_api::ClientSetupEvent) {
+        glue::pipelines::bind_steam_jets(host);
+    }
+
+    /// Refresh handles and models after a new resource generation is published.
     fn client_resources_reloaded(
         &self,
-        _host: &mut dyn ClientHost,
+        host: &mut dyn ClientHost,
         _event: &mut mod_api::ClientResourcesReloadedEvent,
     ) {
         glue::models::forget();
+        glue::pipelines::bind_steam_jets(host);
     }
 }
 

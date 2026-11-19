@@ -1,6 +1,6 @@
 //! The one-time prepare step. Assemble the mod crate and its committed registry overlays from
 //! this repository, then generate what 26.3 needs from Create's All Rights Reserved assets
-//! (remaining item definitions, flattened/tinted models, connected texture tiles). The pinned
+//! (remaining item definitions, tinted models, connected texture tiles). The pinned
 //! jar provides unchanged files through the `[[jar]]` layer; an alternate jar or loose asset
 //! folder can supply local assets instead. Assets made from the player's jar are for their own
 //! game, never for redistribution. Data conversion belongs to `create-data registry`.
@@ -63,78 +63,16 @@ pub(crate) fn walk(
     Ok(())
 }
 
-/// The partial models Create's item renderers turn: item, part, the numeric item model property
-/// that picks its frame (the glue's `items::spin`), the axis and the pivot in model pixels
-/// (`WrenchItemRenderer`: the gear about y, 1 px off the centre; `PotatoCannonItemRenderer`: the
-/// cog about z, half a pixel up; `WorldshaperItemRenderer`: the accelerator about z, 2.5 px
-/// down).
-pub const SPINNERS: [(&str, &str, &str, char, [f64; 3]); 3] = [
-    ("wrench", "gear", "create:wrench_gear", 'y', [9.0, 7.0, 8.0]),
-    (
-        "potato_cannon",
-        "cog",
-        "create:potato_cannon_cog",
-        'z',
-        [8.0, 8.5, 8.0],
-    ),
-    (
-        "handheld_worldshaper",
-        "accelerator",
-        "create:worldshaper_accelerator",
-        'z',
-        [8.0, 5.5, 8.0],
-    ),
-];
-
-/// The frames a turning partial model is cut into, a whole turn.
-pub const SPIN_FRAMES: usize = 64;
-
-/// Frame `frame` of a turning partial model: each element turned about the pivot by the frame's
-/// angle on top of its own turn about the same axis (the parts' elements turn about that axis
-/// through the pivot, or not at all).
-fn spin_frame(doc: &Value, axis: char, pivot: [f64; 3], frame: usize) -> Value {
-    let turn = frame as f64 * 360.0 / SPIN_FRAMES as f64;
-    let mut out = doc.clone();
-    let axis_name = axis.to_string();
-    if let Some(elements) = out.get_mut("elements").and_then(Value::as_array_mut) {
-        for e in elements {
-            let (own, origin) = match e.get("rotation") {
-                Some(r) if r.get("axis").and_then(Value::as_str) == Some(axis_name.as_str()) => (
-                    r.get("angle").and_then(Value::as_f64).unwrap_or(0.0),
-                    r.get("origin").cloned(),
-                ),
-                Some(_) => continue,
-                None => (0.0, None),
-            };
-            let origin = if own == 0.0 {
-                json!(pivot)
-            } else {
-                origin.unwrap_or(json!(pivot))
-            };
-            let angle = (own + turn + 180.0).rem_euclid(360.0) - 180.0;
-            e["rotation"] = json!({ "angle": angle, "axis": axis_name, "origin": origin });
-        }
-    }
-    out
-}
-
 /// The item models of Create's `CustomRenderedItemModelRenderer`s, as 26.3 item definitions: the
-/// item's own model with the partial models its renderer draws over it, the turning ones
-/// (`SPINNERS`) as a frame picked by their property (the wand's bits, which turn about another
-/// axis than their own elements', stand still), and the cardboard sword's held model outside the
-/// GUI (`CardboardSwordItemRenderer`). None for an item drawn by its plain model.
+/// item's own model with the partial models its renderer draws over it, and the cardboard
+/// sword's held model outside the GUI. The wand's bits stand still. None for an item drawn by
+/// its plain model.
 fn custom_rendered(name: &str) -> Option<Value> {
     let model =
         |m: &str| json!({ "type": "minecraft:model", "model": format!("create:item/{name}/{m}") });
     let parts: &[&str] = match name {
         // `SymmetryWandItemRenderer`: CORE, CORE_GLOW, BITS.
         "wand_of_symmetry" => &["item", "core", "core_glow", "bits"],
-        // `WrenchItemRenderer`: GEAR.
-        "wrench" => &["item", "gear"],
-        // `PotatoCannonItemRenderer`: COG.
-        "potato_cannon" => &["item", "cog"],
-        // `WorldshaperItemRenderer`: CORE, CORE_GLOW, ACCELERATOR.
-        "handheld_worldshaper" => &["item", "core", "core_glow", "accelerator"],
         // `ExtendoGripItemRenderer`: its arms, hand and cog posed by the mod's special model
         // renderer (`create:extendo_grip`, `glue/equipment.rs`).
         // The glue's `create:extendo_grip_pose` node picks one by where it is drawn and the
@@ -180,60 +118,10 @@ fn custom_rendered(name: &str) -> Option<Value> {
         }
         _ => return None,
     };
-    let part = |p: &&str| match SPINNERS.iter().find(|s| s.0 == name && s.1 == *p) {
-        Some((_, _, property, ..)) => json!({
-            "type": "minecraft:range_dispatch",
-            "property": property,
-            "entries": (0..SPIN_FRAMES)
-                .map(|i| json!({ "threshold": i as f64, "model": model(&format!("{p}_spin/{i}")) }))
-                .collect::<Vec<_>>(),
-            "fallback": model(p),
-        }),
-        None => model(p),
-    };
-    Some(
-        json!({ "type": "minecraft:composite", "models": parts.iter().map(part).collect::<Vec<_>>() }),
-    )
-}
-
-/// A `neoforge:composite` model as Create's files write it (the nixie tube, display and stock
-/// links): a model of named `children`, each with its own textures and elements. Its children's
-/// elements, in the file's order, become the model's own, their textures joined under the
-/// model's, which vanilla's baker reads; anything else a child holds is left out.
-pub fn flatten_composite(doc: &mut Value) {
-    let Some(obj) = doc.as_object_mut() else {
-        return;
-    };
-    if obj.get("loader").and_then(Value::as_str) != Some("neoforge:composite") {
-        return;
-    }
-    obj.remove("loader");
-    let children = obj.remove("children");
-    let mut elements = Vec::new();
-    let mut textures = obj
-        .get("textures")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    if let Some(Value::Object(children)) = children {
-        for child in children.values() {
-            let Some(child) = child.as_object() else {
-                continue;
-            };
-            if let Some(Value::Object(t)) = child.get("textures") {
-                for (k, v) in t {
-                    textures.entry(k.clone()).or_insert_with(|| v.clone());
-                }
-            }
-            if let Some(Value::Array(e)) = child.get("elements") {
-                elements.extend(e.iter().cloned());
-            }
-        }
-    }
-    if !textures.is_empty() {
-        obj.insert("textures".into(), Value::Object(textures));
-    }
-    obj.insert("elements".into(), Value::Array(elements));
+    Some(json!({
+        "type": "minecraft:composite",
+        "models": parts.iter().map(|part| model(part)).collect::<Vec<_>>(),
+    }))
 }
 
 /// The sliding doors whose block entity draws them while they are not `visible`.
@@ -419,67 +307,10 @@ fn layered(sources: &[PathBuf]) -> Result<bool, String> {
     Ok(hash == crate::jar::CREATE.sha512)
 }
 
-/// Vanilla's `template_chain` with `minecraft:block/iron_chain`, its texture scrolled `k` pixels
-/// down: the plane's top part shows the texture from `k` on, the bottom part its first `k` rows.
-fn scrolled_chain(k: u32) -> Value {
-    let k = f64::from(k);
-    let rotation = json!({ "origin": [8, 8, 8], "axis": "y", "angle": 45 });
-    let mut elements = Vec::new();
-    // (from, to, the face names, each face's u range)
-    let planes = [
-        (
-            [6.5, 8.0],
-            [9.5, 8.0],
-            ["north", "south"],
-            [[3.0, 0.0], [0.0, 3.0]],
-        ),
-        (
-            [8.0, 6.5],
-            [8.0, 9.5],
-            ["west", "east"],
-            [[6.0, 3.0], [3.0, 6.0]],
-        ),
-    ];
-    for (from, to, faces, us) in planes {
-        // (y from, y to, v from, v to), v running down from the face's top: the top part shows
-        // rows `k` to 16, the bottom part the wrapped rows 0 to `k`.
-        for (y0, y1, v0, v1) in [(k, 16.0, k, 16.0), (0.0, k, 0.0, k)] {
-            let mut f = Map::new();
-            for (name, u) in faces.iter().zip(us) {
-                f.insert(
-                    (*name).into(),
-                    json!({ "uv": [u[0], v0, u[1], v1], "texture": "#all" }),
-                );
-            }
-            elements.push(json!({
-                "from": [from[0], y0, from[1]],
-                "to": [to[0], y1, to[1]],
-                "rotation": rotation,
-                "shade_direction_override": "up",
-                "faces": f,
-            }));
-        }
-    }
-    json!({
-        "parent": "minecraft:block/block",
-        "textures": { "particle": "minecraft:block/iron_chain", "all": "minecraft:block/iron_chain" },
-        "elements": elements,
-    })
-}
-
-/// Steam jet frames a row of its grid sprite (the glue's `JET_GRID`).
-const JET_GRID: usize = 5;
-
 /// The extendo grip's cog angles within its 45° repeat, and its swing's steps (the glue's
 /// `GRIP_COG_STEPS`, `GRIP_SWING_STEPS`).
 const GRIP_COG_STEPS: usize = 10;
 const GRIP_SWING_STEPS: usize = 8;
-
-/// The fragment stage of the glue's textured world pipelines.
-const TEXTURED_SHADER: &str = "fn pipeline_fragment(input: PipelineInput) -> vec4<f32> {
-    return pipeline_texture(input.uv) * input.color;
-}
-";
 
 pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, String> {
     let layered = layered(sources)?;
@@ -545,16 +376,7 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
             copied += 1;
             continue;
         }
-        if path.starts_with("assets/create/models/")
-            && path.ends_with(".json")
-            && bytes.windows(18).any(|w| w == b"neoforge:composite")
-        {
-            let mut doc: Value =
-                serde_json::from_slice(bytes).map_err(|e| format!("{path}: {e}"))?;
-            flatten_composite(&mut doc);
-            put(path, &serde_json::to_vec_pretty(&doc).unwrap())?;
-            copied += 1;
-        } else if let Some(door) = sliding_door_states(path, bytes) {
+        if let Some(door) = sliding_door_states(path, bytes) {
             put(path, &serde_json::to_vec_pretty(&door).unwrap())?;
             copied += 1;
         } else {
@@ -566,8 +388,6 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
             if let Some(rest) = path.strip_prefix("assets/create/textures/fluid/") {
                 put(&format!("assets/create/textures/block/fluid/{rest}"), bytes)?;
             }
-            // The coupling's entity models (`CouplingRenderer`) are drawn as part blocks: their
-            // texture on the block atlas, the models beside the block models pointing at it.
             // Create's special textures (`AllSpecialTextures`: the outliner's checkered and glue
             // faces) on the block atlas too, where a world pipeline samples them.
             if let Some(rest) = path.strip_prefix("assets/create/textures/special/") {
@@ -579,19 +399,6 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
             // The icon atlas (`AllIcons`), for the value boxes' frames and icons in the world.
             if path == "assets/create/textures/gui/icons.png" {
                 put("assets/create/textures/block/special/gui_icons.png", bytes)?;
-            }
-            if path == "assets/create/textures/entity/coupling.png" {
-                put("assets/create/textures/block/entity/coupling.png", bytes)?;
-            }
-            if let Some(rest) = path.strip_prefix("assets/create/models/entity/minecart_coupling/")
-                && rest.ends_with(".json")
-            {
-                let text = String::from_utf8_lossy(bytes)
-                    .replace("create:entity/coupling", "create:block/entity/coupling");
-                put(
-                    &format!("assets/create/models/block/minecart_coupling/{rest}"),
-                    text.as_bytes(),
-                )?;
             }
         }
     }
@@ -617,80 +424,12 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
     for (rel, bytes) in &ct_files {
         put(rel, bytes)?;
     }
-    // The frames of the partial models Create's item renderers turn.
-    for (item, part, _, axis, pivot) in SPINNERS {
-        let rel = format!("assets/create/models/item/{item}/{part}.json");
-        let Some(doc) = read(&rel).and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else {
-            continue;
-        };
-        for frame in 0..SPIN_FRAMES {
-            put(
-                &format!("assets/create/models/item/{item}/{part}_spin/{frame}.json"),
-                &serde_json::to_vec_pretty(&spin_frame(&doc, axis, pivot, frame)).unwrap(),
-            )?;
-        }
-    }
-    // The committed simple definitions are already in `ours`; only make the rest locally.
+    // The committed registry definitions are already in `ours`; only make the rest locally.
     for (path, model) in models {
         if !ours.contains_key(&path) {
             put(&path, &crate::pretty(&model.definition()))?;
         }
     }
-    // The chain conveyor's chain scrolled a pixel at a time (`ChainConveyorRenderer.renderChain`'s
-    // `minV`): vanilla's chain model with its texture shifted down `k` pixels, each plane split
-    // where the texture wraps. Made here as it names vanilla's chain sprite by id.
-    for k in 1..16 {
-        put(
-            &format!("assets/create/models/block/chain_conveyor/chain_{k}.json"),
-            &serde_json::to_vec_pretty(&scrolled_chain(k)).unwrap(),
-        )?;
-    }
-    // The steam jet's frames (`particles/steam_jet.json`) on the block atlas, in a square grid
-    // (`JET_GRID` a row, left to right then down) as an atlas sprite is square: the glue draws
-    // the jet's quads itself (`SteamJetParticle.render`) through a world pipeline, which samples
-    // one block atlas sprite.
-    let frames: Vec<&Vec<u8>> = (0..)
-        .map_while(|i| {
-            files.get(&format!(
-                "assets/create/textures/particle/steam_jet_{i}.png"
-            ))
-        })
-        .collect();
-    if !frames.is_empty() {
-        let images = frames
-            .iter()
-            .map(|b| crate::ct::decode(b))
-            .collect::<Result<Vec<_>, _>>()?;
-        let (w, h) = (images[0].w as usize, images[0].h as usize);
-        let side = JET_GRID * w;
-        let mut px = vec![0u8; side * JET_GRID * h * 4];
-        for (i, im) in images.iter().enumerate().take(JET_GRID * JET_GRID) {
-            if (im.w as usize, im.h as usize) != (w, h) {
-                return Err("steam jet frames of different sizes".into());
-            }
-            let (cx, cy) = (i % JET_GRID, i / JET_GRID);
-            for y in 0..h {
-                let src = &im.px[y * w * 4..(y + 1) * w * 4];
-                let at = ((cy * h + y) * side + cx * w) * 4;
-                px[at..at + src.len()].copy_from_slice(src);
-            }
-        }
-        let grid = crate::ct::Image {
-            w: side as u32,
-            h: (JET_GRID * h) as u32,
-            px,
-        };
-        put(
-            "assets/create/textures/block/special/steam_jet.png",
-            &crate::ct::encode(&grid),
-        )?;
-    }
-    // The glue's world pipelines' fragment shader (`create:textured`): the sampled sprite tinted
-    // by the quad's colour, as a `position_tex_color` render type draws it. The port's own code.
-    put(
-        "assets/create/shaders/pipeline/textured.wgsl",
-        TEXTURED_SHADER.as_bytes(),
-    )?;
     // The placement helpers' ghosts, baked from the jar's models (`ghosts.rs`).
     let (ghost_models, ghosts) = crate::ghosts::source_file(&files)?;
     put(crate::ghosts::RS, ghost_models.as_bytes())?;
@@ -715,30 +454,6 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
 mod tests {
 
     use super::*;
-
-    #[test]
-    fn flattens_composite_models() {
-        let mut m = serde_json::json!({
-            "loader": "neoforge:composite", "parent": "block/block",
-            "textures": {"particle": "create:block/a"},
-            "children": {
-                "glass": {"render_type": "minecraft:translucent", "textures": {"1": "create:block/g"},
-                          "elements": [{"from": [0, 0, 0], "to": [1, 1, 1]}]},
-                "base": {"textures": {"0": "create:block/b"},
-                         "elements": [{"from": [2, 2, 2], "to": [3, 3, 3]}, {"from": [4, 4, 4], "to": [5, 5, 5]}]}
-            }
-        });
-        flatten_composite(&mut m);
-        assert!(m.get("loader").is_none() && m.get("children").is_none());
-        assert_eq!(m["elements"].as_array().unwrap().len(), 3);
-        assert_eq!(m["textures"]["0"], "create:block/b");
-        assert_eq!(m["textures"]["1"], "create:block/g");
-        assert_eq!(m["textures"]["particle"], "create:block/a");
-        // Anything else stays as it was.
-        let mut plain = serde_json::json!({"parent": "block/cube_all"});
-        flatten_composite(&mut plain);
-        assert_eq!(plain, serde_json::json!({"parent": "block/cube_all"}));
-    }
 
     #[test]
     fn hidden_sliding_doors_have_no_model() {
@@ -768,9 +483,8 @@ mod tests {
     }
 }
 
-/// What the repository may hold under `create/assets`: the generator's own block states,
-/// block models and simple item definitions (which name Create's models and textures, never
-/// copy them) and Catnip's MIT placement indicator. Everything under Create's `src/main/resources/assets/` is All Rights
+/// What the repository may hold under `create/assets`: generated block states, models, simple
+/// item definitions and atlas references, the port's shader and Catnip's MIT placement indicator. Everything under Create's `src/main/resources/assets/` is All Rights
 /// Reserved: textures, models, particles, sounds and translations of Create's come from the
 /// player's jar in `prepare`, never from a committed file. Where Create's jar is at hand
 /// (`$CREATE_JAR`, else the `prepare` download cache), no committed file under `create/assets`
@@ -778,6 +492,7 @@ mod tests {
 /// all of a jar asset's JSON at its own path, with keys added, counts as a copy).
 #[cfg(test)]
 mod committed_assets {
+    use crate::registry::visuals::{SPINNING_TOOLS, spinner_definition};
     use serde_json::Value;
     use std::collections::{BTreeMap, HashSet};
     use std::io::Read;
@@ -804,7 +519,7 @@ mod committed_assets {
     }
 
     #[test]
-    fn only_generated_states_models_and_item_definitions_and_catnip_s_indicator() {
+    fn only_approved_asset_types_are_committed() {
         let root = repo().join("create/assets");
         let mut all = Vec::new();
         files(&root, &root, &mut all);
@@ -814,19 +529,22 @@ mod committed_assets {
                 if let Some(name) = f.strip_prefix("create/items/").and_then(|name| name.strip_suffix(".json")) {
                     let Ok(bytes) = std::fs::read(root.join(f)) else { return true };
                     let Ok(doc) = serde_json::from_slice::<Value>(&bytes) else { return true };
+                    if SPINNING_TOOLS.iter().any(|(item, _)| *item == name) {
+                        return doc != spinner_definition(name);
+                    }
                     return !["block", "item"].into_iter().any(|kind| {
                         doc == serde_json::json!({ "model": { "type": "minecraft:model", "model": format!("create:{kind}/{name}") } })
                     });
                 }
                 !(f.starts_with("create/blockstates/") && f.ends_with(".json")
                     || f.starts_with("create/models/block/") && f.ends_with(".json")
-                    || *f == "create/textures/gui/placement_indicator.png")
+                    || matches!(f.as_str(), "create/textures/gui/placement_indicator.png"
+                        | "create/shaders/pipeline/textured.wgsl" | "minecraft/atlases/blocks.json"))
             })
             .collect();
         assert!(
             refused.is_empty(),
-            "only generated block states, models and simple item definitions belong in \
-             create/assets; Create's protected assets come from the player's jar: {refused:?}"
+            "unapproved asset type; Create's protected assets come from the player's jar: {refused:?}"
         );
     }
 

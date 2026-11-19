@@ -6,6 +6,7 @@
 //! its motion, its frame by its age, through the glue's world pipeline (`render_jets`): as world
 //! quads, full bright (no particle light) and not sorted among the other particles.
 
+use super::super::pipelines::{self, Pose, STEAM_JET_FRAMES};
 use super::super::server::ServerLevel;
 use super::super::states;
 use create_engine::Block;
@@ -313,9 +314,6 @@ thread_local! {
 /// (`particles/steam_jet.json`).
 const JET_LIFETIME: i64 = 21;
 const JET_SIZE: f64 = 0.375;
-const JET_FRAMES: i64 = 23;
-/// Frames a row of the grid sprite `create-data prepare` makes of them.
-const JET_GRID: i64 = 5;
 
 pub(super) fn register_client(_r: &mut dyn mod_api::Registrar) {}
 
@@ -344,48 +342,43 @@ fn spawn_jet(host: &dyn ClientHost, at: [f64; 3], motion: [f32; 3]) {
 
 /// `SteamJetParticle.render` for every live jet: four quads turned along the jet, each a
 /// quarter turn about it from the last, the frame its age picks (`setSpriteFromAge`).
-pub(super) fn render_jets(host: &dyn ClientHost, event: &mut mod_api::RenderLevelStageEvent<'_>) {
+pub(super) fn render_jets(event: &mut mod_api::RenderLevelStageEvent<'_>) {
     if event.stage != mod_api::RenderLevelStage::AfterTranslucentBlocks {
         return;
     }
     let now = event.view.game_time;
-    let mut quads = Vec::new();
+    let mut quads: [Vec<_>; STEAM_JET_FRAMES] = std::array::from_fn(|_| Vec::new());
     JETS.with_borrow_mut(|jets| {
         jets.retain(|j| {
             let age = now - j.born;
             if !(0..JET_LIFETIME).contains(&age) {
                 return age < 0;
             }
-            let frame = age * (JET_FRAMES - 1) / JET_LIFETIME;
-            // The frame's cell in the grid `create-data prepare` lays them out in.
-            let cell = 1.0 / JET_GRID as f32;
-            let (cx, cy) = (
-                (frame % JET_GRID) as f32 * cell,
-                (frame / JET_GRID) as f32 * cell,
-            );
-            let (u0, u1, v0, v1) = (cx, cx + cell, cy, cy + cell);
+            let frame = age as usize * (STEAM_JET_FRAMES - 1) / JET_LIFETIME as usize;
             for i in 0..4 {
                 let turn = 2.0 * j.roll + std::f32::consts::FRAC_PI_2 * i as f32;
-                let pose = crate::glue::pipelines::Pose::at(j.at)
+                let pose = Pose::at(j.at)
                     .rotate([0.0, 1.0, 0.0], f64::from(j.yaw.to_degrees()), [0.0; 3])
                     .rotate([1.0, 0.0, 0.0], f64::from(j.pitch.to_degrees()), [0.0; 3])
                     .rotate([0.0, 1.0, 0.0], f64::from(turn.to_degrees()), [0.0; 3])
                     .scale([JET_SIZE; 3]);
                 let c = |x: f64, y: f64| pose.apply([x, y + 1.0, 0.0]);
-                quads.push(mod_api::PipelineQuad::new(
+                quads[frame].push(mod_api::PipelineQuad::new(
                     [c(-1.0, -1.0), c(-1.0, 1.0), c(1.0, 1.0), c(1.0, -1.0)],
-                    [[u1, v1], [u1, v0], [u0, v0], [u0, v1]],
+                    [[1.0, 1.0], [1.0, 0.0], [0.0, 0.0], [0.0, 1.0]],
                     0xFFFF_FFFF,
                 ));
             }
             true
         });
     });
-    if !quads.is_empty()
-        && let Some(p) =
-            crate::glue::pipelines::resolve(host, crate::glue::pipelines::Textured::SteamJet)
-    {
-        let _ = event.draw.pipeline_quads(p, &quads);
+    // Keep older jets first, as in spawn order, while batching jets that sample the same sprite.
+    for (batch, pipe) in quads.iter().zip(pipelines::steam_jets()).rev() {
+        if let Some(pipe) = pipe
+            && !batch.is_empty()
+        {
+            let _ = event.draw.pipeline_quads(pipe, batch);
+        }
     }
 }
 

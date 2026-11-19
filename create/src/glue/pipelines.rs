@@ -1,10 +1,8 @@
-//! The glue's world pipelines: textured quads drawn with a sprite of Create's
-//! (`assets/create/shaders/pipeline/textured.wgsl`, written by `create-data prepare` with the
-//! sprites it puts on the block atlas). Each pipeline samples one sprite, tinted by the quad's
-//! colour and repeating past a UV of 1, as catnip's `outlineTranslucent(texture)` draws an
-//! outline's faces; the glows' add to the frame (`RenderTypes.additive()`). [`Pose`] places a
-//! model's faces as a `PoseStack` would, for what a block entity's renderer draws in its pose. Optional: without the prepared shader they resolve to nothing and the
-//! callers draw untextured quads.
+//! The glue's world pipelines: textured quads through `create:textured`. Each pipeline samples
+//! one block-atlas sprite, tinted by the quad's colour and repeating past a UV of 1, as catnip's
+//! `outlineTranslucent(texture)` draws an outline's faces. The glows add to the frame
+//! (`RenderTypes.additive()`). The pipelines are optional because some sprites need local
+//! preparation. [`Pose`] places a model's faces as a `PoseStack` would.
 
 use mod_api::{
     ClientHost, Identifier, PipelineBlend, PipelineTexture, RegisterRenderPipelinesEvent,
@@ -28,12 +26,10 @@ pub enum Textured {
     SignalGlow2,
     /// A nixie signal's white cube (`SIGNAL_WHITE_CUBE`), translucent.
     SignalCube,
-    /// The steam jet's frames side by side (`particles/steam_jet.json`), cut out.
-    SteamJet,
 }
 
 impl Textured {
-    const ALL: [Textured; 8] = [
+    const ALL: [Textured; 7] = [
         Textured::Checkered,
         Textured::Glue,
         Textured::Icons,
@@ -41,7 +37,6 @@ impl Textured {
         Textured::SignalGlow,
         Textured::SignalGlow2,
         Textured::SignalCube,
-        Textured::SteamJet,
     ];
 
     fn id(self) -> &'static str {
@@ -53,7 +48,6 @@ impl Textured {
             Textured::SignalGlow => "create:signal_glow",
             Textured::SignalGlow2 => "create:signal_glow_2",
             Textured::SignalCube => "create:signal_cube",
-            Textured::SteamJet => "create:steam_jet",
         }
     }
 
@@ -65,7 +59,6 @@ impl Textured {
             Textured::LinkGlow => "create:block/link_details",
             Textured::SignalGlow | Textured::SignalCube => "create:block/signal_glow",
             Textured::SignalGlow2 => "create:block/signal_glow_2",
-            Textured::SteamJet => "create:block/special/steam_jet",
         }
     }
 
@@ -78,6 +71,30 @@ impl Textured {
             _ => PipelineBlend::Translucent,
         }
     }
+}
+
+/// The sprite count in Create's `steam_jet` particle, aliased by the registry's blocks atlas.
+pub const STEAM_JET_FRAMES: usize = 23;
+
+thread_local! {
+    static STEAM_JETS: std::cell::Cell<[Option<RenderPipelineRef>; STEAM_JET_FRAMES]> =
+        const { std::cell::Cell::new([None; STEAM_JET_FRAMES]) };
+}
+
+fn steam_jet_id(frame: usize) -> Identifier {
+    Identifier::parse(&format!("create:steam_jet/{frame}")).expect("steam jet pipeline id")
+}
+
+/// Bind the current generation's handles after the initial resource load and after a reload.
+pub fn bind_steam_jets(host: &dyn ClientHost) {
+    let assets = host.render_assets();
+    STEAM_JETS.set(std::array::from_fn(|frame| {
+        assets.render_pipeline(&steam_jet_id(frame)).ok()
+    }));
+}
+
+pub fn steam_jets() -> [Option<RenderPipelineRef>; STEAM_JET_FRAMES] {
+    STEAM_JETS.get()
 }
 
 /// `register_render_pipelines`: the glue's pipelines, translucent and hidden by nearer blocks.
@@ -94,6 +111,20 @@ pub fn register(event: &mut RegisterRenderPipelinesEvent<'_>) {
             RenderPipeline::new(id, shader.clone(), t.blend(), WorldDepth::Tested)
                 .textured(PipelineTexture::Sprite(sprite))
                 .optional(),
+        );
+    }
+    for frame in 0..STEAM_JET_FRAMES {
+        let sprite = Identifier::parse(&format!("create:block/special/steam_jet_{frame}"))
+            .expect("steam jet sprite id");
+        event.pipelines.push(
+            RenderPipeline::new(
+                steam_jet_id(frame),
+                shader.clone(),
+                PipelineBlend::Translucent,
+                WorldDepth::Tested,
+            )
+            .textured(PipelineTexture::Sprite(sprite))
+            .optional(),
         );
     }
 }
@@ -167,6 +198,11 @@ impl Pose {
     pub fn apply(&self, p: [f64; 3]) -> [f64; 3] {
         let m = &self.m;
         [0, 1, 2].map(|r| m[r][0] * p[0] + m[r][1] * p[1] + m[r][2] * p[2] + m[r][3])
+    }
+
+    /// The row-major 3×4 transform a special item model part takes.
+    pub fn affine(self) -> [f32; 12] {
+        std::array::from_fn(|i| self.m[i / 4][i % 4] as f32)
     }
 
     /// Face `side` (`Direction` order: down, up, north, south, west, east) of the box
@@ -264,6 +300,21 @@ mod tests {
         );
         // The up face's top left corner is its north-west one.
         assert_eq!(face_corners([0, 0, 0], [1, 1, 1], 1)[0], [0, 1, 0]);
+    }
+
+    #[test]
+    fn special_item_affine_turns_about_the_off_centre_pivot() {
+        let pivot = [0.5625, 0.5, 0.5];
+        let m = Pose::at([0.0; 3])
+            .rotate([0.0, 1.0, 0.0], 90.0, pivot)
+            .affine();
+        let point = [0.8125, 0.5, 0.5];
+        let actual = m
+            .chunks_exact(4)
+            .map(|r| r[0] * point[0] + r[1] * point[1] + r[2] * point[2] + r[3]);
+        for (a, b) in actual.zip([0.5625, 0.5, 0.25]) {
+            assert!((a - b).abs() < f32::EPSILON, "{a} != {b}");
+        }
     }
 
     #[test]

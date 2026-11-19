@@ -132,6 +132,46 @@ fn full_id(id: &str) -> String {
     }
 }
 
+/// A `neoforge:composite` model as Create's files write it (the nixie tube, display and stock
+/// links): a model of named `children`, each with its own textures and elements. Its children's
+/// elements, in the file's order, become the model's own, their textures joined under the
+/// model's. This is private to the local ghost baker; the game loads the original model.
+fn flatten_composite(doc: &mut Value) {
+    let Some(obj) = doc.as_object_mut() else {
+        return;
+    };
+    if obj.get("loader").and_then(Value::as_str) != Some("neoforge:composite") {
+        return;
+    }
+    obj.remove("loader");
+    let children = obj.remove("children");
+    let mut elements = Vec::new();
+    let mut textures = obj
+        .get("textures")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(Value::Object(children)) = children {
+        for child in children.values() {
+            let Some(child) = child.as_object() else {
+                continue;
+            };
+            if let Some(Value::Object(t)) = child.get("textures") {
+                for (k, v) in t {
+                    textures.entry(k.clone()).or_insert_with(|| v.clone());
+                }
+            }
+            if let Some(Value::Array(e)) = child.get("elements") {
+                elements.extend(e.iter().cloned());
+            }
+        }
+    }
+    if !textures.is_empty() {
+        obj.insert("textures".into(), Value::Object(textures));
+    }
+    obj.insert("elements".into(), Value::Array(elements));
+}
+
 /// A model's elements (its own or its nearest parent's) and its textures, children's over
 /// parents'. None when the model itself is missing; a missing parent (vanilla's `block/block`)
 /// adds nothing.
@@ -153,7 +193,7 @@ fn resolve(
         };
         first = false;
         let mut doc: Value = serde_json::from_slice(bytes).ok()?;
-        crate::prepare::flatten_composite(&mut doc);
+        flatten_composite(&mut doc);
         if let Some(Value::Object(t)) = doc.get("textures") {
             for (k, v) in t {
                 textures.entry(k.clone()).or_insert_with(|| v.clone());
@@ -469,6 +509,30 @@ mod tests {
             (p[0] - 16.0).abs() < 1e-9 && (p[2] - 8.0).abs() < 1e-9,
             "{p:?}"
         );
+    }
+
+    #[test]
+    fn flattens_composite_models() {
+        let mut m = serde_json::json!({
+            "loader": "neoforge:composite", "parent": "block/block",
+            "textures": {"particle": "create:block/a"},
+            "children": {
+                "glass": {"render_type": "minecraft:translucent", "textures": {"1": "create:block/g"},
+                          "elements": [{"from": [0, 0, 0], "to": [1, 1, 1]}]},
+                "base": {"textures": {"0": "create:block/b"},
+                         "elements": [{"from": [2, 2, 2], "to": [3, 3, 3]}, {"from": [4, 4, 4], "to": [5, 5, 5]}]}
+            }
+        });
+        flatten_composite(&mut m);
+        assert!(m.get("loader").is_none() && m.get("children").is_none());
+        assert_eq!(m["elements"].as_array().unwrap().len(), 3);
+        assert_eq!(m["textures"]["0"], "create:block/b");
+        assert_eq!(m["textures"]["1"], "create:block/g");
+        assert_eq!(m["textures"]["particle"], "create:block/a");
+        // Anything else stays as it was.
+        let mut plain = serde_json::json!({"parent": "block/cube_all"});
+        flatten_composite(&mut plain);
+        assert_eq!(plain, serde_json::json!({"parent": "block/cube_all"}));
     }
 
     #[test]
