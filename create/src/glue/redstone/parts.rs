@@ -382,8 +382,9 @@ fn use_block(
     let pos = click.pos;
     let wrench = held == Some("create:wrench");
     match block {
-        Block::AnalogLever => detectors::use_lever(&mut lv, pos, back, wrench)
-            .then_some(InteractionResult::SuccessServer),
+        Block::AnalogLever => detectors::lever_use_item_on(held).or_else(|| {
+            detectors::use_lever(&mut lv, pos, back).then_some(InteractionResult::SuccessServer)
+        }),
         Block::ContentObserver | Block::StockpileSwitch => detectors::use_detector(
             &mut lv,
             click,

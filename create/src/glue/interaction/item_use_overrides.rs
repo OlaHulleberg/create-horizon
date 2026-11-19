@@ -13,8 +13,8 @@ use super::super::server::ServerLevel;
 use super::crank;
 use create_engine::Block;
 use create_engine::dye;
-use create_engine::item_use_overrides;
-use mod_api::{Flow, Host, InteractionResult, PlayerRef, RightClickBlockEvent, ServerHost};
+use create_engine::item_use_overrides::{self, ItemOn, invoke_use};
+use mod_api::{Flow, Hand, Host, InteractionResult, PlayerRef, RightClickBlockEvent, ServerHost};
 
 /// Whether the block's own use answers `player`'s click, the same on both sides: a hand crank's
 /// for anyone but a spectator (`HandCrankBlock.useItemOn`), a valve handle's for a player who
@@ -32,7 +32,7 @@ pub(super) fn answers(host: &dyn Host, player: PlayerRef, block: Block) -> bool 
         if player.may_build(host) != Some(true) {
             return false;
         }
-        let held = items::held(host, player, mod_api::Hand::Main);
+        let held = items::held(host, player, Hand::Main);
         return !(items::sneaking(host, player) && items::is(held.as_ref(), Item::Wrench));
     }
     block == Block::AnalogLever
@@ -61,21 +61,29 @@ pub(super) fn right_click(host: &mut dyn ServerHost, event: &mut RightClickBlock
     // of these uses reads the hit, which Java rebuilds at the block's centre anyway
     // (`VecHelper.getCenterOf(pos)`).
     let back = items::sneaking(&*lv.host, player);
+    let main_hand = click.hand == Hand::Main;
     let result = match block {
         // `HandCrankBlock.useItemOn`: the crank turns, tiring the player. A spectator's pass
         // (`answers`) falls through to the plain block's `useWithoutItem`, which answers
         // nothing.
-        Block::HandCrank => crank::use_crank(&mut lv, player, click.pos, held.as_deref()),
+        Block::HandCrank => invoke_use(
+            crank::use_crank(&mut lv, player, click.pos, held.as_deref())
+                .map_or(ItemOn::PassToDefault, ItemOn::Consumed),
+            main_hand,
+            || None,
+        ),
         // `ValveHandleBlock.clicked`, its own `RightClickBlock` handler at `LOW` priority,
         // which the click reaches once `ItemUseOverrides` has left it: a dye recolours it,
         // else it turns.
         b if dye::is_valve_handle(b) => {
             blocks::use_valve_handle(&mut lv, player, click.pos, b, state, held.as_deref(), back)
         }
-        // `AnalogLeverBlock.useWithoutItem`: one up, or down while sneaking. The wrench never
-        // reaches here; `ItemUseOverrides` declines it first.
-        Block::AnalogLever => detectors::use_lever(&mut lv, click.pos, back, false)
-            .then_some(InteractionResult::SuccessServer),
+        // The lever has no `useItemOn`; `AnalogLeverBlock.useWithoutItem`: one up, or down
+        // while sneaking. The wrench never reaches here; `ItemUseOverrides` declines it first.
+        Block::AnalogLever => invoke_use(ItemOn::PassToDefault, main_hand, || {
+            detectors::use_lever(&mut lv, click.pos, back)
+                .then_some(InteractionResult::SuccessServer)
+        }),
         _ => None,
     };
     let Some(result) = result else {

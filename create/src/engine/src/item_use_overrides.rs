@@ -25,9 +25,66 @@ pub fn invokes_use(block: Block, held: Option<&str>) -> bool {
     held != Some(WRENCH) && contains(block)
 }
 
+/// A block's `useItemOn` answer as `BlockHelper.invokeUse` reads it (`ItemInteractionResult`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ItemOn<R> {
+    /// It consumed the click (`consumesAction`), answering `R`.
+    Consumed(R),
+    /// `PASS_TO_DEFAULT_BLOCK_INTERACTION`: the block's `useWithoutItem` is tried next.
+    PassToDefault,
+    /// Any other answer that does not consume the click (`SKIP_DEFAULT_BLOCK_INTERACTION`).
+    Pass,
+}
+
+/// `BlockHelper.invokeUse`, which `onBlockActivated` calls: the block's `useItemOn`, and when
+/// that passes to the default, its `useWithoutItem` — for the main hand only (`hand ==
+/// InteractionHand.MAIN_HAND`). None when neither consumed the click (`PASS`), which then goes
+/// on uncancelled.
+pub fn invoke_use<R>(
+    item_on: ItemOn<R>,
+    main_hand: bool,
+    without_item: impl FnOnce() -> Option<R>,
+) -> Option<R> {
+    match item_on {
+        ItemOn::Consumed(r) => Some(r),
+        ItemOn::PassToDefault if main_hand => without_item(),
+        ItemOn::PassToDefault | ItemOn::Pass => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #111, the sneaking wrench: the main hand's wrench is declined, so the client's
+    /// off-hand click (empty) reaches `onBlockActivated`. The analog lever has no `useItemOn`
+    /// (`PASS_TO_DEFAULT_BLOCK_INTERACTION`) and `invokeUse` tries `useWithoutItem` only for
+    /// the main hand, so the off hand's click passes and the lever keeps its state; the main
+    /// hand's clicks it. A consumed `useItemOn` (the crank turning) answers for either hand.
+    #[test]
+    fn use_without_item_is_invoked_for_the_main_hand_only() {
+        let mut clicked = 0;
+        let off = invoke_use(ItemOn::PassToDefault, false, || {
+            clicked += 1;
+            Some("click")
+        });
+        assert_eq!((off, clicked), (None, 0));
+        let main = invoke_use(ItemOn::PassToDefault, true, || {
+            clicked += 1;
+            Some("click")
+        });
+        assert_eq!((main, clicked), (Some("click"), 1));
+        assert_eq!(
+            invoke_use(ItemOn::Consumed("turn"), false, || None),
+            Some("turn")
+        );
+        assert_eq!(invoke_use(ItemOn::Pass, true, || Some("click")), None);
+        // A `useWithoutItem` that does not consume the click passes too.
+        assert_eq!(
+            invoke_use::<&str>(ItemOn::PassToDefault, true, || None),
+            None
+        );
+    }
 
     /// `AllBlocks` registers the hand crank (`AllBlocks.java`, `HAND_CRANK`), every valve
     /// handle (`BuilderTransformers.valveHandle`: the copper one and all sixteen colours) and
