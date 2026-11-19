@@ -7,24 +7,24 @@ Checked on 2026-11-19 (Linux x86_64, Rust 1.99.1, a fresh build directory), pinn
 No SDK mirror or trusted-key override is used. Mixins stays at
 `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`, as the release SDK specifies.
 
-The table under “In game” is historical: the developer build was `b77574e` and the “Sunrise nightly pin”
-smoke test was on `2d81263`. The `ed3ac19` pin update was not itself tried in game.
+The tests under “In game” are historical: the developer build was `b77574e` and that section's nightly smoke
+was on `2d81263`. The registry smoke tests below use `ed3ac19`.
 
 ## Checks
 
 | Where | Command | Result |
 |---|---|---|
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
-| `create/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
-| `create/` | `cargo +1.99.1 test` | Pass (97 glue tests) |
-| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (779 engine tests) |
+| `create/` | `cargo +1.99.1 check` and `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
+| `create/` | `cargo +1.99.1 test` | Pass (99 glue tests) |
+| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (781 engine tests) |
 | `create/` | `cargo sunrise-mod check` | Pass (official ed3ac19 SDK) |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
-| `create/src/engine/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
+| `create/src/engine/` | `cargo +1.99.1 check` and `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 fmt --check` | Pass |
-| `tools/create-data/` | `cargo +1.99.1 clippy --locked --all-targets -- -D warnings` | Pass |
-| `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (51 tests, `committed_assets` included, with `CREATE_JAR` set to the pinned Create jar) |
-| `tools/create-data/` | `cargo run --locked -- registry --out ../../create --check` | Pass; also rejected a stale recipe and an altered item definition in a scratch copy |
+| `tools/create-data/` | `cargo +1.99.1 check --locked` and `cargo +1.99.1 clippy --locked --all-targets -- -D warnings` | Pass |
+| `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (53 tests, including `committed_assets` with `CREATE_JAR` set to the pinned jar) |
+| `tools/create-data/` | `cargo run --locked -- registry --out ../../create --check` | Pass; rejected a modified atlas in a scratch copy. Earlier runs rejected a stale recipe and an altered item definition |
 
 ## Registry package smoke test on `ed3ac19`
 
@@ -35,8 +35,26 @@ The package carries `LICENSE` and `NOTICE.md`. The `[[jar]]` entry references th
 under Xvfb and llvmpipe, without the launcher, staged the package's data and assets unchanged and opened a new
 creative world. `/give @s create:cogwheel`, and the same command for `create:zinc_ingot` and `create:wrench`,
 all succeeded. The cogwheel, motor and depot drew in the world, and the cogwheel and zinc ingot drew in the hotbar.
-The wrench occupied a slot but had no icon or held model. Custom item models, flattened/tinted models, texture
-copies, connected textures and model-derived placement ghosts still need the player's local `prepare` step.
+At that point the wrench occupied a slot but had no icon or held model. The visual test below verifies the
+replacement item model and other assets migrated off local preparation.
+
+## Registry visuals on `ed3ac19`
+
+Built and checked a second `.smod` from a clean checkout with no `create-data prepare` outputs. The 5,916 staged
+manifest and resource entries matched the `.smod` byte for byte. Ran it without a launcher with the player's
+pinned jar under Xvfb and llvmpipe:
+
+| Scene | Observed |
+|---|---|
+| Nixie tube, display link, stock link | The original composite parts drew, including the nixie glass and numerals. |
+| Two minecarts linked using a coupling item | Attachments, rings and textured link drew. |
+| Steam whistle on a tank over a lit campfire, powered by a redstone block | The whistle blew; successive steam frames drew using the packaged shader and still drew after a resource reload. |
+| Two connected chain conveyors driven by a creative motor | The motor drove the conveyors at 16 rpm and the chain texture scrolled between frames. |
+| Wrench, potato cannon, handheld worldshaper | Hotbar icons and held models drew. In fixed item frames the gear, cog and accelerator changed angle while the bodies stayed still. |
+
+Local `prepare` still supplies connected textures, tinted models, model-derived placement ghosts and other
+unmigrated assets. The package does not replace them; the checkerboard, glue and icon pipelines still log
+missing sprites without local `prepare`.
 
 ## Declared shapes and piston heads on `ed3ac19`
 

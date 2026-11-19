@@ -310,7 +310,9 @@ mod tests {
             .affine();
         let point = [0.8125, 0.5, 0.5];
         let actual = m
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|r| r[0] * point[0] + r[1] * point[1] + r[2] * point[2] + r[3]);
         for (a, b) in actual.zip([0.5625, 0.5, 0.25]) {
             assert!((a - b).abs() < f32::EPSILON, "{a} != {b}");
