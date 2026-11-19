@@ -3,10 +3,12 @@
 //! (`data/create/sunrise/`), the partial models' block states (`assets/create/`) and the engine's
 //! typed block table (`src/engine/src/generated.rs`).
 //!
+//! `create-data registry`: converts the pinned jar's MIT data to 26.3, and writes item definitions
+//! backed by verified MIT model ids. It can also check that these committed outputs are current.
+//!
 //! `create-data prepare`: assembles the playable native mod from this repository and Create's jar,
-//! converting 1.21.1 formats to 26.3. With no jar given it downloads the pinned one from Modrinth
-//! into the user's cache (`jar.rs`); a jar or folders standing in for one may be given instead.
-//! See `prepare.rs`.
+//! transforming the remaining art on the player's machine. With no jar given it downloads the
+//! pinned one from Modrinth into the user's cache (`jar.rs`); loose asset folders may be given too.
 
 mod blocks;
 mod c_tags;
@@ -16,6 +18,7 @@ mod ghosts;
 mod jar;
 mod java;
 mod prepare;
+mod registry;
 mod shapes;
 mod tabs;
 
@@ -28,6 +31,7 @@ use std::path::{Path, PathBuf};
 fn usage() -> ! {
     eprintln!(
         "usage:\n  create-data compile --create <Create checkout> --out <this repository>\n  \
+         create-data registry --out <mod folder> [--check] [--jar <pinned jar>] [--tree <tree.json>] [--audit <file>]\n  \
          create-data prepare --out <mod folder> [[--jar] <jar or folder>...]"
     );
     std::process::exit(2)
@@ -51,6 +55,26 @@ fn main() {
             let create = flag("--create").unwrap_or_else(|| usage());
             let out = flag("--out").unwrap_or_else(|| usage());
             advancements(&create.join("src/generated/resources"), &out.join("create"));
+        }
+        Some("registry") => {
+            let out = flag("--out").unwrap_or_else(|| usage());
+            let jar = flag("--jar")
+                .or_else(|| std::env::var_os("CREATE_JAR").map(PathBuf::from))
+                .map(Ok)
+                .unwrap_or_else(|| jar::fetch(&jar::CREATE));
+            let result = jar.and_then(|jar| {
+                registry::generate(
+                    &out,
+                    &jar,
+                    flag("--tree").as_deref(),
+                    flag("--audit").as_deref(),
+                    args.iter().any(|a| a == "--check"),
+                )
+            });
+            if let Err(e) = result {
+                eprintln!("create-data registry: {e}");
+                std::process::exit(1);
+            }
         }
         Some("prepare") => {
             let out = flag("--out").unwrap_or_else(|| usage());
@@ -119,7 +143,17 @@ fn pretty(v: &Value) -> Vec<u8> {
 fn advancements(generated: &Path, out: &Path) {
     let from = generated.join("data/create/advancement");
     let to = out.join("data/create/advancement");
-    let _ = fs::remove_dir_all(&to);
+    // `registry` owns suppression overlays in subdirectories, including recipe unlocks.
+    if let Ok(entries) = fs::read_dir(&to) {
+        for entry in entries {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_file()
+                && entry.path().extension().is_some_and(|x| x == "json")
+            {
+                fs::remove_file(entry.path()).unwrap();
+            }
+        }
+    }
     let mut names: Vec<_> = fs::read_dir(&from)
         .unwrap_or_else(|e| panic!("{}: {e}", from.display()))
         .filter_map(Result::ok)

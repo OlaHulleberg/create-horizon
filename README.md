@@ -61,7 +61,8 @@ reaching into belts and tanks. The full list, with what would fix each one: **[A
 > [!NOTE]
 > Create's textures, models and sounds are All Rights Reserved, so they are not in this repository. Your own
 > machine downloads Create's official jar from Modrinth, where the Create Team publishes it, and checks it
-> against the hash pinned here. Nothing from it is ever shipped from this repository.
+> against the hash pinned here. This repository ships only converted MIT data and model references, never the jar
+> or its protected assets.
 
 You need:
 
@@ -180,7 +181,7 @@ create/                 The native mod: what the launcher builds
   src/glue/             The game glue on the mod API, one module per subsystem
   src/engine/           create-engine: Create's rules as plain Rust, no game types
   data/, assets/        Generated block, item and fluid declarations
-tools/create-data/      compile: Create's MIT data -> tables; prepare: Create's jar -> playable mod
+tools/create-data/      compile: tables; registry: MIT overlays; prepare: local asset processing
 docs/                   Architecture and README media
 ```
 

@@ -12,6 +12,8 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 png = "0.17"
 # Fetches the pinned Create jar from Modrinth's CDN when `prepare` is given none.
 ureq = { version = "2", default-features = false, features = ["tls"] }
+# Git's blob identity for proving model/data provenance; SHA-512 pins the distributed jar.
+sha1 = "0.10"
 sha2 = "0.10"
 
 # Not part of the mod: a host tool with its own lock.

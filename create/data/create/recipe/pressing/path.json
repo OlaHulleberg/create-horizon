@@ -1,0 +1,17 @@
+{
+  "results": [
+    {
+      "id": "minecraft:dirt_path"
+    }
+  ],
+  "type": "create:pressing",
+  "ingredients": [
+    [
+      "minecraft:dirt",
+      "minecraft:coarse_dirt",
+      "minecraft:rooted_dirt",
+      "minecraft:mycelium",
+      "minecraft:podzol"
+    ]
+  ]
+}
