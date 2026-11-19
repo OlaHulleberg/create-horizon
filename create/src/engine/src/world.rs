@@ -187,9 +187,10 @@ pub struct Dimension {
     /// Blocks whose redstone power may have changed (a clutch or gearshift that was placed or
     /// whose neighbour changed), checked after the level's tick.
     redstone: Vec<[i32; 3]>,
-    /// Encased chain drives whose place in their chain may have changed (placed, or a neighbour
-    /// changed), consumed during the block change (`ChainDriveBlock.updateShape`).
-    chain_checks: Vec<[i32; 3]>,
+    /// The shape updates chain drives are due from the block changes so far
+    /// (`ChainDriveBlock.getStateForPlacement` and `updateShape`), for the host to carry out.
+    /// They outlive a column's unloading: they belong to changes already made.
+    chain_shapes: crate::chain::Shapes,
     /// Sequenced gearshifts and their sequence (`SequencedGearshiftBlockEntity`).
     pub sequencers: HashMap<[i32; 3], crate::sequencer::Sequencer>,
     /// Sequenced gearshifts whose instruction runs: the only ones that tick.
@@ -1400,6 +1401,7 @@ impl CreateWorld {
     #[inline]
     pub fn block_changed(&mut self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
         self.register_block_entity(dim, pos, old, new);
+        self.chain_shapes_due(dim, pos, old, new);
         let affects_fluid = [old, new].into_iter().any(|state| {
             self.table
                 .get(state)
@@ -1664,12 +1666,6 @@ impl CreateWorld {
                 // GearshiftBlock (also ClutchBlock) reads power only in
                 // getStateForPlacement and neighborChanged, never on state insertion.
                 self.dims[dim].redstone.push(pos);
-            }
-            if self.table.get(new).is_some_and(|(b, _)| is_chain_drive(b))
-                && self.table.get(old).map(|(b, _)| b) != self.table.get(new).map(|(b, _)| b)
-            {
-                // ChainDriveBlock.getStateForPlacement: joined to the drives beside it.
-                self.dims[dim].chain_checks.push(pos);
             }
             let tunnel = |s: u32| {
                 matches!(
@@ -2086,8 +2082,6 @@ impl CreateWorld {
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.sequencer_steps
                 .retain(|(p, _)| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.chain_checks
-                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             // FluidTransportBehaviour.read restores pressure. Unloading a column
             // does not call FluidPropagator.propagateChangedPipe on surviving pipes.
             d.plumbing.column_unloaded(cx, cz);
@@ -2733,9 +2727,6 @@ impl CreateWorld {
                 if b == Block::GantryShaft {
                     self.dims[dim].gantry_checks.push(pos);
                 }
-                if b == Block::AdjustableChainGearshift {
-                    self.dims[dim].chain_checks.push(pos);
-                }
                 if b == Block::SteamWhistle {
                     // `updateShape`: without its tank it breaks.
                     self.dims[dim].plumbing.whistle_support.push(pos);
@@ -2745,7 +2736,6 @@ impl CreateWorld {
             Some(Block::SteamWhistleExtension) => {
                 self.dims[dim].plumbing.extension_checks.push(pos)
             }
-            Some(Block::EncasedChainDrive) => self.dims[dim].chain_checks.push(pos),
             // A crafter's power may have risen (`wasPoweredBefore`).
             Some(Block::MechanicalCrafter) => self.dims[dim].crafter_power_checks.push(pos),
             // `DeployerBlock.neighborChanged` → `redstoneUpdate`.
@@ -2951,6 +2941,33 @@ impl CreateWorld {
         );
     }
 
+    /// The chain-drive shape updates a block change is due: a drive placed takes its placement
+    /// shape (`ChainDriveBlock.getStateForPlacement`), then the drives beside the change are
+    /// told (`Level.setBlock` → `updateNeighbourShapes` → `updateShape`). A change made with
+    /// `UPDATE_KNOWN_SHAPE` ([`Self::setting_known_shape`]: its state is already taken) tells
+    /// no one.
+    #[inline]
+    fn chain_shapes_due(&mut self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+        if old == new || self.dims[dim].states.get(&pos) == Some(&new) {
+            return;
+        }
+        let drive = |s: u32| {
+            self.table
+                .get(s)
+                .map(|(b, _)| b)
+                .filter(|&b| is_chain_drive(b))
+        };
+        let mut shapes = std::mem::take(&mut self.dims[dim].chain_shapes);
+        if drive(new).is_some() && drive(old) != drive(new) {
+            shapes.placed(pos);
+        }
+        let states = &self.dims[dim].states;
+        shapes.changed(pos, |at| {
+            states.get(&at).is_some_and(|&s| drive(s).is_some())
+        });
+        self.dims[dim].chain_shapes = shapes;
+    }
+
     /// The encased chain drive at `pos` as its chain rules read it; None for any other block.
     fn chain_drive(&self, dim: usize, pos: [i32; 3]) -> Option<crate::chain::Drive> {
         let state = *self.dims[dim].states.get(&pos)?;
@@ -2965,28 +2982,33 @@ impl CreateWorld {
         })
     }
 
-    /// Chain drives placed or beside a change, shaped by their neighbours
-    /// (`ChainDriveBlock.updateShape` toward each side off their axis): those whose `part` or
-    /// `axis_along_first` must change, with what they become. Hosts also drain this immediately
-    /// after a kinetic break, before publishing the completed tick.
+    /// The chain drives whose shape updates are due (placed, or beside a change) changed by
+    /// them as Create changes them inside the block change (`ChainDriveBlock.updateShape`, each
+    /// change telling its neighbours in turn): those whose `part` or `axis_along_first` must
+    /// change, with what they become. Hosts drain this in a tick's inputs and immediately after
+    /// a kinetic break, before publishing the completed tick.
     pub fn take_chain_shapes(&mut self, dim: usize) -> Vec<([i32; 3], crate::chain::Drive)> {
-        if self.dims[dim].chain_checks.is_empty() {
+        if self.dims[dim].chain_shapes.is_empty() {
             return Vec::new();
         }
-        let mut checks = std::mem::take(&mut self.dims[dim].chain_checks);
-        checks.sort();
-        checks.dedup();
-        checks
-            .into_iter()
-            .filter_map(|pos| {
-                let now = self.chain_drive(dim, pos)?;
-                let shaped = now.shaped(|d| {
-                    let o = d.offset();
-                    self.chain_drive(dim, [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]])
-                });
-                (shaped != now).then_some((pos, shaped))
-            })
-            .collect()
+        let mut shapes = std::mem::take(&mut self.dims[dim].chain_shapes);
+        let changed = shapes.run(|pos| self.chain_drive(dim, pos));
+        self.dims[dim].chain_shapes = shapes;
+        changed
+    }
+
+    /// `ChainDriveBlock.updateAfterWrenched`: the drive at `pos`, wrenched onto `axis`, from
+    /// its default state shaped by the drives beside it.
+    pub fn chain_after_wrenched(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+        axis: crate::kinetics::Axis,
+    ) -> crate::chain::Drive {
+        crate::chain::Drive::update_after_wrenched(axis, |d| {
+            let o = d.offset();
+            self.chain_drive(dim, [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]])
+        })
     }
 
     /// Sequenced gearshifts whose neighbour changed, with whether each runs (its `state` is
@@ -7650,9 +7672,172 @@ mod tests {
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [0, 0, 0]), Some(16.0));
         assert_eq!(w.speed(0, [0, 0, 1]), Some(24.0));
-        // The drive's neighbour changes: it is shaped again (no change here).
+        // A neighbour's `neighborChanged` shapes nothing (`updateShape` alone does).
         w.neighbor_changed(0, [0, 0, 1], 11);
         assert!(w.take_chain_shapes(0).is_empty());
+        states::clear_range();
+    }
+
+    /// Every encased chain drive and adjustable chain gearshift state (unpowered), and the
+    /// state id of one.
+    fn chain_world() -> (
+        CreateWorld,
+        impl Fn(&str, crate::kinetics::Axis, bool, crate::chain::Part) -> u32,
+    ) {
+        use crate::kinetics::Axis;
+        let mut names: Vec<(&str, Vec<(&str, &str)>)> = Vec::new();
+        let mut keys = Vec::new();
+        for block in [
+            "create:encased_chain_drive",
+            "create:adjustable_chain_gearshift",
+        ] {
+            for (axis, a) in [(Axis::X, "x"), (Axis::Y, "y"), (Axis::Z, "z")] {
+                for (along, f) in [(true, "true"), (false, "false")] {
+                    for part in ["start", "middle", "end", "none"] {
+                        let mut props = vec![("axis", a), ("axis_along_first", f), ("part", part)];
+                        if block == "create:adjustable_chain_gearshift" {
+                            props.push(("powered", "false"));
+                        }
+                        names.push((block, props));
+                        keys.push((block, axis, along, part));
+                    }
+                }
+            }
+        }
+        states::set_range(10, names.len() as u32);
+        let w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let id = move |block: &str, axis, along, part: crate::chain::Part| {
+            let i = keys
+                .iter()
+                .position(|k| *k == (block, axis, along, part.name()))
+                .unwrap();
+            10 + i as u32
+        };
+        (w, id)
+    }
+
+    /// The host's block change (`set`): the engine told, then the neighbours' `neighborChanged`.
+    fn set_chain_block(w: &mut CreateWorld, pos: [i32; 3], new: u32) {
+        let old = w.state_at(0, pos).unwrap_or(0);
+        w.block_changed(0, pos, old, new);
+        for d in crate::kinetics::Dir::ALL {
+            let o = d.offset();
+            let at = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+            if let Some(s) = w.state_at(0, at) {
+                w.neighbor_changed(0, at, s);
+            }
+        }
+    }
+
+    #[test]
+    fn a_drive_freed_by_its_partner_s_removal_joins_the_one_above_at_once() {
+        // create-horizon#94: Java at tick 30 and, after the gearshift north is removed, 32.
+        use crate::chain::{Drive, Part};
+        use crate::kinetics::Axis;
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut w, id) = chain_world();
+        let (gearshift, drive) = (
+            "create:adjustable_chain_gearshift",
+            "create:encased_chain_drive",
+        );
+        let (north, here, above) = ([0, 8, -1], [0, 8, 0], [0, 9, 0]);
+        set_chain_block(&mut w, north, id(gearshift, Axis::X, false, Part::Start));
+        set_chain_block(&mut w, here, id(drive, Axis::X, false, Part::End));
+        set_chain_block(&mut w, above, id(gearshift, Axis::X, true, Part::None));
+        assert!(w.take_chain_shapes(0).is_empty());
+        set_chain_block(&mut w, north, 0);
+        // ChainDriveBlock.updateShape: the drive loses its chain, so the gearshift above joins
+        // it, so it joins the gearshift: one chain along y, in the same block change.
+        let mut shapes = w.take_chain_shapes(0);
+        shapes.sort_by_key(|s| s.0);
+        let along_y = |part| Drive {
+            axis: Axis::X,
+            part,
+            along_first: true,
+        };
+        assert_eq!(
+            shapes,
+            [(here, along_y(Part::Start)), (above, along_y(Part::End))]
+        );
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_lone_drive_wrenched_into_line_joins_the_chain_at_once() {
+        // create-horizon#97: Java at tick 46, then 48 after the wrench on the drive's top.
+        use crate::chain::{Drive, Part};
+        use crate::kinetics::Axis;
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut w, id) = chain_world();
+        let (gearshift, drive) = (
+            "create:adjustable_chain_gearshift",
+            "create:encased_chain_drive",
+        );
+        let (shift_at, drive_at) = ([0, 8, 2], [0, 8, 3]);
+        set_chain_block(&mut w, shift_at, id(gearshift, Axis::X, true, Part::None));
+        set_chain_block(&mut w, drive_at, id(drive, Axis::Z, true, Part::None));
+        assert!(w.take_chain_shapes(0).is_empty());
+        // ChainDriveBlock.updateAfterWrenched: turned about y onto x, it ends the gearshift's
+        // chain along z.
+        let end = Drive {
+            axis: Axis::X,
+            part: Part::End,
+            along_first: false,
+        };
+        assert_eq!(w.chain_after_wrenched(0, drive_at, Axis::X), end);
+        // Set as the axis turn alone, the shape updates it causes join both.
+        let turned = id(drive, Axis::X, true, Part::None);
+        w.switching_block_state(0, drive_at, turned);
+        set_chain_block(&mut w, drive_at, turned);
+        let mut shapes = w.take_chain_shapes(0);
+        shapes.sort_by_key(|s| s.0);
+        let start = Drive {
+            part: Part::Start,
+            ..end
+        };
+        assert_eq!(shapes, [(shift_at, start), (drive_at, end)]);
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_drive_placed_as_its_column_unloads_still_joins() {
+        // create-horizon#98: Java at tick 6 and, after the drive is placed and the column
+        // reloads in the same tick, 7.
+        use crate::chain::{Drive, Part};
+        use crate::kinetics::Axis;
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut w, id) = chain_world();
+        let (gearshift, drive) = (
+            "create:adjustable_chain_gearshift",
+            "create:encased_chain_drive",
+        );
+        let (shift_at, drive_at) = ([0, 8, 0], [0, 8, 1]);
+        set_chain_block(&mut w, shift_at, id(gearshift, Axis::X, true, Part::None));
+        assert!(w.take_chain_shapes(0).is_empty());
+        let placed = id(drive, Axis::X, true, Part::None);
+        set_chain_block(&mut w, drive_at, placed);
+        // The column unloads and loads again before the host carries the shapes out: they
+        // belong to the change already made (`getStateForPlacement`, `updateShape`).
+        w.column_unloaded(0, 0, 0);
+        w.block_loaded(0, shift_at, id(gearshift, Axis::X, true, Part::None));
+        w.block_loaded(0, drive_at, placed);
+        let mut shapes = w.take_chain_shapes(0);
+        shapes.sort_by_key(|s| s.0);
+        let along_z = |part| Drive {
+            axis: Axis::X,
+            part,
+            along_first: false,
+        };
+        assert_eq!(
+            shapes,
+            [
+                (shift_at, along_z(Part::Start)),
+                (drive_at, along_z(Part::End))
+            ]
+        );
         states::clear_range();
     }
 

@@ -2,6 +2,13 @@
 //! `ChainGearshiftBlock` and `ChainGearshiftBlockEntity`: how a drive joins the drives beside it
 //! into a chain (`updateShape`: its `part` and the axis the chain runs along), and the speed an
 //! adjustable gearshift gives its chain for the redstone signal it gets.
+//!
+//! Create runs `updateShape` inside the block change that causes it: the level tells the drives
+//! beside a changed block at once, and a drive that changes tells its own neighbours in turn.
+//! [`Shapes`] carries those notifications from the block change to the host that writes the
+//! states, and runs them in the level's order.
+
+use std::collections::{HashMap, VecDeque};
 
 use crate::kinetics::{Axis, Dir};
 
@@ -56,6 +63,16 @@ pub fn connection_axis(axis: Axis, along_first: bool) -> Axis {
 }
 
 impl Drive {
+    /// `defaultBlockState().setValue(AXIS, axis)`: alone (`part=none`), the chain's axis the
+    /// first other one (`axis_along_first=true`, the running binary's default).
+    pub fn placed(axis: Axis) -> Drive {
+        Drive {
+            axis,
+            part: Part::None,
+            along_first: true,
+        }
+    }
+
     pub fn connection_axis(self) -> Axis {
         connection_axis(self.axis, self.along_first)
     }
@@ -129,6 +146,131 @@ impl Drive {
             .into_iter()
             .filter(|d| d.axis() != self.axis)
             .fold(self, |s, d| s.update_shape(d, neighbour(d)))
+    }
+
+    /// `ChainDriveBlock.updateAfterWrenched`: the wrenched drive starts over from the default
+    /// state on its new `axis` and is shaped by the drives beside it.
+    pub fn update_after_wrenched(axis: Axis, neighbour: impl Fn(Dir) -> Option<Drive>) -> Drive {
+        Drive::placed(axis).shaped(neighbour)
+    }
+}
+
+/// The order the level tells a changed block's neighbours their shape may have changed in
+/// (vanilla's `BlockBehaviour.UPDATE_SHAPE_ORDER`).
+pub const UPDATE_SHAPE_ORDER: [Dir; 6] = [
+    Dir::West,
+    Dir::East,
+    Dir::North,
+    Dir::South,
+    Dir::Down,
+    Dir::Up,
+];
+
+/// The level's budget for nested shape updates (`Level.setBlock`'s default recursion of 512).
+const SHAPE_RECURSION: u32 = 512;
+
+/// A shape update a drive is due.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Update {
+    /// `getStateForPlacement`: a drive placed is shaped by the drives beside it.
+    Placed,
+    /// `updateShape(face, …)`: the block on `face` changed.
+    Neighbour(Dir),
+}
+
+/// The chain-drive shape updates of the level's block changes (`Level.setBlock`'s
+/// `updateNeighbourShapes`, and `getStateForPlacement`), in the order the changes were made.
+/// [`Shapes::run`] carries them out as the level does inside each change: every drive whose
+/// state changes tells its neighbours in turn, depth first, so a chain re-forms completely
+/// (`ChainDriveBlock.updateShape`).
+#[derive(Debug, Default)]
+pub struct Shapes {
+    pending: VecDeque<([i32; 3], Update)>,
+}
+
+fn offset(pos: [i32; 3], d: Dir) -> [i32; 3] {
+    let o = d.offset();
+    [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]
+}
+
+impl Shapes {
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+
+    /// A chain drive was placed at `pos`: its placement shape (`getStateForPlacement`).
+    pub fn placed(&mut self, pos: [i32; 3]) {
+        self.pending.push_back((pos, Update::Placed));
+    }
+
+    /// The block at `pos` changed: each drive beside it (`is_drive`) is told, in
+    /// [`UPDATE_SHAPE_ORDER`] (`updateNeighbourShapes`).
+    pub fn changed(&mut self, pos: [i32; 3], is_drive: impl Fn([i32; 3]) -> bool) {
+        for d in UPDATE_SHAPE_ORDER {
+            let at = offset(pos, d);
+            if is_drive(at) {
+                self.pending
+                    .push_back((at, Update::Neighbour(d.opposite())));
+            }
+        }
+    }
+
+    /// Carry out the updates due, reading drives from `world` (None: no chain drive there)
+    /// overlaid with what the updates made of them. Returns each drive that changed, in the
+    /// order they first changed, with its final state.
+    pub fn run(&mut self, world: impl Fn([i32; 3]) -> Option<Drive>) -> Vec<([i32; 3], Drive)> {
+        let mut run = Run {
+            world: &world,
+            now: HashMap::new(),
+            changed: Vec::new(),
+        };
+        while let Some((pos, update)) = self.pending.pop_front() {
+            run.update(pos, update, SHAPE_RECURSION);
+        }
+        run.changed
+            .into_iter()
+            .map(|pos| (pos, run.now[&pos]))
+            .filter(|&(pos, drive)| world(pos) != Some(drive))
+            .collect()
+    }
+}
+
+/// One [`Shapes::run`]: the drives changed so far.
+struct Run<'a> {
+    world: &'a dyn Fn([i32; 3]) -> Option<Drive>,
+    now: HashMap<[i32; 3], Drive>,
+    changed: Vec<[i32; 3]>,
+}
+
+impl Run<'_> {
+    fn drive(&self, pos: [i32; 3]) -> Option<Drive> {
+        self.now.get(&pos).copied().or_else(|| (self.world)(pos))
+    }
+
+    fn update(&mut self, pos: [i32; 3], update: Update, budget: u32) {
+        let Some(now) = self.drive(pos) else {
+            return;
+        };
+        let next = match update {
+            Update::Placed => now.shaped(|d| self.drive(offset(pos, d))),
+            Update::Neighbour(face) => now.update_shape(face, self.drive(offset(pos, face))),
+        };
+        if next == now {
+            return;
+        }
+        if self.now.insert(pos, next).is_none() {
+            self.changed.push(pos);
+        }
+        // `getStateForPlacement` precedes the change, whose own notifications follow it in
+        // the queue; a state `updateShape` changes is set at once (`updateOrDestroy`) and
+        // tells its neighbours before the next of the first change's are told.
+        if let Update::Neighbour(_) = update
+            && budget > 0
+        {
+            for d in UPDATE_SHAPE_ORDER {
+                self.update(offset(pos, d), Update::Neighbour(d.opposite()), budget - 1);
+            }
+        }
     }
 }
 
@@ -208,6 +350,45 @@ mod tests {
         assert_eq!(b, drive(Axis::X, Part::End, false));
         let b = b.update_shape(Dir::North, None);
         assert_eq!(b, lone);
+    }
+
+    #[test]
+    fn a_wrenched_drive_starts_over_from_its_default_state() {
+        // ChainDriveBlock.updateAfterWrenched, as Java 6.0.11 shows it (create-horizon#97): a
+        // lone z drive turned onto x beside an x gearshift to its north ends a chain along z.
+        let gearshift = drive(Axis::X, Part::None, true);
+        let wrenched =
+            Drive::update_after_wrenched(Axis::X, |d| (d == Dir::North).then_some(gearshift));
+        assert_eq!(wrenched, drive(Axis::X, Part::End, false));
+        // Its old part and chain are not kept: alone, it is the default on its new axis.
+        assert_eq!(
+            Drive::update_after_wrenched(Axis::Y, |_| None),
+            drive(Axis::Y, Part::None, true)
+        );
+    }
+
+    #[test]
+    fn a_change_re_forms_the_chain_through_every_drive_it_changes() {
+        // Two drives chained along z; a third above the south one. The north one goes: the
+        // south one is alone, so the one above joins it, so it joins the one above.
+        let north = [0, 0, -1];
+        let (here, above) = ([0, 0, 0], [0, 1, 0]);
+        let world = |p: [i32; 3]| match p {
+            [0, 0, 0] => Some(drive(Axis::X, Part::End, false)),
+            [0, 1, 0] => Some(drive(Axis::X, Part::None, true)),
+            _ => None,
+        };
+        let mut shapes = Shapes::default();
+        shapes.changed(north, |p| world(p).is_some());
+        assert!(!shapes.is_empty());
+        assert_eq!(
+            shapes.run(world),
+            [
+                (here, drive(Axis::X, Part::Start, true)),
+                (above, drive(Axis::X, Part::End, true)),
+            ]
+        );
+        assert!(shapes.is_empty());
     }
 
     #[test]
