@@ -7,8 +7,8 @@ Checked on 2026-11-19 (Linux x86_64, Rust 1.99.1, a fresh build directory), pinn
 No SDK mirror or trusted-key override is used. Mixins stays at
 `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`, as the release SDK specifies.
 
-The in-game rows below the registry smoke test are historical: the developer build was `b77574e` and the
-"Sunrise nightly pin" smoke test was on `2d81263`. The `ed3ac19` pin update was not itself tried in game.
+The table under “In game” is historical: the developer build was `b77574e` and the “Sunrise nightly pin”
+smoke test was on `2d81263`. The `ed3ac19` pin update was not itself tried in game.
 
 ## Checks
 
@@ -37,6 +37,14 @@ creative world. `/give @s create:cogwheel`, and the same command for `create:zin
 all succeeded. The cogwheel, motor and depot drew in the world, and the cogwheel and zinc ingot drew in the hotbar.
 The wrench occupied a slot but had no icon or held model. Custom item models, flattened/tinted models, texture
 copies, connected textures and model-derived placement ghosts still need the player's local `prepare` step.
+
+## Declared shapes and piston heads on `ed3ac19`
+
+In the registry smoke-test world, placed a torch and a standing sign on a metal girder, and a wall sign on the
+full declared face of a mechanical piston head. The attachments stayed in place. A creative motor extended a
+mechanical piston through two poles. The new head was present and `/data get block` reported no block entity;
+the same command on a vanilla player head returned `minecraft:skull`. Reversing the motor retracted the piston
+and removed its head.
 
 ## In game
 
