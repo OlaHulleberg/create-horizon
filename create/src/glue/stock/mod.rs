@@ -1674,6 +1674,13 @@ fn programmed(host: &dyn mod_api::Host, stack: &ItemStack) -> Option<Requester<K
     })
 }
 
+/// `RedstoneRequesterBlock.setPlacedBy`: restore the order from a programmed stack.
+pub(crate) fn requester_placed_by(lv: &ServerLevel<'_>, pos: [i32; 3], stack: &ItemStack) {
+    if let Some(r) = programmed(&*lv.host, stack) {
+        PROGRAMMED.with_borrow_mut(|p| p.push((lv.dim, pos, r)));
+    }
+}
+
 /// `assignFrequency`: the held linking item tuned to the network of the block at `pos`.
 fn tune(
     host: &mut dyn ServerHost,
@@ -1735,10 +1742,7 @@ impl ItemPart for StockItem {
             return;
         };
         place_block(&mut lv, event.pos);
-        // `RedstoneRequesterBlock.setPlacedBy`.
-        if let Some(r) = programmed(&*lv.host, event.stack) {
-            PROGRAMMED.with_borrow_mut(|p| p.push((lv.dim, event.pos, r)));
-        }
+        requester_placed_by(&lv, event.pos, event.stack);
         let Some(player) = event.placer else {
             return;
         };

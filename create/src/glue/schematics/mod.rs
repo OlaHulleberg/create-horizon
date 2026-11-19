@@ -22,9 +22,10 @@
 //! second half of doors, tall plants and beds (`setPlacedBy`), and the schematic's entities
 //! last (`launchEntity`: item frames and armor stands with what they hold and wear); a book or a
 //! clipboard in its book slot becomes the print's material checklist (`tickPaperPrinter`).
-//! A printed block loads the schematic's block entity data where Create keeps it
+//! A printed block merges the schematic's block entity data into the placed block entity
 //! (`prepareBlockEntityData`: blocks tagged `create:safe_nbt`, such as signs, banners, placards
-//! and links, and copycats; not a chest's items), merged into the placed block entity.
+//! and links, and copycats; not a chest's items). Then `setPlacedBy` runs with the launched stack
+//! but no player.
 //!
 //! Table and instant uploads keep the player's latest schematics in the mod's game data folder
 //! (`ServerSchematicLoader`, `maxSchematics`).
@@ -891,15 +892,60 @@ impl CannonWorld for World<'_, '_> {
     }
 
     fn place(&mut self, pos: [i32; 3], state: u32) {
-        self.place_data(pos, state, None);
+        self.place_data(pos, state, None, None);
     }
-    fn place_data(&mut self, pos: [i32; 3], state: u32, data: Option<&sch::Nbt>) {
-        if let Some(s) = interned(state) {
-            self.lv.set_state(pos, s, place_flags());
-            if let Some(data) = data {
-                merge_block_data(self.lv, pos, s, data);
+    fn place_data(
+        &mut self,
+        pos: [i32; 3],
+        state: u32,
+        stack: Option<(&str, u32)>,
+        data: Option<&sch::Nbt>,
+    ) {
+        let Some(s) = interned(state) else { return };
+        let changed = self.lv.set_state(pos, s, place_flags());
+        // `setBlock` also returns false for equal states. Never run the placement callback on
+        // a different block (a refused write or a synchronous replacement).
+        let Some(current) = self.lv.block_state(pos) else {
+            return;
+        };
+        if current.block() != s.block() || (!changed && current != s) {
+            return;
+        }
+        if let Some(data) = data {
+            merge_block_data(self.lv, pos, s, data);
+        }
+        let stack =
+            stack.and_then(|(item, count)| packages::body::new_stack(&*self.lv.host, item, count));
+        match self
+            .lv
+            .level
+            .set_placed_by(&mut *self.lv.host, pos, stack.as_ref())
+        {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                crate::create_log!(
+                    "[create] printed placement callback was refused at {pos:?}: {error:?}"
+                );
+                return;
             }
-            second_half(self.lv, pos, s);
+        }
+        // Direct placement does not run the original item's part. Reuse only Create block
+        // callbacks that also run without a player or a clicked face.
+        match (block_of(states::id_or_none(s)), stack.as_ref()) {
+            (Some(Block::CopperBacktank | Block::NetheriteBacktank), Some(stack)) => {
+                super::equipment::backtank_placed_by(self.lv.dim, pos, stack);
+            }
+            (Some(Block::RedstoneRequester), Some(stack)) => {
+                super::stock::requester_placed_by(self.lv, pos, stack);
+            }
+            (Some(Block::MechanicalRoller), _) => {
+                super::contraptions::actors::roller_placed_by(self.lv.dim, pos);
+            }
+            (Some(block), Some(stack)) if create_engine::dye::is_toolbox(block) => {
+                super::processing::toolbelt::placed(self.lv, pos, stack);
+            }
+            _ => {}
         }
     }
     fn fired(&mut self, _now: u64) {
@@ -971,42 +1017,6 @@ fn sign_has_click(data: &Compound) -> bool {
     ["front_text", "back_text"]
         .iter()
         .any(|k| data.get(&(*k).into()).is_some_and(clicks))
-}
-
-/// `placeSchematicBlock`'s `setPlacedBy` for the blocks of two (`DoorBlock`, `DoublePlantBlock`
-/// and `SmallDripleafBlock`: the upper half above; `BedBlock`: the head toward its facing),
-/// written with the game's updates: the printer ignores those halves in the schematic.
-fn second_half(lv: &mut ServerLevel<'_>, pos: [i32; 3], state: BlockState) {
-    let facts = lv.host.block_states();
-    let prop = |k: &str| state.property(&facts, k).ok().flatten();
-    let (at, other) = if prop("half") == Some("lower") {
-        let Ok(upper) = state.with(&facts, "half", "upper") else {
-            return;
-        };
-        // `copyWaterloggedFrom` the block above (the printer's placed state is dry).
-        ([pos[0], pos[1] + 1, pos[2]], upper)
-    } else if prop("part") == Some("foot") && prop("occupied").is_some() {
-        let o = match prop("facing") {
-            Some("north") => [0, 0, -1],
-            Some("south") => [0, 0, 1],
-            Some("west") => [-1, 0, 0],
-            Some("east") => [1, 0, 0],
-            _ => return,
-        };
-        let Ok(head) = state.with(&facts, "part", "head") else {
-            return;
-        };
-        ([pos[0] + o[0], pos[1], pos[2] + o[2]], head)
-    } else {
-        return;
-    };
-    let other = match lv.block_name(at).as_deref() {
-        Some("minecraft:water") if prop("half").is_some() => {
-            other.with(&facts, "waterlogged", "true").unwrap_or(other)
-        }
-        _ => other,
-    };
-    lv.set_state(at, other, super::server::update_all());
 }
 
 /// Whether `state`'s collision shape at `pos` is a whole block (`isCollisionShapeFullBlock`).
@@ -2263,7 +2273,12 @@ pub(super) fn printed(host: &mut dyn ServerHost, player: PlayerRef, rest: &[u8])
         let (state, belt_to, casings) = cn::launch(&printer, &entries, rel, target, entry);
         match belt_to {
             Some(to) => w.place_belt(target, state, to, &casings),
-            None => w.place_data(target, state, printer.block_data(rel, entry).as_ref()),
+            None => w.place_data(
+                target,
+                state,
+                entry.requirement.first_stack(),
+                printer.block_data(rel, entry).as_ref(),
+            ),
         }
     }
 }
@@ -2395,6 +2410,15 @@ fn chunk_data_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
                                         ),
                                     ),
                                 ])
+                                .chain(f.stack.iter().map(|(id, count)| {
+                                    (
+                                        "Stack",
+                                        Tag::compound([
+                                            ("id", Tag::String(id.as_str().into())),
+                                            ("count", Tag::Long(i64::from(*count))),
+                                        ]),
+                                    )
+                                }))
                                 .chain(f.data.iter().map(|d| ("Data", body::to_game(d)))),
                         )
                     })
@@ -2509,6 +2533,18 @@ fn chunk_load(lv: &ServerLevel<'_>, data: &Compound) {
                         continue;
                     }
                     let to = ints(f.get(&"BeltTo".into()));
+                    let stack = f.get(&"Stack".into()).and_then(|tag| {
+                        let Tag::Compound(stack) = tag else {
+                            return None;
+                        };
+                        let (Some(Tag::String(id)), Some(Tag::Long(count))) =
+                            (stack.get(&"id".into()), stack.get(&"count".into()))
+                        else {
+                            return None;
+                        };
+                        let count = u32::try_from(*count).ok()?;
+                        (count > 0).then(|| (id.to_string_lossy(), count))
+                    });
                     cannon.flying.push(cn::Flying {
                         target: [t[0], t[1], t[2]],
                         state,
@@ -2517,6 +2553,7 @@ fn chunk_load(lv: &ServerLevel<'_>, data: &Compound) {
                             .iter()
                             .map(|c| (*c).clamp(0, 2) as u8)
                             .collect(),
+                        stack,
                         data: f.get(&"Data".into()).map(body::to_engine),
                         entity,
                         total: t[4].max(0) as u32,

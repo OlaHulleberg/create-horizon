@@ -3158,9 +3158,14 @@ impl ItemPart for RollerItem {
             return;
         };
         if let Some(dim) = super::super::world::level_index(&dimension) {
-            ROLLERS_PLACED.with_borrow_mut(|r| r.push((dim, event.pos)));
+            roller_placed_by(dim, event.pos);
         }
     }
+}
+
+/// `RollerBlock.setPlacedBy`: search for a neighbour's shared values even without a player.
+pub(crate) fn roller_placed_by(dim: usize, pos: [i32; 3]) {
+    ROLLERS_PLACED.with_borrow_mut(|r| r.push((dim, pos)));
 }
 
 struct MountedPart;
