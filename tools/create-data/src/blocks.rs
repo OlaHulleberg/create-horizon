@@ -3934,12 +3934,10 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     Some(Value::Object(doc))
 }
 
-/// MetalScaffoldingBlock's shapes, declared: Horizon gives scaffolding's context-dependent
-/// collision (`ScaffoldingBlock.getCollisionShape`: solid only from above, unless descending)
-/// only to `minecraft:scaffolding` itself, and a copy without shapes of its own has no collision
-/// shape at all (placing one fails, and the game stops when an entity meets one). Its outline
-/// and collision here are ScaffoldingBlock's `STABLE_SHAPE` (with the bottom slab when
-/// `bottom`): it is stood on as vanilla's, but not climbed through from inside.
+/// MetalScaffoldingBlock's shapes, declared: its outline is ScaffoldingBlock's `STABLE_SHAPE`
+/// (with the bottom slab when `bottom`), and its collision is scaffolding's context-dependent
+/// one (`ScaffoldingBlock.getCollisionShape`: solid only from above, unless descending), which
+/// a declared block takes by `context_collision`.
 fn scaffolding_shapes(doc: &mut Map<String, Value>) {
     let stable = json!([
         [0.0, 0.875, 0.0, 1.0, 1.0, 1.0],
@@ -3956,7 +3954,7 @@ fn scaffolding_shapes(doc: &mut Map<String, Value>) {
         "shapes".into(),
         json!({ "properties": ["bottom"], "values": { "true": unstable }, "default": stable }),
     );
-    doc.insert("collision_shapes".into(), json!({ "default": stable }));
+    doc.insert("context_collision".into(), json!("scaffolding"));
 }
 
 /// Vanilla 26.3's state properties of the templates blocks with properties of their own are
