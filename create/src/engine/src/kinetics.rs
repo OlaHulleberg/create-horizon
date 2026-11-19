@@ -897,8 +897,12 @@ impl Kinetics {
         }
     }
 
-    /// `GearshiftBlock.detachKinetics`: remove downstream rotation and attach next tick,
-    /// retaining the entity's own source and network.
+    /// `GearshiftBlock.detachKinetics` (with `reAttachNextTick`): remove downstream rotation,
+    /// retaining the entity's own source and network. The re-attach is a scheduled block
+    /// tick (`worldIn.scheduleTick(pos, this, 1, TickPriority.EXTREMELY_HIGH)`, run as
+    /// `GearshiftBlock.tick`) — owed before the entities' own ticks next solve
+    /// (`reattach_transmission`). The serialized `NeedsSpeedUpdate` flag carries the re-attach
+    /// across a save the level's scheduled tick list would also survive.
     pub fn detach_transmission(&mut self, pos: [i32; 3]) {
         let Some(ids) = self.at.get(&pos).copied() else {
             return;
@@ -910,6 +914,21 @@ impl Kinetics {
             self.dirty.push(id);
         }
         self.pending_events.extend(events);
+    }
+
+    /// `GearshiftBlock.tick`, the scheduled re-attach after `detach_transmission`:
+    /// `RotationPropagator.handleAdded` on whatever entity the position now holds. Scheduled
+    /// ticks run before the level's block entity ticks, so the transmission re-attaches
+    /// before any entity's own base tick (issue #95: after a reload, the re-attach joins the
+    /// still-fresh entities to the network before the first of them initializes it).
+    pub(crate) fn reattach_transmission(&mut self, pos: [i32; 3], events: &mut Vec<Event>) {
+        let Some(id) = self.at.get(&pos).map(|ids| ids[0]).filter(|&id| id != NONE) else {
+            return;
+        };
+        if !self.nodes[id as usize].live {
+            return;
+        }
+        self.propagate_new_source(id, events);
     }
 
     /// `KineticBlockEntity.switchToBlockState`: detach before setting a non-equivalent
@@ -965,14 +984,14 @@ impl Kinetics {
         self.order.remove(pos);
         // destroyBlock makes the position absent before block entity removal callbacks.
         // Existing propagation frames retain their old entity's speed, as Java references do.
-        for id in ids.into_iter().filter(|&i| i != NONE) {
+        for &id in ids.iter().filter(|&&i| i != NONE) {
             let net = self.nodes[id as usize].state.net;
             self.networks.remove(net, id, &mut self.nodes);
             self.networks.clear_entity_dirty(id, &self.nodes);
             self.nodes[id as usize].live = false;
         }
         let mut breaks = Vec::new();
-        for id in ids.into_iter().filter(|&i| i != NONE) {
+        for &id in ids.iter().filter(|&&i| i != NONE) {
             self.handle_removed(id, &mut breaks);
         }
         self.pending_events.extend(breaks);
@@ -981,7 +1000,7 @@ impl Kinetics {
                 self.dirty.extend(n.iter().copied().filter(|&i| i != NONE));
             }
         }
-        for id in ids.into_iter().filter(|&i| i != NONE) {
+        for &id in ids.iter().filter(|&&i| i != NONE) {
             let part = self.nodes[id as usize].part;
             for o in neighbour_offsets(&part) {
                 if let Some(n) = self.at.get(&add(pos, o)) {
@@ -1413,11 +1432,12 @@ impl Kinetics {
             self.saved_dirty.insert(self.nodes[id as usize].pos);
             self.propagate_new_source(id, events);
         }
-        if !self.nodes[id as usize].live {
-            return;
-        }
-        // SmartBlockEntity.tick invokes KineticBlockEntity.initialize after
-        // attachKinetics, before the generator's own initialize callback.
+        // SmartBlockEntity.tick invokes KineticBlockEntity.initialize after attachKinetics,
+        // before the generator's own initialize callback - even when the attach just
+        // destroyed this entity (`world.destroyBlock` inside `propagateNewSource` removed it
+        // from its network): a first-tick entity's initialize then runs `addSilently` on it
+        // and reads it back into the network, where the next recalculation prunes the
+        // member the world no longer holds (issue #101).
         if self.nodes[id as usize].state.lifecycle.is_new() {
             self.initialize_network(id);
         }
@@ -2927,6 +2947,207 @@ mod tests {
     }
 
     #[test]
+    fn a_part_destroyed_by_its_own_attach_keeps_the_network_one_more_tick() {
+        // Issue #101: a shaft placed between two motors turning against each other breaks
+        // during its own first tick. destroyBlock removes it from its network at once, but
+        // the initialize that follows attachKinetics in SmartBlockEntity.tick reads it back
+        // in (KineticBlockEntity.initialize -> addSilently): the network counts 3 at the
+        // break tick, and 2 from the next one, when the removal's networkDirty member
+        // recalculates and calculateStress prunes the member the world no longer holds
+        // (observed create-fuzz ticks 9 and 10).
+        let mut k = Kinetics::new();
+        k.set([-1, 8, 0], 0, motor(Dir::East, 32.0));
+        k.set([0, 8, 0], 0, Part::shaft(Axis::X));
+        k.set([2, 8, 0], 0, Part::shaft(Axis::X));
+        k.set([3, 8, 0], 0, motor(Dir::West, 32.0));
+        solve(&mut k);
+        k.advance();
+        solve(&mut k);
+        let left = network_id([-1, 8, 0]);
+        assert_eq!(k.networks.figures(Some(left)), (0.0, 2048.0, 2));
+        // The joining shaft is placed between ticks and attaches at its first tick.
+        k.set([1, 8, 0], 0, Part::shaft(Axis::X));
+        k.advance();
+        let events = solve(&mut k);
+        assert!(
+            events.contains(&Event::Break { pos: [1, 8, 0] }),
+            "{events:?}"
+        );
+        assert_eq!(
+            k.networks.figures(Some(left)),
+            (0.0, 2048.0, 3),
+            "the destroyed part stays a member for one more tick"
+        );
+        k.advance();
+        solve(&mut k);
+        assert_eq!(k.networks.figures(Some(left)), (0.0, 2048.0, 2));
+        assert!(!k.has_part([1, 8, 0], 0));
+    }
+
+    #[test]
+    fn an_attaching_part_destroyed_by_its_own_tick_re_solves_its_dependents_at_once() {
+        // The cog placed last gains a dependent above it before the opposed shaft behind it
+        // breaks it: the destroy re-solves the dependent at once (it stops and leaves the
+        // network in the break tick), while the broken first-tick part itself is read back
+        // into the network by its own initialize and pruned on the next tick (observed
+        // create-fuzz break-self-dependent, tick 6: the dependent at 0, the network at 3,
+        // then 2).
+        let mut k = Kinetics::new();
+        k.set([-1, 8, 0], 0, motor(Dir::East, 32.0));
+        k.set([0, 8, 0], 0, Part::shaft(Axis::X));
+        k.set([2, 8, 0], 0, Part::shaft(Axis::X));
+        k.set([3, 8, 0], 0, motor(Dir::West, 32.0));
+        k.set([1, 9, 0], 0, Part::cog(Axis::X, false));
+        solve(&mut k);
+        k.advance();
+        solve(&mut k);
+        k.set([1, 8, 0], 0, Part::cog(Axis::X, false));
+        k.advance();
+        let events = solve(&mut k);
+        assert!(
+            events.contains(&Event::Break { pos: [1, 8, 0] }),
+            "{events:?}"
+        );
+        assert_eq!(
+            k.speed([1, 9, 0], 0),
+            Some(0.0),
+            "the dependent stops at once"
+        );
+        let left = network_id([-1, 8, 0]);
+        assert_eq!(k.networks.figures(Some(left)), (0.0, 2048.0, 3));
+        k.advance();
+        solve(&mut k);
+        assert_eq!(k.networks.figures(Some(left)), (0.0, 2048.0, 2));
+    }
+
+    #[test]
+    fn a_bystander_broken_by_an_attach_leaves_its_network_at_once() {
+        // A part the propagation reaches through another's attach (not its own tick) is
+        // removed from its network with the destroy itself: a joiner at 200 RPM overpowers
+        // the large cog at 32, whose 2x step to the small cog above it is too fast, so the
+        // large cog breaks and leaves the joiner's network in the same tick, and everything
+        // it had overpowered stops (observed create-fuzz break-inwalk, tick 11).
+        let mut k = Kinetics::new();
+        k.set([0, 8, 0], 0, motor(Dir::East, 200.0));
+        k.set([1, 8, 0], 0, Part::shaft(Axis::X));
+        k.set([3, 8, 0], 0, Part::cog(Axis::X, true));
+        k.set([3, 9, 1], 0, Part::cog(Axis::X, false));
+        k.set([4, 8, 0], 0, motor(Dir::West, -32.0));
+        solve(&mut k);
+        k.advance();
+        solve(&mut k);
+        let left = network_id([0, 8, 0]);
+        assert_eq!(k.networks.figures(Some(left)), (0.0, 12800.0, 2));
+        k.set([2, 8, 0], 0, Part::shaft(Axis::X));
+        k.advance();
+        let events = solve(&mut k);
+        assert!(
+            events.contains(&Event::Break { pos: [3, 8, 0] }),
+            "{events:?}"
+        );
+        assert_eq!(
+            k.networks.figures(Some(left)),
+            (0.0, 12800.0, 3),
+            "the broken conveyer leaves at once: the joiner's network counts three"
+        );
+        assert_eq!(k.speed([3, 9, 1], 0), Some(0.0), "its dependent re-solves");
+        assert_eq!(
+            k.speed([4, 8, 0], 0),
+            Some(0.0),
+            "the overpowered motor stops"
+        );
+        k.advance();
+        solve(&mut k);
+        assert_eq!(
+            k.networks.figures(Some(left)),
+            (0.0, 12800.0, 3),
+            "no member lingers: unlike a part broken by its own tick"
+        );
+    }
+
+    #[test]
+    fn the_scheduled_transmission_reattach_precedes_reloaded_entities_initializes() {
+        // Issue #95: GearshiftBlock.neighborChanged detaches the transmission and schedules
+        // Gearshift.tick, which the level runs before any block entity ticks. Re-attaching
+        // before the reloaded entities' first ticks joins the output side while every entity
+        // is still fresh: KineticBlockEntity.setNetwork creates the network (initialized,
+        // without the saved totals), so no initialize's initFromTE restores the saved member
+        // count and the network ends at its four live members (Java tick 24: size 4 with the
+        // crank's capacity, not 5). With the re-attach left to the entities' own ticks, the
+        // first initialize runs initFromTE with the saved size and the re-joined output side
+        // is counted twice.
+        let positions = [[-2, 0, 0], [-1, 0, 0], [0, 0, 0], [1, 0, 0]];
+        let crank = Part {
+            generated: 0.0,
+            capacity: 8.0,
+            ..Part::half(Dir::East)
+        };
+        let parts = [
+            crank,
+            Part::shaft(Axis::X),
+            Part::split_shaft(Axis::X, 1.0),
+            Part {
+                impact: 4.0,
+                ..Part::shaft(Axis::X)
+            },
+        ];
+        let mut original = Kinetics::new();
+        for (pos, part) in positions.into_iter().zip(parts) {
+            original.set(pos, 0, part);
+        }
+        solve(&mut original);
+        // The crank starts turning: everyone joins through its propagation, and the added
+        // members' networkDirty recalculations sync one size onto every saved record.
+        original.set(
+            [-2, 0, 0],
+            0,
+            Part {
+                generated: -32.0,
+                ..crank
+            },
+        );
+        solve(&mut original);
+        original.advance();
+        solve(&mut original);
+        let saved = positions.map(|pos| original.saved_state(pos, 0).unwrap());
+        let net = saved[0].network.unwrap().id;
+        assert_eq!(original.networks.figures(Some(net)), (128.0, 256.0, 4));
+        assert!(saved.iter().all(|s| s.network.unwrap().size == 4));
+
+        let mut loaded = Kinetics::new();
+        let loaded_parts = [
+            Part {
+                generated: -32.0,
+                ..crank
+            },
+            parts[1],
+            parts[2],
+            parts[3],
+        ];
+        for ((pos, part), saved) in positions.into_iter().zip(loaded_parts).zip(&saved) {
+            loaded.set(pos, 0, part);
+            assert!(loaded.restore_state(pos, 0, *saved));
+        }
+        // The gearshift powers: neighborChanged detaches, the state commits, and the
+        // scheduled tick re-attaches before any of the fresh entities tick.
+        loaded.detach_transmission([0, 0, 0]);
+        loaded.change_block_state([0, 0, 0], 0, Part::split_shaft(Axis::X, -1.0), true);
+        let mut events = Vec::new();
+        loaded.reattach_transmission([0, 0, 0], &mut events);
+        loaded.advance();
+        solve(&mut loaded);
+        assert_eq!(loaded.networks.figures(Some(net)), (128.0, 256.0, 4));
+        for pos in positions {
+            assert_eq!(
+                loaded.saved_state(pos, 0).unwrap().network.unwrap().size,
+                4,
+                "{pos:?}"
+            );
+        }
+        assert_eq!(loaded.speed([1, 0, 0], 0), Some(32.0));
+    }
+
+    #[test]
     fn a_turning_cog_drives_a_still_controller_at_its_target() {
         let mut k = Kinetics::new();
         k.set([1, 0, 0], 0, controller(-48.0));
@@ -3058,7 +3279,7 @@ mod tests {
                 ..Part::half(Dir::East)
             },
         );
-        k.detach_transmission([0, 0, 0]);
+        k.restart_sequence_output([0, 0, 0]);
         k.set_sequence_context(
             [0, 0, 0],
             1,

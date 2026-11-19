@@ -192,6 +192,12 @@ pub struct Dimension {
     /// Blocks whose redstone power may have changed (a clutch or gearshift that was placed or
     /// whose neighbour changed), checked after the level's tick.
     redstone: Vec<[i32; 3]>,
+    /// Transmissions whose `GearshiftBlock.neighborChanged` scheduled a re-attach one tick
+    /// later (`GearshiftBlock.tick`, `TickPriority.EXTREMELY_HIGH`). The level runs scheduled
+    /// ticks before block entities tick, so these are owed before the next solve's base ticks.
+    /// They belong to the block change, not the entities: a reload that replaces every block
+    /// entity still owes them (issue #95).
+    transmission_ticks: Vec<[i32; 3]>,
     /// The shape updates chain drives are due from the block changes so far
     /// (`ChainDriveBlock.getStateForPlacement` and `updateShape`), for the host to carry out.
     /// They outlive a column's unloading: they belong to changes already made.
@@ -1377,7 +1383,25 @@ impl CreateWorld {
             .block_at(dim, pos)
             .is_some_and(|b| matches!(b, Block::Clutch | Block::Gearshift))
         {
-            self.dims[dim].kinetics.detach_transmission(pos);
+            let d = &mut self.dims[dim];
+            d.kinetics.detach_transmission(pos);
+            if !d.transmission_ticks.contains(&pos) {
+                d.transmission_ticks.push(pos);
+            }
+        }
+    }
+
+    /// The level's scheduled block ticks (`GearshiftBlock.tick`, one tick after
+    /// `transmission_power_changing` detached the transmission). The level runs them before
+    /// any block entity ticks, so hosts owe this call at the start of the level tick, before
+    /// any base tick runs (issue #95: after a reload, the re-attach joins the still-fresh
+    /// entities to the network before the first of them initializes it). The schedule belongs
+    /// to the block change, not the entities: a reload that replaces every block entity
+    /// still owes it.
+    pub fn reattach_scheduled_transmissions(&mut self, dim: usize, events: &mut Vec<Event>) {
+        let d = &mut self.dims[dim];
+        for pos in std::mem::take(&mut d.transmission_ticks) {
+            d.kinetics.reattach_transmission(pos, events);
         }
     }
 
