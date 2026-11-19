@@ -7,7 +7,7 @@ use crate::glue::pipelines::{Pose, Textured};
 use crate::glue::redstone::pose;
 use crate::glue::{client_table, kinetics, models, states};
 use create_engine::Block;
-use create_engine::display::{self, Board, Face, Lang, Shown};
+use create_engine::display::{self, Board, Face, Shown};
 use create_engine::kinetics::Dir;
 use mod_api::{
     BlockEntityDrawContext, BlockEntityPart, BlockEntityRenderBoundingBoxEvent,
@@ -67,14 +67,12 @@ fn options(host: &dyn ClientHost) -> Vec<Vec<String>> {
     DISPLAYS.with_borrow_mut(|d| {
         d.options
             .get_or_insert_with(|| {
-                let resolve = |k: &str| host.translate(k);
-                let lang = Lang {
-                    resolve: Some(&resolve),
-                };
-                display::Cycle::ALL
-                    .iter()
-                    .map(|c| c.options(&lang))
-                    .collect()
+                super::with_language(host, |lang| {
+                    display::Cycle::ALL
+                        .iter()
+                        .map(|c| c.options(lang))
+                        .collect()
+                })
             })
             .clone()
     })

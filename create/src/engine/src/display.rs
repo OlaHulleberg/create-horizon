@@ -16,9 +16,9 @@ pub const CHANNEL: &str = "create:display";
 // ---------------------------------------------------------------------------------------------
 // Language
 
-/// The en_us text of the lang keys used here (Create's generated `en_us.json`, MIT), for when the
-/// game's own lang has no entry.
-pub fn en_us(key: &str) -> Option<&'static str> {
+/// English text from Create's generated `en_us.json` (MIT), for pure engine tests.
+#[cfg(test)]
+fn en_us(key: &str) -> Option<&'static str> {
     Some(match key {
         "create.generic.unit.rpm" => "RPM",
         "create.generic.unit.stress" => "su",
@@ -109,23 +109,33 @@ pub fn en_us(key: &str) -> Option<&'static str> {
     })
 }
 
-/// A lang key's text in the game's language, if it has one.
-pub type Resolve<'a> = &'a dyn Fn(&str) -> Option<String>;
+/// A component resolved in the game's language, with its key and literal arguments.
+pub type Resolve<'a> = &'a dyn Fn(&str, &[&str]) -> String;
 
 /// Lang lookups: the game's language first (`resolve`), else en_us, else the key itself
 /// (`Component.translatable` of an unknown key).
 pub struct Lang<'a> {
-    pub resolve: Option<Resolve<'a>>,
+    pub resolve: Resolve<'a>,
 }
 
 impl Lang<'_> {
-    pub const EN_US: Lang<'static> = Lang { resolve: None };
+    #[cfg(test)]
+    const EN_US: Lang<'static> = Lang {
+        resolve: &|key, args| {
+            args.iter()
+                .enumerate()
+                .fold(en_us(key).unwrap_or(key).to_owned(), |text, (i, arg)| {
+                    text.replace(&format!("%{}$s", i + 1), arg)
+                })
+        },
+    };
 
     pub fn get(&self, key: &str) -> String {
-        self.resolve
-            .and_then(|r| r(key))
-            .or_else(|| en_us(key).map(str::to_owned))
-            .unwrap_or_else(|| key.to_owned())
+        self.format(key, &[])
+    }
+
+    pub fn format(&self, key: &str, args: &[&str]) -> String {
+        (self.resolve)(key, args)
     }
 }
 
@@ -574,8 +584,10 @@ pub fn station_summary_text(
             lines.push(if min > 0 {
                 lang.get("create.display_source.station_summary.minutes")
             } else {
-                lang.get("create.display_source.station_summary.seconds")
-                    .replace("%1$s", &sec.to_string())
+                lang.format(
+                    "create.display_source.station_summary.seconds",
+                    &[&sec.to_string()],
+                )
             });
         }
         lines.push(a.train.clone());
@@ -681,8 +693,7 @@ impl BoilerView {
         } else if level == 18 {
             lang.get("create.boiler.max_lvl")
         } else {
-            lang.get("create.boiler.lvl")
-                .replace("%1$s", &level.to_string())
+            lang.format("create.boiler.lvl", &[&level.to_string()])
         }
     }
 
@@ -750,7 +761,9 @@ pub fn train_status(
     let Some(condition) = list.get(progress) else {
         return Some(String::new());
     };
-    let status = |id: &str| lang.get(&format!("create.schedule.condition.{id}.status"));
+    let status = |id: &str, args: &[&str]| {
+        lang.format(&format!("create.schedule.condition.{id}.status"), args)
+    };
     Some(match *condition {
         // TimedWaitCondition.getWaitingStatus.
         Condition::Delay { value, unit } | Condition::Idle { value, unit } => {
@@ -767,14 +780,14 @@ pub fn train_status(
                 (false, true) => "create.generic.daytime.second",
                 (false, false) => "create.generic.unit.seconds",
             };
-            status(condition.id()).replace("%1$s", &format!("{num} {}", lang.get(key)))
+            status(condition.id(), &[&format!("{num} {}", lang.get(key))])
         }
-        Condition::PlayerCount { count, .. } => status("player_count")
-            .replace("%1$s", &players.to_string())
-            .replace("%2$s", &count.to_string()),
-        Condition::Powered => status("powered"),
-        Condition::RedstoneLink { .. } => status("redstone_link"),
-        Condition::Unloaded => status("unloaded"),
+        Condition::PlayerCount { count, .. } => {
+            status("player_count", &[&players.to_string(), &count.to_string()])
+        }
+        Condition::Powered => status("powered", &[]),
+        Condition::RedstoneLink { .. } => status("redstone_link", &[]),
+        Condition::Unloaded => status("unloaded", &[]),
         // `CargoThresholdCondition.getWaitingStatus`: empty without a display snapshot of the
         // cargo, which the runtime does not keep for display links.
         Condition::FluidThreshold { .. } | Condition::ItemThreshold { .. } => String::new(),
@@ -802,13 +815,11 @@ pub fn train_status(
             } else {
                 "create.generic.daytime.am"
             });
-            let digital = lang
-                .get("create.schedule.condition.time_of_day.digital_format")
-                .replace("%1$s", &h12.to_string())
-                .replace("%2$s", &h.to_string())
-                .replace("%3$s", &format!("{m:02}"))
-                .replace("%4$s", &half);
-            format!("{}{digital}", status("time_of_day"))
+            let digital = lang.format(
+                "create.schedule.condition.time_of_day.digital_format",
+                &[&h12.to_string(), &h.to_string(), &format!("{m:02}"), &half],
+            );
+            format!("{}{digital}", status("time_of_day", &[]))
         }
     })
 }
@@ -911,10 +922,8 @@ pub fn boiler_text(
             // `Stream.of(EMPTY)`: one entry of no lines.
             None => vec![String::new()],
             Some(b) => {
-                let mut lines = vec![
-                    lang.get("create.boiler.status_short")
-                        .replace("%1$s", &b.level_text(lang)),
-                ];
+                let mut lines =
+                    vec![lang.format("create.boiler.status_short", &[&b.level_text(lang)])];
                 for (label, level) in b.rows() {
                     // `componentHelper(.., forGoggles, .., RESET)`: the label as it is, the
                     // dots dark grey.
@@ -946,8 +955,7 @@ pub fn boiler_text(
         .collect();
     let width = labels.iter().map(|l| l.chars().count()).max().unwrap_or(0);
     let mut flap = vec![vec![
-        lang.get("create.boiler.status")
-            .replace("%1$s", &b.level_text(lang)),
+        lang.format("create.boiler.status", &[&b.level_text(lang)]),
     ]];
     for ((_, level), label) in b.rows().iter().zip(&labels) {
         let pad = " ".repeat(width - label.chars().count());
@@ -1342,12 +1350,18 @@ pub fn stopwatch(diff: i64) -> String {
 }
 
 /// `SingleLineDisplaySource.provideText`: the label before the line, `EMPTY` for no line.
-pub fn provide_text(source: Source, config: &Config, line: &Line, target: Target) -> Vec<String> {
+pub fn provide_text(
+    source: Source,
+    config: &Config,
+    line: &Line,
+    target: Target,
+    lang: &Lang,
+) -> Vec<String> {
     if let Some((text, _, _)) = &line.rows {
         return text.clone();
     }
     if let Some(entries) = &line.entries {
-        return list_text(source, config, entries, target, &Lang::EN_US);
+        return list_text(source, config, entries, target, lang);
     }
     let Some(text) = &line.text else {
         return vec![String::new()];
@@ -1382,14 +1396,19 @@ pub fn list_text(
 
 /// `SingleLineDisplaySource.provideFlapDisplayText`: the label and the value as two sections; a
 /// list's entries' parts (`ValueListDisplaySource.provideFlapDisplayText`).
-pub fn provide_flap_text(source: Source, config: &Config, line: &Line) -> Vec<Vec<String>> {
+pub fn provide_flap_text(
+    source: Source,
+    config: &Config,
+    line: &Line,
+    lang: &Lang,
+) -> Vec<Vec<String>> {
     if let Some((_, flap, _)) = &line.rows {
         return flap.clone();
     }
     if let Some(entries) = &line.entries {
         return entries
             .iter()
-            .map(|e| entry_components(source, config, e, &Lang::EN_US))
+            .map(|e| entry_components(source, config, e, lang))
             .collect();
     }
     if source.allows_labeling(Target::Board) && !config.label.is_empty() {
@@ -1398,7 +1417,7 @@ pub fn provide_flap_text(source: Source, config: &Config, line: &Line) -> Vec<Ve
             line.text.clone().unwrap_or_default(),
         ]];
     }
-    provide_text(source, config, line, Target::Board)
+    provide_text(source, config, line, Target::Board, lang)
         .into_iter()
         .map(|t| vec![t])
         .collect()
@@ -1909,12 +1928,11 @@ pub fn load_list_layout(
     config: &Config,
     highest: i64,
     max_chars: i32,
+    lang: &Lang,
 ) {
     let shortened = config.format == 0;
     if source == Source::ListFluids {
-        let length = fluid_string(highest, shortened, &Lang::EN_US)
-            .chars()
-            .count() as i32;
+        let length = fluid_string(highest, shortened, lang).chars().count() as i32;
         let key = format!("FluidList_{length}");
         if layout.is_layout(&key) {
             return;
@@ -1966,6 +1984,7 @@ pub fn accept_flap_text(
     config: &Config,
     numeric: bool,
     highest: i64,
+    lang: &Lang,
     reserved: impl Fn(usize) -> bool,
 ) -> bool {
     let max = board.max_chars();
@@ -2013,7 +2032,7 @@ pub fn accept_flap_text(
         } else if source.single_line() {
             load_flap_layout(layout, source, config, numeric, max);
         } else {
-            load_list_layout(layout, source, config, highest, max_list);
+            load_list_layout(layout, source, config, highest, max_list, lang);
         }
         for (section, t) in layout.sections.iter_mut().zip(row) {
             section.set_text(t);
@@ -3108,6 +3127,40 @@ mod tests {
     }
 
     #[test]
+    fn boiler_status_is_localized_with_its_level_as_an_argument() {
+        let lang = Lang {
+            resolve: &|key, args| match key {
+                "create.boiler.idle" => {
+                    assert!(args.is_empty());
+                    "En veille".into()
+                }
+                "create.boiler.status_short" => {
+                    assert_eq!(args, ["En veille"]);
+                    format!("{} : chaudière", args[0])
+                }
+                _ => key.to_owned(),
+            },
+        };
+        let b = BoilerView {
+            passive: true,
+            active_heat: 0,
+            for_size: 1,
+            for_water: 0,
+        };
+        let (text, _, _) = boiler_text(
+            Some(&b),
+            Target::Sign { hanging: false },
+            Stats {
+                rows: 4,
+                columns: 15,
+            },
+            &lang,
+        );
+        assert_eq!(text[0], "En veille : chaudière");
+        assert!(plain(&text[1]).starts_with("create.boiler.size"));
+    }
+
+    #[test]
     fn a_waiting_train_tells_its_status() {
         use crate::schedule::{Condition, Entry, Runtime, Schedule, State, TimeUnit};
         let lang = Lang::EN_US;
@@ -3368,12 +3421,13 @@ mod tests {
                 Source::KineticSpeed,
                 &c,
                 &l,
-                Target::Sign { hanging: false }
+                Target::Sign { hanging: false },
+                &Lang::EN_US,
             ),
             vec!["Speed 32 RPM".to_string()]
         );
         assert_eq!(
-            provide_flap_text(Source::KineticSpeed, &c, &l),
+            provide_flap_text(Source::KineticSpeed, &c, &l, &Lang::EN_US),
             vec![vec!["Speed ".to_string(), "32 RPM".to_string()]]
         );
     }
@@ -3501,7 +3555,7 @@ mod tests {
             &Lang::EN_US,
         );
         assert_eq!(
-            provide_text(Source::KineticStress, &c, &l, Target::Nixie),
+            provide_text(Source::KineticStress, &c, &l, Target::Nixie, &Lang::EN_US),
             vec![String::new()]
         );
     }
@@ -3629,11 +3683,11 @@ mod tests {
         // Copied onto other nixie tubes, the label is left out.
         c.label = "L".into();
         assert_eq!(
-            provide_text(Source::NixieTube, &c, &l, Target::Nixie),
+            provide_text(Source::NixieTube, &c, &l, Target::Nixie, &Lang::EN_US),
             vec!["1a".to_string()]
         );
         assert_eq!(
-            provide_text(Source::NixieTube, &c, &l, Target::Board),
+            provide_text(Source::NixieTube, &c, &l, Target::Board, &Lang::EN_US),
             vec!["L 1a".to_string()]
         );
     }
@@ -3865,6 +3919,7 @@ mod tests {
                 entries: None,
                 rows: None,
             },
+            &Lang::EN_US,
         );
         assert!(accept_flap_text(
             &mut b,
@@ -3874,6 +3929,7 @@ mod tests {
             &config,
             false,
             0,
+            &Lang::EN_US,
             |_| false
         ));
         let line = &b.lines()[1];
@@ -3899,6 +3955,7 @@ mod tests {
             &config,
             false,
             0,
+            &Lang::EN_US,
             |_| false
         ));
         // Unlabelled progress: wide pixel flaps.
@@ -3944,7 +4001,7 @@ mod tests {
             entries,
             vec![(1024, "Cobblestone".into()), (20, "Oak Planks".into())]
         );
-        let flap = provide_flap_text(Source::ListItems, &config, &line);
+        let flap = provide_flap_text(Source::ListItems, &config, &line, &Lang::EN_US);
         assert_eq!(flap[0], vec!["1", "k ", "Cobblestone "]);
         // A sign reads them in one line each; a full number keeps its digits.
         config.format = 1;
@@ -3953,6 +4010,7 @@ mod tests {
             &config,
             &line,
             Target::Sign { hanging: false },
+            &Lang::EN_US,
         );
         assert_eq!(text, vec!["1024 Cobblestone ", "20 Oak Planks "]);
         // ValueList_true_0: three digits right-aligned, a suffix, then the name.
@@ -3967,6 +4025,7 @@ mod tests {
             &config,
             false,
             1024,
+            &Lang::EN_US,
             |_| false
         ));
         let l = &b.lines()[0];
@@ -4155,6 +4214,7 @@ mod tests {
             &Config::default(),
             false,
             0,
+            &Lang::EN_US,
             |l| l == 1,
         );
         assert_eq!(bd.lines()[0].sections[0].text.as_deref(), Some("A"));
@@ -4169,6 +4229,7 @@ mod tests {
             &Config::default(),
             false,
             0,
+            &Lang::EN_US,
             |_| false,
         );
         assert_eq!(bd.lines()[1].sections[0].text, None);

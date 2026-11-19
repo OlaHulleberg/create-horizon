@@ -1902,9 +1902,7 @@ fn checklist_clipboard(host: &dyn Host, c: &cn::Checklist) -> Option<ItemStack> 
     if c.not_loaded {
         page.push(Entry {
             checked: false,
-            text: create_engine::display::en_us("create.materialChecklist.blocksNotLoaded")
-                .unwrap_or("create.materialChecklist.blocksNotLoaded")
-                .to_owned(),
+            text: "create.materialChecklist.blocksNotLoaded".to_owned(),
             icon: None,
         });
     }

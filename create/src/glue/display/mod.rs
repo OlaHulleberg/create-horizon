@@ -23,14 +23,12 @@
 //!
 //! The sources' colours (the boiler's bars, the gauges' marks) ride their text as coloured runs
 //! (`display::coloured`): signs and lecterns' books show them, boards and nixie tubes take the
-//! plain text, as Create's `getString()`.
+//! plain text, as Create's `getString()`. Display translations use the process's game language.
+//! Item names without a server-side hover-name API still come from their ids.
 //!
 //! Left out, the API having no way to do it:
 //! - The scoreboard and death count sources: the API reads scoreboard objectives only as
 //!   console text (`run_command_with_output`), with no typed read or write.
-//! - Text read on the server in the game's language: the server has no language of its own
-//!   to ask, so a display source's words and an item's name are Create's en_us text (an item's
-//!   name its id's path in capitalised words); clients draw the boards' flap characters in their own.
 //! - The display boards' text alpha (`.85`, `.975` when glowing): a block entity's text is
 //!   drawn opaque.
 //! - The glow over the link's bulb as it sends (`LinkBulbRenderer`, `bulb` draws its tube): a
@@ -62,9 +60,9 @@ use create_engine::display::{
 use create_engine::kinetics::Dir;
 use mod_api::{
     BlockClick, BlockPart, BlockState, ClientHost, Command, CommandArgumentValue, Compound, Flow,
-    InteractionResult, ItemStack, PlayerRef, RegisterCommandsEvent, Registrar, RegistrationContext,
-    RunModCommandEvent, ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
-    ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
+    Host, InteractionResult, ItemStack, PlayerRef, RegisterCommandsEvent, Registrar,
+    RegistrationContext, RunModCommandEvent, ScreenCharTypedPreEvent, ScreenClosingEvent,
+    ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
     ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, StateForPlacementEvent, Tag,
     Text, UseItemOnEvent, UseWithoutItemEvent,
 };
@@ -316,22 +314,22 @@ impl Subsystem for Display {
     }
 }
 
-/// The language the server writes in: Create's en_us (it has no game language to ask).
-const LANG: Lang<'static> = Lang::EN_US;
-
-/// `ItemStack.getHoverName` of an item id, as the server can name it: Create's en_us text of
-/// its `item.` then `block.` key, else its path in capitalised words (as most English names
-/// read).
-pub(crate) fn item_name(id: &str) -> String {
-    let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
-    ["item", "block"]
-        .iter()
-        .find_map(|p| display::en_us(&format!("{p}.{ns}.{path}")))
-        .map_or_else(|| title_words(path), str::to_owned)
+/// Use the game's component formatter rather than substituting placeholders in resolved text.
+pub(crate) fn with_language<T>(host: &dyn Host, f: impl FnOnce(&Lang<'_>) -> T) -> T {
+    f(&Lang {
+        resolve: &|key, args| {
+            host.text_string(&Text::translate(
+                key,
+                args.iter().map(|&s| Text::literal(s)).collect(),
+            ))
+            .unwrap_or_else(|_| key.to_owned())
+        },
+    })
 }
 
-/// `oak_planks` as `Oak Planks`.
-fn title_words(path: &str) -> String {
+/// The server cannot read item hover names yet. Use the id path: `oak_planks` as `Oak Planks`.
+pub(crate) fn item_name(id: &str) -> String {
+    let (_, path) = id.split_once(':').unwrap_or(("minecraft", id));
     path.split('_')
         .filter(|w| !w.is_empty())
         .map(|w| {
@@ -1162,7 +1160,7 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let Some((line, config, started)) = with_world(|w| {
         let l = w.dims[dim].displays.links.get_mut(&pos)?;
         let had = l.config.start_time;
-        let line = l.line(reading, target, stats, &LANG);
+        let line = with_language(&*lv.host, |lang| l.line(reading, target, stats, lang));
         Some((line, l.config.clone(), had != l.config.start_time))
     })
     .flatten() else {
@@ -1176,7 +1174,9 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     crate::glue::advancements::award_placer(lv, pos, "display_link");
     match target {
         Target::Nixie => {
-            let text = display::provide_text(source, &config, &line, target);
+            let text = with_language(&*lv.host, |lang| {
+                display::provide_text(source, &config, &line, target, lang)
+            });
             // A tube shows plain text (`getString()`).
             let first = display::plain(&text.into_iter().next().unwrap_or_default());
             let row = display::walk_nixies(target_pos, |p| nixie_at(lv, p));
@@ -1206,13 +1206,15 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
                 mark(lv, p);
             }
         }
-        Target::Sign { .. } => {
-            let text = display::provide_text(source, &config, &line, target);
-            write_sign(lv, pos, target_pos, link.target_line, &text);
-        }
-        Target::Lectern => {
-            let text = display::provide_text(source, &config, &line, target);
-            write_lectern(lv, pos, target_pos, link.target_line, &text);
+        Target::Sign { .. } | Target::Lectern => {
+            let text = with_language(&*lv.host, |lang| {
+                display::provide_text(source, &config, &line, target, lang)
+            });
+            if target == Target::Lectern {
+                write_lectern(lv, pos, target_pos, link.target_line, &text);
+            } else {
+                write_sign(lv, pos, target_pos, link.target_line, &text);
+            }
         }
         Target::Board => {
             let Some(controller) = controller_of(lv, target_pos) else {
@@ -1226,10 +1228,12 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
                 return;
             }
             // A board shows plain text (`FlapDisplaySection.refresh`: `getString()`).
-            let text: Vec<Vec<String>> = display::provide_flap_text(source, &config, &line)
-                .into_iter()
-                .map(|l| l.iter().map(|t| display::plain(t)).collect())
-                .collect();
+            let text: Vec<Vec<String>> = with_language(&*lv.host, |lang| {
+                display::provide_flap_text(source, &config, &line, lang)
+                    .into_iter()
+                    .map(|l| l.iter().map(|t| display::plain(t)).collect())
+                    .collect()
+            });
             // `flapDisplayContext`: a list's largest amount.
             let highest = line
                 .entries
@@ -1250,16 +1254,19 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
                         })
                         .collect();
                     let b = d.boards.get_mut(&controller)?;
-                    let changed = display::accept_flap_text(
-                        b,
-                        line_at.max(0) as usize,
-                        &text,
-                        source,
-                        &config,
-                        line.numeric,
-                        highest,
-                        |l| reserved.get(l).copied().unwrap_or(false),
-                    );
+                    let changed = with_language(&*lv.host, |lang| {
+                        display::accept_flap_text(
+                            b,
+                            line_at.max(0) as usize,
+                            &text,
+                            source,
+                            &config,
+                            line.numeric,
+                            highest,
+                            lang,
+                            |l| reserved.get(l).copied().unwrap_or(false),
+                        )
+                    });
                     if changed {
                         d.shown.push(controller);
                     }
@@ -2277,7 +2284,7 @@ fn display_command(host: &mut dyn ServerHost, event: &mut RunModCommandEvent<'_>
 
 fn bind(lv: &mut ServerLevel<'_>, pos: [i32; 3], target: [i32; 3], words: &[&str]) -> String {
     let dim = lv.dim;
-    let lang = |k: &str| LANG.get(k);
+    let lang = |k: &str| with_language(&*lv.host, |lang| lang.get(k));
     let Some((facing, _)) = link_at(lv, pos) else {
         return format!("not a display link at {} {} {}", pos[0], pos[1], pos[2]);
     };
@@ -2362,11 +2369,13 @@ fn bind(lv: &mut ServerLevel<'_>, pos: [i32; 3], target: [i32; 3], words: &[&str
     mark(lv, pos);
     update(lv, pos);
     send_changed(lv);
-    format!(
-        "{}: {}",
-        lang("create.display_link.success"),
-        lang(source.name_key())
-    )
+    with_language(&*lv.host, |lang| {
+        format!(
+            "{}: {}",
+            lang.get("create.display_link.success"),
+            lang.get(source.name_key())
+        )
+    })
 }
 
 fn display_state(lv: &ServerLevel<'_>, pos: [i32; 3]) -> String {
