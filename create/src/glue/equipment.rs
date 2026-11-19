@@ -59,7 +59,9 @@ const ENTITY_RANGE: &str = "minecraft:entity_interaction_range";
 /// The pinned SDK has no read for the registered bounds.
 const ENTITY_RANGE_BOUNDS: (f64, f64) = (0.0, 64.0);
 /// The port's entity reach for a held grip (`dontMissEntitiesWhenYouHaveHighReachDistance`).
-const ENTITY_REACH: &str = "create:extendo_entity_range";
+static ENTITY_REACH: std::sync::LazyLock<Identifier> = std::sync::LazyLock::new(|| {
+    Identifier::parse("create:extendo_entity_range").expect("valid grip reach identifier")
+});
 
 /// The extendo grip's item key, requested at registration.
 static GRIP_ITEM: std::sync::OnceLock<ItemKey> = std::sync::OnceLock::new();
@@ -955,16 +957,15 @@ pub(crate) fn grip_pick(host: &dyn mod_api::ClientHost, event: &mut mod_api::Cli
 /// Re-evaluate the synced attribute with only the grip's modifier removed. Subtracting its
 /// amount from the effective value would also undo the wrong amount under a multiplier.
 fn entity_range_without_grip(base: f64, modifiers: &[AttributeModifier]) -> Option<f64> {
-    let (namespace, path) = ENTITY_REACH.split_once(':')?;
-    let is_grip = |m: &AttributeModifier| m.id.namespace() == namespace && m.id.path() == path;
-    if !modifiers.iter().any(|m| is_grip(m) && m.amount > 0.0) {
+    let id = &*ENTITY_REACH;
+    if !modifiers.iter().any(|m| &m.id == id) {
         return None;
     }
 
     let amounts = |operation| {
         modifiers
             .iter()
-            .filter(move |m| m.operation == operation && !is_grip(m))
+            .filter(move |m| m.operation == operation && &m.id != id)
             .map(|m| m.amount)
     };
     let additive = amounts(AttributeOperation::AddValue).fold(base, |sum, amount| sum + amount);
@@ -1031,19 +1032,18 @@ fn extendo_reach(host: &mut dyn ServerHost, player: PlayerRef) {
     } else {
         entity
     };
-    if let Ok(id) = Identifier::parse(ENTITY_REACH) {
-        let now = living
-            .attribute_modifiers(&*host, ENTITY_RANGE)
-            .and_then(|m| m.iter().find(|m| m.id == id).map(|m| m.amount));
-        if entity == 0.0 && now.is_some() {
-            living.remove_attribute_modifier(host, ENTITY_RANGE, &id);
-        } else if entity > 0.0 && now != Some(entity) {
-            if now.is_some() {
-                living.remove_attribute_modifier(host, ENTITY_RANGE, &id);
-            }
-            let m = AttributeModifier::new(id, entity, AttributeOperation::AddValue);
-            living.add_attribute_modifier(host, ENTITY_RANGE, m, ModifierLifetime::Transient);
+    let id = &*ENTITY_REACH;
+    let now = living
+        .attribute_modifiers(&*host, ENTITY_RANGE)
+        .and_then(|m| m.iter().find(|m| &m.id == id).map(|m| m.amount));
+    if entity == 0.0 && now.is_some() {
+        living.remove_attribute_modifier(host, ENTITY_RANGE, id);
+    } else if entity > 0.0 && now != Some(entity) {
+        if now.is_some() {
+            living.remove_attribute_modifier(host, ENTITY_RANGE, id);
         }
+        let m = AttributeModifier::new(id.clone(), entity, AttributeOperation::AddValue);
+        living.add_attribute_modifier(host, ENTITY_RANGE, m, ModifierLifetime::Transient);
     }
     REACH.with_borrow_mut(|r| {
         r.retain(|p| *p != uuid);
@@ -1419,7 +1419,11 @@ mod grip_pick_tests {
         ];
         assert_eq!(entity_range_without_grip(3.0, &other), None);
         let mut all = other.to_vec();
-        all.push(modifier(ENTITY_REACH, 4.0, AttributeOperation::AddValue));
+        all.push(AttributeModifier::new(
+            ENTITY_REACH.clone(),
+            4.0,
+            AttributeOperation::AddValue,
+        ));
         // (3 + 1) * (1 + 0.25) * (1 + 0.5).
         assert_eq!(entity_range_without_grip(3.0, &all), Some(7.5));
         assert_eq!(entity_range_without_grip(-10.0, &all), Some(0.0));
