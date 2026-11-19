@@ -1,5 +1,7 @@
 //! Deterministic Sunrise 26.3 overlays from Create's pinned, MIT-licensed data.
 
+pub(crate) mod visuals;
+
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
@@ -470,6 +472,7 @@ fn owned(path: &str) -> bool {
         || path.starts_with("data/minecraft/tags/")
         || path.starts_with("data/c/tags/")
         || path.starts_with("assets/create/items/")
+        || visuals::owns(path)
 }
 
 fn data_overlays(files: &BTreeMap<String, Vec<u8>>) -> Result<BTreeMap<String, Vec<u8>>, String> {
@@ -549,6 +552,8 @@ pub fn generate(
     let mut output = data_overlays(&data)?;
     let data_count = output.len();
 
+    let visual_assets = visuals::assets(|path| jar.index_for_name(path).is_some())?;
+    let visual_count = visual_assets.len();
     let mut declarations = BTreeMap::new();
     crate::prepare::walk(
         mod_dir,
@@ -557,13 +562,18 @@ pub fn generate(
     )?;
     let models = crate::prepare::item_models(&declarations, |p| jar.index_for_name(p).is_some());
     let mut audit = String::from(
-        "# Create registry item-definition licence audit\n\nPinned jar: Create 6.0.10 for Minecraft 1.21.1, Modrinth `UjX6dr61`. Source: `mc1.21.1-6.0.10` (`ac0c444d9828da3453ae8cc65338e8de063286fb`), MIT `src/generated` tree `a537ebce356393ce32d5fbcf209c5c447a53683f`. Create's `LICENSE.md` excludes `src/main/resources/assets/`, which is not used. Included files are simple `minecraft:model` wrappers: only a model id, not model geometry or textures. The pinned jar model must be byte-identical to a Git blob in the generated MIT tree; dependent art remains a runtime reference. The other definitions, flattened/tinted models and connected texture tiles remain local to `prepare`.\n\n| Definition | Decision | Evidence or reason |\n|---|---|---|\n",
+        "# Create registry item-definition licence audit\n\nPinned jar: Create 6.0.10 for Minecraft 1.21.1, Modrinth `UjX6dr61`. Source: `mc1.21.1-6.0.10` (`ac0c444d9828da3453ae8cc65338e8de063286fb`), MIT `src/generated` tree `a537ebce356393ce32d5fbcf209c5c447a53683f`. Create's `LICENSE.md` excludes `src/main/resources/assets/`, which is not used. Simple `minecraft:model` wrappers name only a model id, not model geometry or textures. For these wrappers the pinned jar model must be byte-identical to a Git blob in the generated MIT tree. The port's three special tool models name original parts by id. Dependent art remains a runtime reference in both cases. The remaining custom definitions, tinted models and connected texture tiles remain local to `prepare`.\n\n| Definition | Decision | Evidence or reason |\n|---|---|---|\n",
     );
     use std::fmt::Write as _;
     for (path, model) in models {
         let target = model.jar_path();
         let blob = tree.get(&target);
-        let (decision, reason) = if model.custom.is_some() {
+        let (decision, reason) = if visual_assets.contains_key(&path) {
+            (
+                "In",
+                "Port-authored special model; only references original part IDs".to_owned(),
+            )
+        } else if model.custom.is_some() {
             (
                 "Out",
                 "Custom rendering needs local asset preparation".to_owned(),
@@ -586,15 +596,17 @@ pub fn generate(
         fs::write(path, audit).map_err(|e| format!("{}: {e}", path.display()))?;
     }
 
+    let item_count = output.len() - data_count;
+    output.extend(visual_assets);
+
     let mut current = BTreeMap::new();
-    for tree in ["data", "assets/create/items"] {
+    for tree in ["data", "assets"] {
         let dir = mod_dir.join(tree);
         if dir.exists() {
             crate::prepare::walk(mod_dir, &dir, &mut current)?;
         }
     }
     current.retain(|path, _| owned(path));
-    let item_count = output.len() - data_count;
     for &(path, bytes) in MANDATORY_NOTICES {
         output.insert(path.into(), bytes.to_vec());
         match fs::read(mod_dir.join(path)) {
@@ -627,7 +639,9 @@ pub fn generate(
             .map_err(|e| format!("{}: {e}", file.display()))?;
         fs::write(&file, bytes).map_err(|e| format!("{}: {e}", file.display()))?;
     }
-    println!("{data_count} data overlays and {item_count} verified item definitions");
+    println!(
+        "{data_count} data overlays, {item_count} verified item definitions and {visual_count} visual assets"
+    );
     Ok(())
 }
 

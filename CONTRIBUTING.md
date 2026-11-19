@@ -11,13 +11,15 @@ missing API goes in [API_GAPS.md](API_GAPS.md) instead of a workaround.
 ## Never commit Create's assets
 
 Create's `src/main/resources/assets` is All Rights Reserved. Don't commit it or anything copied or adapted from it
-(textures, models, block states, particles, sounds, translations), nor Create's jar. Name assets by id; what needs
-them is built by `create-data prepare` on the player's machine; draw Create's models by id and sample its textures
-from the atlas, never write their geometry, UVs or pixel values into code. Create's English UI text
+(textures, models, block states, particles, sounds, translations), nor Create's jar. The game layers the
+player's jar under the mod. Draw Create's models by id and sample its textures from the atlas; never write its
+geometry, UVs or pixel values into code. Where references are not enough, `create-data prepare` builds the
+remaining assets locally. Create's English UI text
 (`src/generated/resources/assets/create/lang/en_us.json`) is MIT and may be used.
 
-A test in `tools/create-data` (`committed_assets`) allows only generated block states, block models, simple item
-model references and Catnip's placement indicator under `create/assets`. When Create's jar is at hand
+A test in `tools/create-data` (`committed_assets`) allows generated block states and models, verified item
+references, the port's steam-frame atlas declarations and shader, and Catnip's placement indicator under
+`create/assets`. When Create's jar is at hand
 (`$CREATE_JAR` or the download cache), it refuses any file under `create/assets` or `create/data` that copies one of
 the jar's assets, byte for byte or as JSON. Code that copies a model's numbers is for review to catch.
 
@@ -33,8 +35,10 @@ Sunrise's own (read it only to learn the API).
 
 From `tools/create-data/`, run `cargo run --locked -- registry --out ../../create`. This downloads the pinned jar
 and the pinned `src/generated` tree metadata. The generator matches data and referenced item models to MIT source
-blobs and writes the converted data, omissions and plain item references. `--check` compares without writing;
-`--audit <file>` records the evidence for each item definition accepted or refused. For an offline run, supply
+blobs and writes the converted data, omissions and plain item references. It also writes the reference-only
+coupling, steam-frame and animated tool declarations and the port-owned chain models and shader. `--check`
+compares without writing; `--audit <file>` records the evidence for each item definition accepted or refused.
+For an offline run, supply
 `--jar <pinned jar>` and `--tree <saved GitHub tree JSON>`. Keep the output separate from local `prepare` assets;
 never commit the latter. `compile` still owns the startup declarations and top-level advancements.
 

@@ -217,10 +217,10 @@ impl Subsystem for Fluids {
     /// The steam engines' and whistles' jets (`engine::render_jets`).
     fn render_level_stage(
         &self,
-        host: &dyn mod_api::ClientHost,
+        _host: &dyn mod_api::ClientHost,
         event: &mut mod_api::RenderLevelStageEvent<'_>,
     ) {
-        engine::render_jets(host, event);
+        engine::render_jets(event);
     }
 
     fn draw_carried(

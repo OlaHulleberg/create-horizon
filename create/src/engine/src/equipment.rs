@@ -275,6 +275,30 @@ pub fn grip_pick_preserves_block(eye: [f64; 3], hit: [f64; 3], ordinary_reach: f
     distance_squared > ordinary_reach.powi(2)
 }
 
+/// The parts turned by Create's wrench, potato cannon and worldshaper item renderers.
+#[derive(Clone, Copy)]
+pub enum ToolSpin {
+    Wrench,
+    PotatoCannon,
+    Worldshaper,
+}
+
+impl ToolSpin {
+    /// Passive turn in degrees, axis and pivot in model blocks from the item's corner. The
+    /// extra turns when scrolling, shooting or using the worldshaper are separate animations.
+    pub fn pose(self, seconds: f64) -> (f64, [f64; 3], [f64; 3]) {
+        let (speed, axis, pivot) = match self {
+            // `ScrollValueHandler`'s passive half degree per tick, one pixel to the right.
+            Self::Wrench => (10.0, [0.0, 1.0, 0.0], [9.0 / 16.0, 0.5, 0.5]),
+            // `PotatoCannonItemRenderer`: -2.5 degrees per tick, half a pixel up.
+            Self::PotatoCannon => (-50.0, [0.0, 0.0, 1.0], [0.5, 8.5 / 16.0, 0.5]),
+            // `WorldshaperItemRenderer`: -25 degrees per second, .155 blocks down.
+            Self::Worldshaper => (-25.0, [0.0, 0.0, 1.0], [0.5, 0.5 - 0.155, 0.5]),
+        };
+        ((seconds * speed).rem_euclid(360.0), axis, pivot)
+    }
+}
+
 /// The first-person grip's extension (`ExtendoGripRenderHandler`).
 #[derive(Clone, Copy, Default)]
 pub struct GripSwing {
@@ -473,6 +497,22 @@ mod tests {
         assert_eq!(consume_air(0, 0, 1), (0, vec![]));
         // More stored than the maximum counts as the maximum.
         assert_eq!(consume_air(5000, 0, 1).0, 899);
+    }
+
+    #[test]
+    fn passive_tool_parts_turn_about_create_s_axes_and_pivots() {
+        assert_eq!(
+            ToolSpin::Wrench.pose(2.0),
+            (20.0, [0.0, 1.0, 0.0], [0.5625, 0.5, 0.5])
+        );
+        assert_eq!(
+            ToolSpin::PotatoCannon.pose(2.0),
+            (260.0, [0.0, 0.0, 1.0], [0.5, 0.53125, 0.5])
+        );
+        assert_eq!(
+            ToolSpin::Worldshaper.pose(2.0),
+            (310.0, [0.0, 0.0, 1.0], [0.5, 0.345, 0.5])
+        );
     }
 
     #[test]

@@ -1,0 +1,9 @@
+{
+  "model": {
+    "type": "minecraft:special",
+    "base": "create:item/potato_cannon/item",
+    "model": {
+      "type": "create:potato_cannon"
+    }
+  }
+}

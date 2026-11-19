@@ -1,0 +1,119 @@
+{
+  "sources": [
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_0",
+      "sprite": "create:block/special/steam_jet_0"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_1",
+      "sprite": "create:block/special/steam_jet_1"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_2",
+      "sprite": "create:block/special/steam_jet_2"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_3",
+      "sprite": "create:block/special/steam_jet_3"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_4",
+      "sprite": "create:block/special/steam_jet_4"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_5",
+      "sprite": "create:block/special/steam_jet_5"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_6",
+      "sprite": "create:block/special/steam_jet_6"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_7",
+      "sprite": "create:block/special/steam_jet_7"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_8",
+      "sprite": "create:block/special/steam_jet_8"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_9",
+      "sprite": "create:block/special/steam_jet_9"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_10",
+      "sprite": "create:block/special/steam_jet_10"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_11",
+      "sprite": "create:block/special/steam_jet_11"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_12",
+      "sprite": "create:block/special/steam_jet_12"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_13",
+      "sprite": "create:block/special/steam_jet_13"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_14",
+      "sprite": "create:block/special/steam_jet_14"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_15",
+      "sprite": "create:block/special/steam_jet_15"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_16",
+      "sprite": "create:block/special/steam_jet_16"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_17",
+      "sprite": "create:block/special/steam_jet_17"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_18",
+      "sprite": "create:block/special/steam_jet_18"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_19",
+      "sprite": "create:block/special/steam_jet_19"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_20",
+      "sprite": "create:block/special/steam_jet_20"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_21",
+      "sprite": "create:block/special/steam_jet_21"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:particle/steam_jet_22",
+      "sprite": "create:block/special/steam_jet_22"
+    }
+  ]
+}
