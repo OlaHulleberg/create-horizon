@@ -550,14 +550,30 @@ impl Moving {
     }
 }
 
-/// An assembled windmill: its blocks (offset from the bearing, state) and its sails.
+/// The bearing an assembled structure turns on (`MechanicalBearingBlockEntity.isWindmill`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BearingKind {
+    /// A `MechanicalBearingBlockEntity`: its structure turns at the speed its kinetic network
+    /// gives the bearing, and goes back into the world turned to the quarter of its angle.
+    Mechanical,
+    /// A `WindmillBearingBlockEntity`: its structure is its sails, which generate the speed it
+    /// turns at (`getGeneratedSpeed`), and it takes back at no turn (`disassemble` zeroes its
+    /// angle before placing them).
+    Windmill,
+}
+
+/// An assembled windmill or mechanical bearing's structure: its blocks (offset from the
+/// bearing, state) and its sails.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Windmill {
     pub blocks: Vec<([i32; 3], u32)>,
     pub sails: u32,
     pub clockwise: bool,
-    /// A mechanical bearing's turning; None for a windmill (which generates instead).
-    pub bearing: Option<crate::contraption::Turn>,
+    pub kind: BearingKind,
+    /// `MechanicalBearingBlockEntity.angle` (`write`'s `Angle`): where the structure has turned
+    /// to and the speed it turns at, kept from `since` (`Turn`), for a windmill as much as a
+    /// mechanical bearing.
+    pub turn: crate::contraption::Turn,
     /// What it carries besides its blocks, storage and actors (its actors are found again from
     /// its blocks): its contraption controls, the kinds they turned off and its glue.
     pub extras: crate::actors::Carried,
@@ -3481,7 +3497,11 @@ impl CreateWorld {
     /// it generates its speed the other way. Nothing for a windmill not running.
     pub fn windmill_direction(&mut self, dim: usize, pos: [i32; 3], state: u32, clockwise: bool) {
         let d = &mut self.dims[dim];
-        let Some(w) = d.windmills.get_mut(&pos).filter(|w| w.bearing.is_none()) else {
+        let Some(w) = d
+            .windmills
+            .get_mut(&pos)
+            .filter(|w| w.kind == BearingKind::Windmill)
+        else {
             return;
         };
         if w.clockwise == clockwise {
@@ -3514,7 +3534,9 @@ impl CreateWorld {
         let w = d.windmills.remove(&pos)?;
         d.windmill_changes.push(pos);
         d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
-        if w.bearing.is_some() {
+        // A mechanical bearing turns at its network's speed, which goes on; a windmill's sails
+        // stop generating (`updateGeneratedRotation` with none running).
+        if w.kind == BearingKind::Mechanical {
             return Some(w);
         }
         let old = d.settings.get(&pos).copied().unwrap_or_default();
@@ -7456,6 +7478,54 @@ mod tests {
         w.column_unloaded(0, 1, 2);
         assert_eq!(w.speed(0, [18, 64, 32]), None);
         assert!(w.dims[0].kinetics.is_empty());
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_windmills_angle_is_saved_with_its_column() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names = [("create:windmill_bearing", vec![("facing", "up")])];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let pos = [0, 8, 0];
+        w.block_changed(0, pos, 0, 10);
+        // Its sails assembled (`assemble`): sixteen turn it at 2 rpm (`getGeneratedSpeed`,
+        // `windmillSailsPerRPM` 8), from game time 100 at angle 0 (`convertToAngular` is 0.3°
+        // a tick, so 0.6° a tick here).
+        w.windmill_assembled(
+            0,
+            pos,
+            10,
+            Windmill {
+                blocks: vec![([0, 1, 0], 10)],
+                sails: 16,
+                clockwise: true,
+                kind: BearingKind::Windmill,
+                turn: crate::contraption::Turn {
+                    angle: 0.0,
+                    since: 100,
+                    rpm: 2.0,
+                    limit: None,
+                },
+                extras: Default::default(),
+            },
+        );
+        w.tick(0, &mut Vec::new());
+        // The column saved at game time 125 (15° turned) and loaded again (`write`'s `Angle`
+        // and `read`): the windmill goes on turning from where it was, at the speed its sails
+        // give it.
+        let saved = w.column_windmills(0, 0, 0);
+        w.column_unloaded(0, 0, 0);
+        w.load_windmills(0, saved.into_iter());
+        w.block_loaded(0, pos, 10);
+        let m = w.dims[0].windmills.get(&pos).expect("the windmill again");
+        assert_eq!(m.kind, BearingKind::Windmill);
+        assert_eq!(m.turn.rpm, 2.0);
+        assert!((m.turn.angle_at(125) - 15.0).abs() < 1e-3);
+        assert!((m.turn.angle_at(150) - 30.0).abs() < 1e-3);
         states::clear_range();
     }
 
