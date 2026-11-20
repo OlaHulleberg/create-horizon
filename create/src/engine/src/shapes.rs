@@ -1,8 +1,13 @@
 //! Create's block shapes as colliders (`Level.clip` with `ClipContext.Block.COLLIDER`): the
-//! boxes the ejector's obstacle scan flies through, ported from `AllShapes` and the blocks'
-//! own `getShape` (no block of Create's overrides `getCollisionShape` but the belt, whose
-//! collision shape for an empty `CollisionContext` is its shape). Boxes are in block units;
-//! they may reach past the block they belong to, as Create's shapes do.
+//! boxes a ray flies through, ported from `AllShapes` and the blocks' own `getShape` (no block
+//! of Create's overrides `getCollisionShape` but the belt, whose collision shape for an empty
+//! `CollisionContext` is its shape). Boxes are in block units; they may reach past the block
+//! they belong to, as Create's shapes do.
+//!
+//! The game reads the same boxes from its own level (`Level.getBlockCollisions`, the host's
+//! `collision_boxes`); this model is for the worlds the engine runs without one, the fuzz
+//! driver's, and covers the blocks its scenarios place around an ejector. States it does not
+//! model fall back to a whole block at the caller.
 
 use crate::Block;
 use crate::kinetics::{Axis, Dir};
@@ -145,7 +150,8 @@ fn quarter_to(d: Dir) -> u8 {
 }
 
 /// `BeltShapes.getBeltShape` (the casing shape of an uncased belt is empty; the driver's
-/// worlds hold none other).
+/// worlds hold none other). A vertical belt is modelled as its full part: the ejector
+/// scenarios place none, and its ending pulleys differ.
 fn belt(info: &StateInfo) -> Option<Vec<Box>> {
     let seg = info.belt?;
     // The building parts, as `makeFlatFull` and friends define them (south-facing).

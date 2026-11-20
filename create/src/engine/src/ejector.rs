@@ -616,11 +616,18 @@ pub fn clip(
         }
     });
     for _ in 0..64 {
+        // `VoxelShape.clip`: the nearest of the cell's boxes, not the first one stored.
+        let mut nearest: Option<(f64, Dir)> = None;
         for b in colliders(cell) {
-            if let Some((t, face)) = box_clip(from, d, &b) {
-                let at = [0, 1, 2].map(|i| from[i] + d[i] * t);
-                return Some((at, cell, face));
+            if let Some((t, face)) = box_clip(from, d, &b)
+                && nearest.is_none_or(|(best, _)| t < best)
+            {
+                nearest = Some((t, face));
             }
+        }
+        if let Some((t, face)) = nearest {
+            let at = [0, 1, 2].map(|i| from[i] + d[i] * t);
+            return Some((at, cell, face));
         }
         if cell == end {
             return None;
@@ -1065,6 +1072,69 @@ mod tests {
     }
 
     #[test]
+    fn a_throw_meets_the_depot_thirteen_pixels_up() {
+        // e4-ejector-clip-whole-blocks: an ejector at [0, 8, 0] facing east throws at the
+        // depot at [1, 8, 0] (`Level.clip` with `Block.COLLIDER`). The depot's collider is
+        // `AllShapes.CASING_13PX`, so the arc meets its top at y 9.0625 and Java records
+        // `earlyTargetTime` 9.304945. A whole-block scan instead meets y 9.0 at 8.516402.
+        let mut world = DepotArc;
+        let mut e = Ejector {
+            state: State::Charged,
+            ..Default::default()
+        };
+        let pos = [0, 8, 0];
+        assert!(!e.scan(8, pos, Dir::East, &mut world));
+        assert!(e.scan(9, pos, Dir::East, &mut world));
+        let early = e.early.expect("the depot stopped the tracked stack");
+        assert_eq!(early.block, [1, 8, 0]);
+        assert!((early.at[1] - 9.0625).abs() < 1e-6, "{:?}", early.at);
+        assert!((early.time - 9.304945).abs() < 1e-6, "{}", early.time);
+    }
+
+    /// The e4 scene's world: a depot ahead of the ejector, with the shapes Create gives it.
+    struct DepotArc;
+
+    impl World for DepotArc {
+        fn present(&mut self) -> Present {
+            Present {
+                count: 0,
+                held_position: None,
+            }
+        }
+        fn target_refuses(&mut self, _: [i32; 3]) -> bool {
+            false
+        }
+        fn take_all(&mut self) -> Vec<(String, u8)> {
+            Vec::new()
+        }
+        fn insert(&mut self, _: [i32; 3], _: &str, count: u8) -> Option<u8> {
+            Some(count)
+        }
+        fn drop_item(&mut self, _: [f64; 3], _: [f64; 3], _: &str, _: u8) {}
+        fn clip(&mut self, from: [f64; 3], to: [f64; 3]) -> Option<([f64; 3], [i32; 3], Dir)> {
+            let info = crate::parts::StateInfo::default();
+            clip(from, to, |p| {
+                (p == [1, 8, 0])
+                    .then(|| crate::shapes::colliders(crate::Block::Depot, &info))
+                    .flatten()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|mut b| {
+                        for a in 0..3 {
+                            b[a] += f64::from(p[a]);
+                            b[a + 3] += f64::from(p[a]);
+                        }
+                        b
+                    })
+                    .collect::<Vec<[f64; 6]>>()
+            })
+        }
+        fn extracting_funnel(&mut self, _: [i32; 3]) -> bool {
+            false
+        }
+    }
+
+    #[test]
     fn the_plate_turns_about_its_hinge() {
         // Facing north the plate is turned 0° (180 + 180): its hinge at the north edge, turning
         // the plate up about -x.
@@ -1114,6 +1184,19 @@ mod tests {
         assert!((at[1] - 0.8).abs() < 1e-9);
         // A ray that passes over the 13 pixels misses the depot entirely.
         assert!(clip([0.9, 0.95, 0.5], [1.1, 0.83, 0.5], depot).is_none());
+        // Two boxes in one cell (a shape's boxes): the nearest entry wins, whatever order the
+        // boxes come in (`VoxelShape.clip`).
+        let two = clip([0.5, 0.5, 0.5], [1.5, 0.5, 0.5], |_| {
+            vec![
+                [1.2, 0.0, 0.0, 1.4, 1.0, 1.0],
+                [1.0, 0.0, 0.0, 1.1, 1.0, 1.0],
+            ]
+        })
+        .unwrap();
+        assert!(
+            (two.0[0] - 1.0).abs() < 1e-9 && two.2 == Dir::West,
+            "{two:?}"
+        );
         // One that starts inside a box does not hit it (vanilla `AABB.clip` skips it).
         let inside = clip([0.5, 0.5, 0.5], [3.5, 0.5, 0.5], |p| {
             (p == [0, 0, 0])
