@@ -131,3 +131,98 @@ pub(super) fn place_sound(host: &dyn Host, state: BlockState) -> Option<String> 
     let place = host.block_states().sound(state)?.place;
     (!place.is_empty()).then(|| place.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mod_api::__private::part_tests::{block_key, install_parts_fixture};
+    use mod_api::prelude::*;
+    use mod_api::testing::{FakeLevel, with_mods};
+    use mod_api::{
+        Backend, BackendRef, BlockKey, BlockStateRecord, Hooks, LevelReadError, LevelRef, ModEntry,
+        Registrar, RegistrationContext, ServerHost,
+    };
+
+    const PANE: &str = "create:oak_window_pane";
+    const BARS: &str = "minecraft:iron_bars";
+    // Both fixture materials have a narrow, colliding shape, not full-block bounds.
+    const SHAPE: [f64; 6] = [0.4375, 0.0, 0.4375, 0.5625, 1.0, 0.5625];
+
+    struct Materials;
+
+    #[mod_api::__subscriptions]
+    impl Hooks for Materials {
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+            r.block_key(PANE);
+            r.block_key(BARS);
+        }
+    }
+
+    mod_api::__mod_api_impl_host_areas!(Materials, except(tags));
+    mod_api::__mod_api_impl_server_host_areas!(Materials);
+    mod_api::__mod_api_impl_backend_areas!(Materials, except(block_states, keys, level_collision));
+    impl Host for Materials {
+        fn backend(&self) -> Option<BackendRef<'_>> {
+            Some(mod_api::__private::backend_ref(self))
+        }
+    }
+    impl ServerHost for Materials {}
+    impl Backend for Materials {}
+    impl TagsHost for Materials {
+        fn block_in_tag(&self, _: BlockKey, _: &str) -> Option<bool> {
+            Some(false)
+        }
+
+        fn state_outline(&self, _: BlockState) -> Option<Vec<[f64; 6]>> {
+            Some(vec![SHAPE])
+        }
+    }
+    impl BlockStatesBackend for Materials {
+        fn block_state_class(
+            &self,
+            _: BlockState,
+            class: BlockClass,
+        ) -> Result<Option<bool>, LevelReadError> {
+            Ok(Some(class == BlockClass::IronBars))
+        }
+    }
+    impl KeysBackend for Materials {
+        fn block_key_id(&self, key: BlockKey) -> String {
+            [PANE, BARS]
+                .into_iter()
+                .find(|id| block_key(id) == key)
+                .expect("only the two registered fixture blocks are used")
+                .into()
+        }
+    }
+    impl LevelCollisionBackend for Materials {
+        fn level_block_shape(
+            &self,
+            _: LevelRef,
+            _: BlockState,
+            _: [i32; 3],
+            _: BlockShapeKind,
+        ) -> Option<Vec<[f64; 6]>> {
+            Some(vec![SHAPE])
+        }
+    }
+
+    #[test]
+    fn a_copycat_panel_accepts_iron_bars_but_not_create_window_panes() {
+        with_mods(vec![].into(), || {
+            install_parts_fixture(&[ModEntry::new("create", Box::new(Materials))]).unwrap();
+            let lv = ServerLevel {
+                host: &mut Materials,
+                level: FakeLevel::default().level(),
+                dim: 0,
+                dimension: "minecraft:overworld",
+            };
+            let panel = Shape::Panel(Dir::Up);
+            for (id, accepted) in [(PANE, false), (BARS, true)] {
+                let state = BlockStateRecord::new(block_key(id), 0).into();
+                let facts = candidate(&lv, state, [0; 3]).unwrap();
+                assert_eq!(cc::accepts(panel, &facts), accepted, "{id}");
+            }
+        });
+    }
+}

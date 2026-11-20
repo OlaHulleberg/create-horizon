@@ -823,3 +823,148 @@ pub fn disassembled(lv: &mut ServerLevel<'_>, train: u32) {
         stop_controlling(lv.host, dim, at);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::glue::contraptions::controller::Controller;
+    use mod_api::prelude::*;
+    use mod_api::testing::FakeHost;
+    use mod_api::{
+        KeyMappingPreEvent, LevelReadError, MappingError, PayloadAccepted, PayloadBytes, PayloadId,
+        PayloadReader, PayloadSendError,
+    };
+
+    const TARGET: Target = Target {
+        train: 1,
+        car: 2,
+        local: [0, 1, 0],
+    };
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum Effect {
+        Packet(ToServer),
+        Mapping(String, bool),
+    }
+
+    #[derive(Default)]
+    struct Client {
+        player: Option<PlayerRef>,
+        playing: bool,
+        effects: Vec<Effect>,
+    }
+
+    mod_api::__mod_api_impl_host_areas!(Client);
+    mod_api::__mod_api_impl_client_host_areas!(Client, except(client_input, menus, payloads));
+    impl Host for Client {}
+    impl ClientHost for Client {}
+    impl MenusClientHost for Client {
+        fn local_player(&self) -> Option<PlayerRef> {
+            self.player
+        }
+    }
+    impl ClientInputClientHost for Client {
+        fn playing(&self) -> bool {
+            self.playing
+        }
+        fn mapping_physical_down(&self, name: &str) -> Result<Option<bool>, LevelReadError> {
+            Ok(Some(matches!(name, "key.forward" | "key.sneak")))
+        }
+        fn set_mapping_down(&mut self, key: &str, down: bool) -> Result<(), MappingError> {
+            self.effects.push(Effect::Mapping(key.to_owned(), down));
+            Ok(())
+        }
+    }
+    impl PayloadsClientHost for Client {
+        fn send_payload_to_server(
+            &mut self,
+            id: &PayloadId,
+            bytes: PayloadBytes,
+        ) -> Result<PayloadAccepted, PayloadSendError> {
+            assert_eq!(id.0, net::PAYLOAD);
+            let mut reader = PayloadReader::new(&bytes.0);
+            assert_eq!(reader.string().unwrap(), tc::CHANNEL);
+            let packet = ToServer::decode(reader.bytes(64).unwrap()).unwrap();
+            reader.finish().unwrap();
+            self.effects.push(Effect::Packet(packet));
+            Ok(PayloadAccepted::Queued)
+        }
+    }
+
+    #[test]
+    fn a_train_captures_a_movement_press_but_allows_release() {
+        let mut host = Client::default();
+        net_from_server(&mut host, &ToClient::Start(TARGET).encode());
+        let mut event = KeyMappingPreEvent {
+            mapping: "key.forward",
+            pressed: true,
+            cancelled: false,
+        };
+        assert!(matches!(
+            Controller.key_mapping_pre(&mut host, &mut event),
+            Flow::Cancel
+        ));
+        event.pressed = false;
+        assert!(matches!(
+            Controller.key_mapping_pre(&mut host, &mut event),
+            Flow::Continue
+        ));
+        TrainControls.client_reset();
+    }
+
+    #[test]
+    fn opening_a_screen_releases_then_stops_before_restoring_input_but_logout_is_silent() {
+        let mut fixture = FakeHost::new();
+        fixture.join(1, 1);
+        let player = fixture.player(1).unwrap();
+        for keep_player in [true, false] {
+            let mut host = Client {
+                player: keep_player.then_some(player),
+                ..Client::default()
+            };
+            net_from_server(&mut host, &ToClient::Start(TARGET).encode());
+            DRIVER.with_borrow_mut(|d| d.pressed = 1);
+            host.effects.clear();
+            client_tick(&mut host);
+            assert!(!is_driving());
+            assert!(DRIVER.with_borrow(|d| d.controls.is_none()));
+            if keep_player {
+                let (packets, restored) = host.effects.split_at(2);
+                assert_eq!(
+                    packets,
+                    [
+                        Effect::Packet(ToServer::Input {
+                            target: TARGET,
+                            keys: 1,
+                            press: false,
+                            stop: false
+                        }),
+                        Effect::Packet(ToServer::Input {
+                            target: TARGET,
+                            keys: 0,
+                            press: false,
+                            stop: true
+                        }),
+                    ]
+                );
+                let expected = [
+                    ("key.forward", true),
+                    ("key.back", false),
+                    ("key.left", false),
+                    ("key.right", false),
+                    ("key.jump", false),
+                    ("key.sneak", true),
+                ];
+                assert_eq!(restored.len(), expected.len());
+                for (key, down) in expected {
+                    assert!(
+                        restored.contains(&Effect::Mapping(key.into(), down)),
+                        "expected {key}={down} in {restored:?}",
+                    );
+                }
+            } else {
+                assert!(host.effects.is_empty());
+            }
+        }
+    }
+}
