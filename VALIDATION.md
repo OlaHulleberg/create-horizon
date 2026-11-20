@@ -228,7 +228,18 @@ none reproduced.
 
 `tools/check-potato-projectile.py` ran with a native package staged from the signed SDK, the pinned jar, and a new world. The first shot took a pig from 10 to 5 health, consumed one inventory potato and wore the cannon by one point. A shallow shot planted one potato crop. A cake from the off hand took a pig to 2 health, consumed the cake and left the potatoes alone.
 
-In a disposable build a join veto left ammo and durability unchanged. A separate trace confirmed that the join hook and client renderer saw the shot's ammunition, that the client position moved, and that the same UUID and owner resumed the saved flight after reopening. A stuck cake followed the target's one-block sideways teleport. Client prediction and Create's ammo-specific render poses are not implemented.
+The disposable fixture rejects a join, then in another world switches to an iron pickaxe from the join callback; neither case spends ammo, wears either item, or hits the target. The first position and velocity after reopen equal one flight step from the final pre-save sample, with identical projectile and owner UUIDs. The client renderer reads the synced ammunition. A stuck cake follows its target exactly one block sideways. All three sweet-berry projectiles hit the same wall on their first step and spend one berry and one durability point in total.
+
+To reproduce on Linux, set `GAME`, `CTL`, `RESOURCES` and `JARS` to absolute paths for the signed Nightly client and matching control tool, a private prepared resource tree, and the verified jar directory. From the repository root:
+
+```sh
+(cd create && xvfb-run -a cargo sunrise-mod run --game "$GAME" --resources "$RESOURCES" --jars "$JARS" -- --frames 1)
+xvfb-run -a python3 tools/check-potato-projectile.py --ctl "$CTL" \
+  --game create/target/sunrise-mod/run/app/sunrise-client --resources "$RESOURCES" \
+  --jars "$JARS" --scratch target/potato-smoke
+```
+
+In a **disposable checkout**, apply `git apply tools/fixtures/potato-projectile.patch`, repeat the staging command with that checkout, and append `--fixture` to the test. Do not ship the instrumented build. Client prediction and Create's ammo-specific render poses are not implemented.
 
 ## In-game smoke test on `9425651` (main `684e89b`)
 

@@ -487,10 +487,11 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
         .map(|_| 40.0 * (random(&mut lv) - 0.5))
         .collect();
     let motions = potato::spray(motion, t, base, &imperfections);
-    let cannon = held(&*lv.host, player, event.hand);
-    let recovery = cannon
-        .as_ref()
-        .map_or(0.0, |c| potato::recovery_chance(recovery_level(c)));
+    let Some(cannon) = held(&*lv.host, player, event.hand) else {
+        return false;
+    };
+    let selected_slot = player.selected_slot(&*lv.host);
+    let recovery = potato::recovery_chance(recovery_level(&cannon));
     let shot_stack = one(&ammo_stack);
     let Some(item) = shot_stack.to_nbt(&*lv.host) else {
         return false;
@@ -531,8 +532,18 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
     if shots.is_empty() {
         return false;
     }
+    // A join listener may change either input. Do not charge a different stack or hotbar slot.
+    if (main && player.selected_slot(&*lv.host) != selected_slot)
+        || !held(&*lv.host, player, event.hand).is_some_and(|stack| {
+            stack.is_stackable_with(&cannon) && stack.count() == cannon.count()
+        })
+    {
+        for shot in shots {
+            shot.remove(lv.host, mod_api::RemovalReason::Discarded);
+        }
+        return false;
+    }
     if !creative(&*lv.host, player) {
-        // A join listener may have changed the input slot. Do not overwrite its new stack.
         let current = match source {
             Source::Hand(hand) => held(&*lv.host, player, hand),
             Source::Slot(slot) => player.inventory_slots(&*lv.host).and_then(|slots| {
@@ -661,6 +672,8 @@ fn fly(lv: &mut ServerLevel<'_>, e: EntityRef) {
             mod_api::ClipBlock::Collider,
             mod_api::ClipFluid::None,
         ) else {
+            // An unanswered sweep is not a clear path. Do not strand a saved shot at its edge.
+            e.remove(lv.host, mod_api::RemovalReason::Discarded);
             return;
         };
         if let Some((target, at)) = ahead(lv, e, from, block.location, &mut shot) {
@@ -690,7 +703,7 @@ fn fly(lv: &mut ServerLevel<'_>, e: EntityRef) {
 
 /// `AbstractHurtingProjectile.tick`'s entity hit, with the ray already clipped against blocks.
 fn ahead(
-    lv: &ServerLevel<'_>,
+    lv: &mut ServerLevel<'_>,
     e: EntityRef,
     from: [f64; 3],
     to: [f64; 3],
@@ -710,12 +723,17 @@ fn ahead(
         lo[i] -= 1.0;
         hi[i] += 1.0;
     }
-    let found: Vec<EntityRef> = lv
-        .level
-        .entities_in(host, lo, hi)?
-        .into_iter()
-        .filter(|o| *o != e && pickable(host, *o))
-        .collect();
+    let mut found = lv.level.entities_in(host, lo, hi)?;
+    found.retain(|o| {
+        *o != e && pickable(&*lv.host, *o)
+            // Ignore young shots before picking the nearest hit, not after: the split
+            // projectiles start inside one another and must not mask a real hit.
+            && !(shot.flight.age < 10
+                && o.kind(&*lv.host).is_some_and(|k| k.id(&*lv.host) == SHOT)
+                && FLIGHT.get_existing(lv.host, Holder::Entity(o.id()))
+                    .is_ok_and(|other| other.is_some_and(|flight| flight.age < 10)))
+    });
+    let host: &dyn Host = &*lv.host;
     let owner_root = shot.owner.map(|o| o.root_vehicle(host).unwrap_or(o));
     let same_root =
         |o: EntityRef| owner_root.is_some_and(|r| o.root_vehicle(host).unwrap_or(o) == r);
@@ -796,15 +814,6 @@ fn hit_entity(
         return true;
     }
     let kind = target.kind(&*lv.host).map(|k| k.id(&*lv.host));
-    // Two shots meeting just out of their barrels pass through each other.
-    if kind.as_deref() == Some(SHOT)
-        && shot.flight.age < 10
-        && FLIGHT
-            .get_existing(&mut *lv.host, Holder::Entity(target.id()))
-            .is_ok_and(|other| other.is_some_and(|flight| flight.age < 10))
-    {
-        return true;
-    }
     pop(lv, shot, at);
     // A powered wither (at half its health or less) takes nothing.
     if kind.as_deref() == Some("minecraft:wither")

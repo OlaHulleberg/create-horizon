@@ -1,0 +1,139 @@
+--- a/create/src/glue/items/potato.rs
++++ b/create/src/glue/items/potato.rs
+@@ -293,6 +293,18 @@
+ }
+
+ struct Projectile;
++static DRAWN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
++static PREV_CLIENT: std::sync::Mutex<Option<(u32, [f64; 3])>> = std::sync::Mutex::new(None);
++pub(crate) fn flight_probe(host: &dyn ClientHost) {
++    let id = DRAWN.load(std::sync::atomic::Ordering::Relaxed);
++    if let Some(p) = host.entity(id).and_then(|e| e.position(host)) {
++        let mut prev = PREV_CLIENT.lock().unwrap();
++        if Some((id, p)) != *prev {
++            eprintln!("[flight] client {id} {p:?}");
++            *prev = Some((id, p));
++        }
++    }
++}
+
+ #[mod_api::sunrise_part]
+ impl EntityPart for Projectile {
+@@ -326,6 +338,9 @@
+         else {
+             return Ok(());
+         };
++        if DRAWN.swap(entity.id, std::sync::atomic::Ordering::Relaxed) != entity.id {
++            eprintln!("[flight] renderer id {} ammo {}", entity.id, ammo.kind.id);
++        }
+         let [yaw, pitch] = CAMERA.get();
+         draw.rotate_about([0.0, 1.0, 0.0], -yaw, [0.0; 3]);
+         draw.rotate_about([1.0, 0.0, 0.0], pitch, [0.0; 3]);
+@@ -478,6 +493,7 @@
+     let side = potato::barrel(eye, yaw, pitch, right_side, [-0.05, 0.0, 0.0]);
+     let correction = [side[0] - eye[0], side[1] - eye[1], side[2] - eye[2]];
+     let motion = potato::motion(look, correction, t);
++    eprintln!("[flight] fire {}", t.id);
+     let Some(mut lv) = ServerLevel::new(host, &dimension) else {
+         return false;
+     };
+@@ -522,6 +538,7 @@
+                     ..Flight::default()
+                 },
+             )?;
++            eprintln!("[flight] spawned {} {:?}", e.id(), e.uuid(host));
+             shots.push(e);
+         }
+         Ok::<_, AttachmentError>(shots)
+@@ -564,6 +581,7 @@
+                     .set_inventory_slot(lv.host, slot, stack.shrink(1))
+                     .is_ok(),
+             });
++        eprintln!("[flight] paid {paid}");
+         if !paid {
+             for shot in shots {
+                 shot.remove(lv.host, mod_api::RemovalReason::Discarded);
+@@ -640,6 +658,17 @@
+         return;
+     };
+     flight.age = flight.age.wrapping_add(1);
++    if flight.age <= 50 {
++        let uuid = e.uuid(&mut *lv.host);
++        let owner = e.owner(&*lv.host).and_then(|owner| owner.uuid(lv.host));
++        eprintln!(
++            "[flight] server {} {:?} from={from:?} velocity={velocity:?} owner={owner:?} age {} stuck {:?}",
++            e.id(),
++            uuid,
++            flight.age,
++            flight.stuck
++        );
++    }
+     let mut shot = Shot {
+         stack: ammo.stack,
+         kind: ammo.kind,
+@@ -677,11 +706,23 @@
+             return;
+         };
+         if let Some((target, at)) = ahead(lv, e, from, block.location, &mut shot) {
++            eprintln!(
++                "[flight] hit entity {} target {} age {} at {at:?}",
++                e.id(),
++                target.id(),
++                shot.flight.age
++            );
+             if !hit_entity(lv, e, target, at, &mut shot) {
+                 e.remove(lv.host, mod_api::RemovalReason::Discarded);
+                 return;
+             }
+         } else if !block.miss {
++            eprintln!(
++                "[flight] hit block {} age {} at {:?}",
++                e.id(),
++                shot.flight.age,
++                block.location
++            );
+             pop(lv, &shot, block.location);
+             if !block_hit(lv, &shot, block) {
+                 leave_item(lv, e, &shot);
+@@ -1168,3 +1209,8 @@
+         assert_eq!(action_arg(potato::fallback(), "set_on_fire"), None);
+     }
+ }
++
++pub(crate) fn ammo_probe(host: &mut dyn ServerHost, id: u32) -> bool {
++    AMMO.get_existing(host, Holder::Entity(id))
++        .is_ok_and(|ammo| ammo.flatten().is_some())
++}
+--- a/create/src/lib.rs
++++ b/create/src/lib.rs
+@@ -214,6 +214,7 @@
+     }
+
+     fn client_tick_post(&self, host: &mut dyn ClientHost, _event: &mut ClientTickPostEvent) {
++        glue::items::potato::flight_probe(&*host);
+         for s in SUBSYSTEMS {
+             s.client_tick(host);
+         }
+@@ -377,5 +378,22 @@
+         host: &mut dyn ServerHost,
+         event: &mut EntityJoinLevelEvent<'_>,
+     ) -> Flow {
++        if event.kind == "create:potato_projectile" {
++            eprintln!(
++                "[flight] join {} has ammo {}",
++                event.entity,
++                glue::items::potato::ammo_probe(host, event.entity)
++            );
++            if !event.loaded_from_disk && std::env::var_os("POTATO_TEST_REFUSAL").is_some() {
++                eprintln!("[potato check] join refused");
++                return Flow::Cancel;
++            }
++            if !event.loaded_from_disk && std::env::var_os("POTATO_TEST_SWAP").is_some() {
++                let players = host.players().server_players();
++                assert_eq!(players.len(), 1);
++                assert!(players[0].set_selected_slot(host, 2));
++                eprintln!("[potato check] selected slot changed");
++            }
++        }
+         until_cancel(|s| s.entity_join_level(host, event))
+     }
