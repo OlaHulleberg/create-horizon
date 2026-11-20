@@ -67,8 +67,7 @@ pub fn has_distribution(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
             .get(&pos)
             .is_some_and(|b| b.connected_left || b.connected_right)
     })
-    .unwrap_or(false)
-        || brass_connected(lv, pos);
+    .unwrap_or(false);
     !f.is_empty() && (connected || f.iter().any(|d| d.axis() != axis))
 }
 
@@ -216,36 +215,23 @@ fn brass_adjacent(lv: &ServerLevel<'_>, pos: [i32; 3], axis: Axis, left: bool) -
     (brass_axis(lv, next) == Some(axis)).then_some(next)
 }
 
-/// `BrassTunnelBlockEntity.isConnected` on either side: a brass tunnel beside it, both with
-/// flaps (`determineIfConnected`).
-pub fn brass_connected(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
-    let Some((axis, shape)) = tunnel_state(lv, pos) else {
-        return false;
-    };
-    has_flaps(lv, pos, axis, shape)
-        && [true, false].into_iter().any(|left| {
-            brass_adjacent(lv, pos, axis, left).is_some_and(|a| {
-                tunnel_state(lv, a).is_some_and(|(ax, sh)| has_flaps(lv, a, ax, sh))
-            })
-        })
-}
-
 /// Andesite tunnels: those just placed case their belt (`BeltTunnelItem`); those whose
 /// surroundings changed break without a cased, flat belt below (`canSurvive`) or take the shape
 /// the belts and depots beside their segment give (`updateShape`, `getTunnelState`).
 pub fn tick_tunnels(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
-    let Some((new, kept, fresh)) = with_world(|w| {
+    let Some((new, kept, fresh, initialized)) = with_world(|w| {
         let d = &mut w.dims[dim];
         (
             std::mem::take(&mut d.tunnels_new),
             std::mem::take(&mut d.tunnel_checks),
             std::mem::take(&mut d.tunnel_fresh),
+            std::mem::take(&mut d.brass_initialize),
         )
     }) else {
         return;
     };
-    if new.is_empty() && kept.is_empty() && fresh.is_empty() {
+    if new.is_empty() && kept.is_empty() && fresh.is_empty() && initialized.is_empty() {
         return;
     }
     let belt_below = |lv: &ServerLevel<'_>, p: [i32; 3]| {
@@ -343,9 +329,9 @@ pub fn tick_tunnels(lv: &mut ServerLevel<'_>) {
     }
     // `BrassTunnelBlockEntity.updateTunnelConnections`: newly placed tunnels run before neighbour
     // shape updates (matching `onPlace` before `updateShape`), so a joining tunnel takes the
-    // group's mode.
+    // group's mode; a loaded one looks at its connections again (`initialize`).
     let mut conn_checks = new;
-    for p in check_positions {
+    for p in initialized.into_iter().chain(check_positions) {
         if !conn_checks.contains(&p) {
             conn_checks.push(p);
         }

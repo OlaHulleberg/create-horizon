@@ -369,6 +369,10 @@ pub struct Dimension {
     pub tunnel_fresh: Vec<[i32; 3]>,
     /// Brass tunnels and what they hold to hand out.
     pub brass: HashMap<[i32; 3], crate::tunnel::Brass>,
+    /// Brass tunnels whose block entity was just created, placed or loaded
+    /// (`BeltTunnelBlockEntity.initialize` → `updateTunnelConnections`): their connections
+    /// are looked at before their first tick.
+    pub brass_initialize: Vec<[i32; 3]>,
     /// The loaded basins, whose spout output looks for somewhere to go (`lazyTick`).
     pub basins: HashSet<[i32; 3]>,
     /// Basins' fluid tanks (`BasinBlockEntity`'s inputs and outputs).
@@ -1073,6 +1077,7 @@ impl CreateWorld {
                 .map(crate::tunnel::Brass::from_saved)
                 .unwrap_or_default();
             d.brass.insert(pos, b);
+            d.brass_initialize.push(pos);
         }
         match block {
             Block::TrackSignal => {
@@ -2248,6 +2253,8 @@ impl CreateWorld {
             d.tunnel_fresh
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.brass.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.brass_initialize
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.basin_fluids
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.chassis_range
