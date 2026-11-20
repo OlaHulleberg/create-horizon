@@ -463,10 +463,23 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
                 chute_stack(lv, target).is_none() && chute_accepts(lv, target, b, powered, &stack)
             })
         };
+        // `handleDownwardOutput(true)`: past the middle the chute asks, by a simulated
+        // `insertItemStacked` into the inventory below, whether it takes any of the stack;
+        // while none of it goes in, the stack waits at 0.5 (`ChuteBlockEntity.tick`).
+        let takes_something = |lv: &mut ServerLevel<'_>| {
+            if belt_below {
+                let (id, progress) = super::belt::belt_name(&*lv.host, &stack);
+                let n = stack.count().min(u32::from(u8::MAX)) as u8;
+                super::belt::put_on_from_above(lv, below, &id, n, progress, true)
+                    .is_some_and(|left| left != n)
+            } else {
+                items::insert_room(lv, below, Direction::Up, &stack).unwrap_or(0) > 0
+            }
+        };
         let can = if !active {
             false
         } else if container {
-            true
+            takes_something(lv)
         } else if target_chute.is_some() {
             target_takes(lv)
         } else if diagonal {
