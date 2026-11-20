@@ -946,9 +946,6 @@ impl CannonWorld for World<'_, '_> {
             (Some(Block::RedstoneRequester), Some(stack)) => {
                 super::stock::requester_placed_by(self.lv, pos, stack);
             }
-            (Some(Block::MechanicalRoller), _) => {
-                super::contraptions::actors::roller_placed_by(self.lv.dim, pos);
-            }
             (Some(block), Some(stack)) if create_engine::dye::is_toolbox(block) => {
                 super::processing::toolbelt::placed(self.lv, pos, stack);
             }
