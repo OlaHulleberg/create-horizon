@@ -111,8 +111,8 @@ pub fn passes_fluid(filter: Option<&str>, fluid: Fluid) -> bool {
 /// One inventory slot as a detector sees it: its item (none: empty), count and the item's
 /// largest stack.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Slot {
-    pub item: Option<String>,
+pub struct Slot<Item = String> {
+    pub item: Option<Item>,
     pub count: u32,
     pub max_stack: u32,
 }
@@ -149,16 +149,17 @@ impl TankSlot {
     }
 }
 
-/// What a detector finds at its target.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Seen {
+/// What a detector finds at its target. The adapter can retain full stacks in inventory
+/// slots, while the engine's detector rules consume item identities.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Seen<Item = String> {
     /// The target block's item id (`block.asItem()`), for the observer's own filter test.
     pub block_item: Option<String>,
     /// Items a belt or depot holds near the centre (`TransportedItemStackHandlerBehaviour`);
     /// Some even when empty: such a target is looked at no further.
     pub transported: Option<Vec<String>>,
     /// An item handler's slots and their limit (`getSlotLimit`), if it has one.
-    pub inventory: Option<(Vec<Slot>, u32)>,
+    pub inventory: Option<(Vec<Slot<Item>>, u32)>,
     /// A fluid handler's tanks (`IFluidHandler.getTanks`), if it has one.
     pub tanks: Option<Vec<TankSlot>>,
     /// The fluids flowing into a pipe from its sides, each flow complete (`FluidTransportBehaviour
@@ -171,6 +172,45 @@ pub struct Seen {
     /// A `ThresholdSwitchObservable` (a rope pulley): its (min, current, max), read before
     /// any handler.
     pub custom: Option<(i32, i32, i32)>,
+}
+
+impl<Item> Default for Seen<Item> {
+    fn default() -> Self {
+        Self {
+            block_item: None,
+            transported: None,
+            inventory: None,
+            tanks: None,
+            flows: None,
+            looping: None,
+            custom: None,
+        }
+    }
+}
+
+impl<Item> Seen<Item> {
+    /// Change only the item identity carried by each inventory slot.
+    pub fn map_inventory<Key>(self, mut key: impl FnMut(Item) -> Key) -> Seen<Key> {
+        Seen {
+            block_item: self.block_item,
+            transported: self.transported,
+            inventory: self.inventory.map(|(slots, limit)| {
+                let slots = slots
+                    .into_iter()
+                    .map(|slot| Slot {
+                        item: slot.item.map(&mut key),
+                        count: slot.count,
+                        max_stack: slot.max_stack,
+                    })
+                    .collect();
+                (slots, limit)
+            }),
+            tanks: self.tanks,
+            flows: self.flows,
+            looping: self.looping,
+            custom: self.custom,
+        }
+    }
 }
 
 /// `SmartObserverBlockEntity.tick`'s finding: activate for `n` ticks, or nothing.

@@ -181,48 +181,51 @@ pub(super) fn detects(lv: &mut ServerLevel<'_>, at: [i32; 3], observer: bool) ->
             .is_some()
 }
 
-/// What a smart observer's display sources read of its target (`InvManipulationBehaviour`,
-/// `TankManipulationBehaviour`, through the observer's filter): each matching stack's item id
-/// and count of an item handler, and the matching fluid of a tank; None where there is none.
-#[derive(Default)]
-pub(crate) struct Observed {
-    pub(crate) items: Option<Vec<(String, u32)>>,
-    pub(crate) fluids: Option<Vec<(create_engine::tank::Fluid, u32)>>,
+fn observed_target(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<([i32; 3], Option<Filter>)> {
+    let (Block::ContentObserver, info) = block_at(lv, pos)? else {
+        return None;
+    };
+    let target = observe::target_pos(pos, info.target?, info.facing?);
+    let filter = with_world(|w| w.dims[lv.dim].detectors.filter(pos).cloned()).flatten();
+    Some((target, filter))
 }
 
-/// `Observed` for the smart observer at `pos`.
-pub(crate) fn observed(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Observed {
-    let Some((Block::ContentObserver, info)) = block_at(lv, pos) else {
-        return Observed::default();
-    };
-    let (Some(t), Some(f)) = (info.target, info.facing) else {
-        return Observed::default();
-    };
-    let target = observe::target_pos(pos, t, f);
-    let (seen, _) = seen_at(lv, target, false);
-    let dim = lv.dim;
-    let filter = with_world(|w| w.dims[dim].detectors.filter(pos).cloned()).flatten();
+/// A smart observer's display link reads the matching stacks and counts from its target's
+/// inventory, keeping components for `CountedItemStackList` and the observer's filter.
+pub(crate) fn observed_items(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+) -> Option<Vec<(ItemStack, u32)>> {
+    let (target, filter) = observed_target(lv, pos)?;
+    let (slots, _) = seen_at(lv, target, false).0.inventory?;
+    Some(
+        slots
+            .into_iter()
+            .filter_map(|s| Some((s.item?, s.count)))
+            .filter(|(s, count)| *count > 0 && filters::passes(&*lv.host, filter.as_ref(), s))
+            .collect(),
+    )
+}
+
+/// The matching fluids a smart observer's display link reads from its target's tanks.
+pub(crate) fn observed_fluids(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+) -> Option<Vec<(create_engine::tank::Fluid, u32)>> {
+    let (target, filter) = observed_target(lv, pos)?;
+    let tanks = seen_at(lv, target, false).0.tanks?;
     let passes = filters::Detector {
         host: &*lv.host,
         filter: filter.as_ref(),
     };
     use create_engine::filter::Passes;
-    Observed {
-        items: seen.inventory.map(|(slots, _)| {
-            slots
-                .into_iter()
-                .filter_map(|s| Some((s.item?, s.count)))
-                .filter(|(item, n)| *n > 0 && passes.item(item))
-                .collect()
-        }),
-        fluids: seen.tanks.map(|tanks| {
-            tanks
-                .into_iter()
-                .filter_map(|t| Some((t.fluid?, t.amount)))
-                .filter(|(f, n)| *n > 0 && passes.fluid(*f))
-                .collect()
-        }),
-    }
+    Some(
+        tanks
+            .into_iter()
+            .filter_map(|t| Some((t.fluid?, t.amount)))
+            .filter(|(f, n)| *n > 0 && passes.fluid(*f))
+            .collect(),
+    )
 }
 
 /// The stack in slot `slot` of the block entity at `pos`.
@@ -243,7 +246,7 @@ pub(crate) fn max_stack(lv: &ServerLevel<'_>, stack: &ItemStack) -> u32 {
 
 /// Every slot of the item handler at `pos`, whatever its sides (`bypassSidedness`): each one's
 /// item, count and largest stack there. None when there is none.
-fn container_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Vec<Slot>> {
+fn container_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Vec<Slot<ItemStack>>> {
     let handler = lv
         .level
         .capability(&mut *lv.host, &mod_api::ITEMS, pos, None)?;
@@ -253,7 +256,7 @@ fn container_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Vec<Slot>>
         let amount = handler.amount(&mut *lv.host, i);
         let slot = match handler.resource(&mut *lv.host, i) {
             Some(r) if amount > 0 => Slot {
-                item: Some(r.item().id(&*lv.host)),
+                item: Some(r.as_stack().clone()),
                 count: amount,
                 max_stack: lv
                     .host
@@ -274,11 +277,11 @@ fn container_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Vec<Slot>>
 
 /// What the detector at `pos` finds at `target`, and how it is watched from now on. The
 /// target's own item id is read only for an observer with a filter.
-pub(super) fn seen_at(
+fn seen_at(
     lv: &mut ServerLevel<'_>,
     target: [i32; 3],
     block_item: bool,
-) -> (Seen, Watch) {
+) -> (Seen<ItemStack>, Watch) {
     let dim = lv.dim;
     let mut seen = Seen {
         // `new ItemStack(block)`: the block's item (a carrot crop's carrot, redstone wire's
@@ -335,8 +338,8 @@ pub(super) fn seen_at(
                         slots.push(match slot_stack(lv, p, i) {
                             Some(s) => Slot {
                                 max_stack: max_stack(lv, &s).clamp(1, 64),
-                                item: Some(item_id(lv, &s)),
                                 count: s.count(),
+                                item: Some(s),
                             },
                             None => Slot {
                                 item: None,
@@ -492,7 +495,10 @@ pub(crate) fn switch_seen(lv: &mut ServerLevel<'_>, target: [i32; 3]) -> (Seen, 
             };
             (seen, Watch::Lazy)
         }
-        _ => seen_at(lv, target, false),
+        _ => {
+            let (seen, watch) = seen_at(lv, target, false);
+            (seen.map_inventory(|stack| item_id(lv, &stack)), watch)
+        }
     }
 }
 
@@ -539,7 +545,7 @@ fn look(lv: &mut ServerLevel<'_>, pos: [i32; 3], now: i64) {
                 host: &*lv.host,
                 filter: filter.as_ref(),
             };
-            let found = observe::observe(&passes, &seen);
+            let found = observe::observe(&passes, &seen.map_inventory(|stack| item_id(lv, &stack)));
             let effect = with_world(|w| {
                 let d = &mut w.dims[dim].detectors;
                 d.watch(pos, watch, now);
