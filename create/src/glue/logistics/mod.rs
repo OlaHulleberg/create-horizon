@@ -446,7 +446,6 @@ impl Subsystem for Logistics {
         client::tick_client_depots(host);
         client::tick_client_belts(host);
         client::tick_client_flaps();
-        belt::carry_slopes(host);
     }
 
     fn player_tick(&self, host: HostSide, event: &mut PlayerTickPostEvent) {
