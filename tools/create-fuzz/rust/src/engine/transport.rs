@@ -386,7 +386,8 @@ impl Run {
                     continue;
                 }
                 create_engine::world::TransportTick::Spout(p) => {
-                    create_engine::spout::tick(self.w.dims[0].spouts.get_mut(&p).unwrap());
+                    // The glue's `w.tick_spout` (glue/logistics/belt.rs `tick_transport`).
+                    self.w.tick_spout(0, p);
                     continue;
                 }
                 create_engine::world::TransportTick::Drain(p) => {

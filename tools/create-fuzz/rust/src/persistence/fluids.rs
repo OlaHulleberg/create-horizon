@@ -3,6 +3,7 @@
 use super::codec::{Compound, Tag};
 use crate::scenario::Pos;
 use create_engine::kinetics::Dir;
+use create_engine::spout;
 use create_engine::tank::{Codes, Fluid, MAX_HEIGHT, MAX_WIDTH, Multi, Tank};
 use create_engine::world::CreateWorld;
 
@@ -182,6 +183,11 @@ pub fn save_column(w: &CreateWorld, column: (i32, i32)) -> Compound {
     drains.sort_by_key(|(p, _)| **p);
     if !spouts.is_empty() || !drains.is_empty() {
         let mut codes = Codes::default();
+        // glue/fluids/machines.rs `chunk_data_save`: a `spout::record` each.
+        let spouts: Vec<i32> = spouts
+            .iter()
+            .flat_map(|(p, s)| spout::record(**p, s, &mut codes))
+            .collect();
         let mut tank = |p: &Pos, f: Option<(Fluid, u32)>| {
             [
                 p[0],
@@ -191,7 +197,6 @@ pub fn save_column(w: &CreateWorld, column: (i32, i32)) -> Compound {
                 f.map_or(0, |v| v.1 as i32),
             ]
         };
-        let spouts = spouts.iter().flat_map(|(p, s)| tank(p, s.fluid)).collect();
         let fluids = drains.iter().flat_map(|(p, s)| tank(p, s.fluid)).collect();
         let items = drains
             .iter()
@@ -208,7 +213,7 @@ pub fn save_column(w: &CreateWorld, column: (i32, i32)) -> Compound {
             })
             .collect();
         let mut own = Compound::from([
-            ("spouts".into(), Tag::IntArray(spouts)),
+            ("spout_records".into(), Tag::IntArray(spouts)),
             ("drains".into(), Tag::IntArray(fluids)),
             ("drain_items".into(), Tag::List(items)),
         ]);
@@ -354,8 +359,11 @@ pub fn load_column(w: &mut CreateWorld, data: &Compound) {
         let k = keys(own, "create_machines");
         let fluid = |c: &[i32]| Codes::fluid(&k, c[3]).map(|f| (f, c[4].max(0) as u32));
         let d = &mut w.dims[0];
-        for c in ints(own, "spouts").as_chunks::<5>().0 {
-            d.spouts.entry([c[0], c[1], c[2]]).or_default().fluid = fluid(c);
+        let legacy = ints(own, "spouts").as_chunks::<{ spout::LEGACY_RECORD }>().0.iter();
+        let records = ints(own, "spout_records").as_chunks::<{ spout::RECORD }>().0;
+        for r in legacy.map(|r| r.as_slice()).chain(records.iter().map(|r| r.as_slice())) {
+            let (pos, s) = spout::read(r, &k);
+            d.spouts.insert(pos, s);
         }
         for c in ints(own, "drains").as_chunks::<5>().0 {
             d.drains.entry([c[0], c[1], c[2]]).or_default().fluid = fluid(c);
