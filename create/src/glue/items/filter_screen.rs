@@ -927,7 +927,7 @@ fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f32
             if o.cursor.is_none()
                 && let Some(s) = o.stack(slot)
             {
-                hover = Some(vec![host.hover_name(s).unwrap_or_default()]);
+                hover = Some(super::tooltip_lines(host, s));
             }
         }
     }
@@ -944,7 +944,7 @@ fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f32
                 if o.cursor.is_none()
                     && let Some((_, s)) = g
                 {
-                    hover = Some(vec![host.hover_name(s).unwrap_or_default()]);
+                    hover = Some(super::tooltip_lines(host, s));
                 }
             }
         }
@@ -1008,7 +1008,7 @@ fn draw_attribute(
         if o.cursor.is_none()
             && let Some(s) = reference_stack
         {
-            *hover = Some(vec![host.hover_name(s).unwrap_or_default()]);
+            *hover = Some(super::tooltip_lines(host, s));
         }
     }
     // `renderForeground`: a name tag with the number of attributes chosen.

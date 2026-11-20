@@ -94,31 +94,18 @@ pub(crate) fn item_tooltip(host: &dyn ClientHost, event: &mut mod_api::ItemToolt
     tooltip::item_tooltip(host, event);
 }
 
-/// `ItemStack.getTooltipLines(.., TooltipFlag.NORMAL)` on a client: the game's lines with
-/// Create's added, as `item_tooltip` adds them (other mods' callbacks are not run).
+/// `ItemStack.getTooltipLines(.., TooltipFlag.NORMAL)` on a client, including each mod's
+/// `item_tooltip` edits. Keep the components for drawing, not just the rendered strings.
 pub(crate) fn tooltip_lines(host: &dyn ClientHost, stack: &ItemStack) -> Vec<mod_api::Text> {
-    let Some(game) = mod_api::ItemResource::of(stack).tooltip(host, false, false) else {
-        return Vec::new();
-    };
-    let mut lines: Vec<(mod_api::Text, u32)> = game
+    mod_api::ItemResource::of(stack)
+        .tooltip(host, false, false)
+        .unwrap_or_default()
         .into_iter()
-        .filter_map(|e| match e {
-            mod_api::TooltipElement::Text(t, c) => Some((t, c)),
+        .filter_map(|element| match element {
+            mod_api::TooltipElement::Text(text, _) => Some(text),
             _ => None,
         })
-        .collect();
-    let display = mod_api::TooltipDisplay::for_stack(stack);
-    let mut event = mod_api::ItemTooltipEvent {
-        player: 0,
-        player_entity_id: -1,
-        stack,
-        display: &display,
-        advanced: false,
-        creative: false,
-        lines: &mut lines,
-    };
-    item_tooltip(host, &mut event);
-    lines.into_iter().map(|(t, _)| t).collect()
+        .collect()
 }
 
 pub(crate) fn key(item: Item) -> Option<ItemKey> {
