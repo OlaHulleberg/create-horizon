@@ -28,7 +28,8 @@ fn block_at(
     with_world(|w| w.table.get(id).map(|(b, i)| (b, *i))).flatten()
 }
 
-/// The handler `side` asks the block of: a depot's, a vault's or a chute's; None for the rest.
+/// The handler `side` asks the block of: a depot's, a belt segment's, a vault's or a chute's;
+/// None for the rest.
 pub fn provide(
     host: &mut dyn ServerHost,
     side: BlockSide,
@@ -510,8 +511,8 @@ fn accepts(host: &dyn mod_api::Host, at: At, stack: &ItemStack) -> bool {
 
 /// `BrassTunnelItemHandler`: one slot, the stack the tunnel hands out. A distributing tunnel
 /// (`hasDistributionBehaviour`) takes a stack, up to its stack size, while it holds none and
-/// hands out with no synchronized group (`canTakeItems`); the rest (Create's: into the belt
-/// below, and every extraction) go to the belt's handler, which belts have none of here.
+/// hands out with no synchronized group (`canTakeItems`); Create's rest (into the belt below,
+/// and every extraction) is not ported here.
 struct TunnelItems(At);
 
 impl TunnelItems {
