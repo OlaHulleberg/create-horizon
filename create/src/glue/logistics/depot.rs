@@ -154,7 +154,9 @@ pub(super) fn tick_depot(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let standing = depot_items(lv, pos)
         .first()
         .is_some_and(|(slot, item, _)| *slot == 0 && upright(&*lv.host, item));
-    if with_world(|w| w.tick_depot(lv.dim, pos, standing)) == Some(true) {
+    let arrived = with_world(|w| w.tick_depot(lv.dim, pos, standing)) == Some(true);
+    // `handleBeltFunnelOutput` before the processing above.
+    if !super::funnel::depot_output(lv, pos) && arrived {
         crate::glue::fluids::machines::spout_on_depot(lv, pos);
     }
 }

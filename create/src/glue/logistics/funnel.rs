@@ -210,6 +210,11 @@ fn depot_below(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
         .is_some_and(|(b, _)| matches!(b, Block::Depot | Block::WeightedEjector))
 }
 
+/// Whether a weighted ejector is below `pos`.
+fn ejector_below(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    info_at(lv, [pos[0], pos[1] - 1, pos[2]]).is_some_and(|(b, _)| b == Block::WeightedEjector)
+}
+
 /// Whether an item drain or an upward saw is below `pos`: their inputs take belt funnels too
 /// (`ItemDrainBlockEntity`'s `allowingBeltFunnels`, `SawBlockEntity`'s
 /// `allowingBeltFunnelsWhen(canProcess)`).
@@ -350,6 +355,26 @@ fn push_onto_depot(
     super::flaps::funnel(lv, pos, false);
     crate::glue::redstone::detectors::funnel_transfer(lv, pos, &moved);
     Some(Some(true))
+}
+
+/// The depot at `depot`'s turn in the transport walk (`DepotBehaviour.tick` calls
+/// `handleBeltFunnelOutput`; `FunnelBlockEntity.tick` returns at once for `TAKING_FROM_BELT`): a
+/// belt funnel pulling from it above takes what `pull_from_depot` gives. True when a stack moved
+/// (the depot's tick then ends there).
+pub(super) fn depot_output(lv: &mut ServerLevel<'_>, depot: [i32; 3]) -> bool {
+    use create_engine::funnel::{Mode, belt_mode};
+    let pos = [depot[0], depot[1] + 1, depot[2]];
+    let Some(f) = funnel_at(lv, pos) else {
+        return false;
+    };
+    let Some(shape) = f.belt else {
+        return false;
+    };
+    if belt_mode(f.powered, shape, belt_movement_below(lv, pos), f.facing) != Mode::TakingFromBelt {
+        return false;
+    }
+    let behind = create_engine::funnel::behind(pos, f.facing);
+    pull_from_depot(lv, pos, face(f.facing), behind) == Some(Some(true))
 }
 
 /// `DepotBehaviour.handleBeltFunnelOutput` for a pulling belt funnel over a depot: the depot's
@@ -555,9 +580,9 @@ pub(super) fn tick_funnel(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             push_into_machine(lv, pos, f.facing, side, behind, max)
         }
         Mode::PushingToBelt => push_onto_belt(lv, pos, f.facing, side, behind, max),
-        Mode::TakingFromBelt if depot_below(lv, pos) => {
-            // The depot hands its stack over each tick it holds one
-            // (`DepotBehaviour.tick`, `handleBeltFunnelOutput`).
+        // A depot hands its stack over at its own turn (`depot_output`); an ejector's
+        // `DepotBehaviour` does not take a turn in the walk, so its funnel pulls here.
+        Mode::TakingFromBelt if ejector_below(lv, pos) => {
             pull_from_depot(lv, pos, side, behind);
             Some(Some(false))
         }
