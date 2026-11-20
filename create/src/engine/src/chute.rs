@@ -73,6 +73,16 @@ pub fn can_output_down(
     !diagonal && drop()
 }
 
+/// `AbstractChuteBlock.isOpen` of a chute facing `facing` with `shape` (`ChuteBlock.isOpen`):
+/// open facing down, or as an intersection; a diagonal chute leading on in its own line is shut.
+/// A smart chute (no shape) always is.
+pub fn is_open(facing: Dir, shape: Option<Shape>) -> bool {
+    match shape {
+        Some(shape) => facing == Dir::Down || shape == Shape::Intersection,
+        None => true,
+    }
+}
+
 /// `ChuteBlockEntity.canDirectlyInsert` (its `DirectBeltInputBehaviour.onlyInsertWhen`): whether
 /// a chute takes a stack straight from a belt's end or another direct inserter. Not under a chute
 /// leading down into it (`facing_above`: `getChuteFacing` of the block above, None when it is no
@@ -458,6 +468,30 @@ mod tests {
         assert!(can_directly_insert(None, MOTION, || false, true));
         // Under a chute leading down into it, never.
         assert!(!can_directly_insert(Some(Dir::Down), MOTION, || true, true));
+    }
+
+    #[test]
+    fn a_shut_diagonal_chute_takes_nothing_from_a_belt() {
+        // Java issue #164: `canDirectlyInsert` ends with `isOpenChute` (`ChuteBlockEntity.java:135`),
+        // and `ChuteBlock.isOpen` is `FACING == DOWN || SHAPE == INTERSECTION`
+        // (`ChuteBlock.java:71-73`). Observed in Java: a chute facing east with shape `normal`
+        // (a diagonal chute over it leading into it) at a belt's end refuses the belt's stacks;
+        // they wait stalled at its end.
+        let shut = is_open(Dir::East, Some(Shape::Normal));
+        assert!(!shut);
+        assert!(!can_directly_insert(None, MOTION, || true, shut));
+        assert!(!is_open(Dir::North, Some(Shape::Encased)));
+        // Down-facing chutes of any shape, diagonal intersections and smart chutes are open.
+        assert!(is_open(Dir::Down, Some(Shape::Normal)));
+        assert!(is_open(Dir::Down, Some(Shape::Window)));
+        assert!(is_open(Dir::East, Some(Shape::Intersection)));
+        assert!(is_open(Dir::Down, None));
+        assert!(can_directly_insert(
+            None,
+            MOTION,
+            || false,
+            is_open(Dir::East, Some(Shape::Intersection))
+        ));
     }
 
     #[test]

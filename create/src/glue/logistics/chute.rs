@@ -96,14 +96,6 @@ pub fn use_chute(lv: &mut ServerLevel<'_>, pos: [i32; 3], click: &BlockClick<'_>
     let Some((block, _)) = info_at(lv, pos) else {
         return false;
     };
-    let shape = || {
-        lv.block_state(pos).and_then(|s| {
-            s.property(&lv.host.block_states(), "shape")
-                .ok()
-                .flatten()
-                .and_then(create_engine::chute::Shape::read)
-        })
-    };
     match held.as_deref() {
         None => {
             if click.hand != mod_api::Hand::Main {
@@ -120,7 +112,10 @@ pub fn use_chute(lv: &mut ServerLevel<'_>, pos: [i32; 3], click: &BlockClick<'_>
         }
         Some("create:industrial_iron_block") if block == Block::Chute => {
             use create_engine::chute::Shape;
-            if matches!(shape(), Some(Shape::Intersection | Shape::Encased) | None) {
+            if matches!(
+                chute_shape(lv, pos),
+                Some(Shape::Intersection | Shape::Encased) | None
+            ) {
                 return false;
             }
             lv.set_property(pos, "shape", "encased", super::super::server::update_all());
@@ -167,15 +162,9 @@ fn place_diagonal(
         .block_state(at)
         .is_none_or(|s| lv.host.block_states().replaceable(s) != Some(false));
     let shape = match existing {
-        Some((Block::Chute, i)) if i.facing.unwrap_or(Dir::Down) == Dir::Down => lv
-            .block_state(at)
-            .and_then(|s| {
-                s.property(&lv.host.block_states(), "shape")
-                    .ok()
-                    .flatten()
-                    .and_then(Shape::read)
-            })
-            .unwrap_or(Shape::Normal),
+        Some((Block::Chute, i)) if i.facing.unwrap_or(Dir::Down) == Dir::Down => {
+            chute_shape(lv, at).unwrap_or(Shape::Normal)
+        }
         _ if free => Shape::Normal,
         _ => return true,
     };
@@ -227,15 +216,7 @@ pub fn tick_chute_shapes(lv: &mut ServerLevel<'_>) {
         let Some(state) = lv.block_state(pos) else {
             continue;
         };
-        let shape = {
-            let facts = lv.host.block_states();
-            state
-                .property(&facts, "shape")
-                .ok()
-                .flatten()
-                .and_then(Shape::read)
-                .unwrap_or(Shape::Normal)
-        };
+        let shape = chute_shape(lv, pos).unwrap_or(Shape::Normal);
         let facing = info.facing.unwrap_or(Dir::Down);
         let above = [pos[0], pos[1] + 1, pos[2]];
         let funnel_down = super::funnel::funnel_at(lv, above)
@@ -292,8 +273,29 @@ pub fn can_directly_insert(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
         chute_facing(lv, [pos[0], pos[1] + 1, pos[2]]),
         chute_motion(lv, pos),
         || !input_chutes(lv, pos).is_empty(),
-        true,
+        chute_open(lv, pos),
     )
+}
+
+/// `AbstractChuteBlock.isOpenChute` at `pos` (`create_engine::chute::is_open`).
+fn chute_open(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    match info_at(lv, pos) {
+        Some((Block::Chute, i)) => {
+            create_engine::chute::is_open(i.facing.unwrap_or(Dir::Down), chute_shape(lv, pos))
+        }
+        Some((Block::SmartChute, _)) => create_engine::chute::is_open(Dir::Down, None),
+        _ => false,
+    }
+}
+
+/// `ChuteBlock.SHAPE` of the chute at `pos`; None when no chute (or a smart chute) is there.
+fn chute_shape(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<create_engine::chute::Shape> {
+    let state = lv.block_state(pos)?;
+    state
+        .property(&lv.host.block_states(), "shape")
+        .ok()
+        .flatten()
+        .and_then(create_engine::chute::Shape::read)
 }
 
 /// `getInputChutes`: the chutes leading into the one at `pos`, the one above facing down and
@@ -601,10 +603,7 @@ fn show_chute_item(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     if chute_facing(lv, pos) != Some(Dir::Down) {
         return;
     }
-    let window = lv.block_state(pos).is_some_and(|s| {
-        s.property(&lv.host.block_states(), "shape").ok().flatten() == Some("window")
-    });
-    if !window {
+    if chute_shape(lv, pos) != Some(create_engine::chute::Shape::Window) {
         return;
     }
     let dim = lv.dim;
