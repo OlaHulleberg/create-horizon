@@ -114,7 +114,7 @@ struct OnCart {
     dim: usize,
     m: Mounted,
     coupled: bool,
-    /// The oriented contraption's entity UUID. Absent in saves before it rode the cart.
+    /// The oriented contraption's entity UUID; absent for unboarded item data.
     rider: Option<u128>,
     /// Its storage blocks' items (`MountedStorageManager`): each block's offset and slots.
     storage: Vec<([i32; 3], Vec<Option<ItemStack>>)>,
@@ -2011,27 +2011,13 @@ fn tick_mounted(lv: &mut ServerLevel<'_>, carts: &HashMap<u128, Cart>) {
         let unlinked = coupled && link.is_none();
         let detached = !eject
             && !unlinked
-            && match rider {
+            && rider.is_none_or(|id| {
                 // A saved passenger may still be loading. The cart's own flag includes retained
                 // off-level passengers even when there is no resident handle for them.
-                Some(id) => lv
-                    .host
+                lv.host
                     .entity_by_uuid(EntityUuid(id))
-                    .map_or(!nc.ridden, |r| r.vehicle(&*lv.host) != Some(nc.entity)),
-                // Older saves have the blocks but no rider. Board once the cart is loaded.
-                None => match board_contraption(lv, nc) {
-                    Some(id) => {
-                        CARTS.with_borrow_mut(|c| {
-                            if let Some(on) = c.mounted.get_mut(&uuid) {
-                                on.rider = Some(id);
-                                c.dirty = true;
-                            }
-                        });
-                        false
-                    }
-                    None => true,
-                },
-            };
+                    .map_or(!nc.ridden, |r| r.vehicle(&*lv.host) != Some(nc.entity))
+            });
         if eject || unlinked || detached {
             if let Some(on) = CARTS.with_borrow_mut(|c| {
                 c.dirty = true;
