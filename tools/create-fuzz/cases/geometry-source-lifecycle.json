@@ -1,0 +1,103 @@
+{
+  "seed": 20001,
+  "ticks": 504,
+  "checkpoints": [
+    72,
+    144,
+    216,
+    288,
+    360,
+    432,
+    504
+  ],
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x]"
+    },
+    {
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": 32
+    }
+  ],
+  "events": [
+    {
+      "tick": 74,
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": 16
+    },
+    {
+      "tick": 146,
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": 64
+    },
+    {
+      "tick": 218,
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": 0
+    },
+    {
+      "tick": 290,
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": 32
+    },
+    {
+      "tick": 362,
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": -32
+    },
+    {
+      "tick": 434,
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": 32
+    }
+  ]
+}

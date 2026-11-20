@@ -1,0 +1,296 @@
+{
+  "version": 3,
+  "seed": 739,
+  "checkpoints": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    19,
+    21,
+    22,
+    25,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    66,
+    67,
+    68,
+    69,
+    70,
+    71,
+    72,
+    73,
+    74,
+    75,
+    76,
+    77,
+    78,
+    79,
+    80,
+    81,
+    82,
+    83,
+    84,
+    85,
+    86,
+    87,
+    88,
+    89,
+    90,
+    91,
+    92,
+    93,
+    126,
+    127,
+    128,
+    129,
+    130,
+    131,
+    132,
+    133,
+    134,
+    135
+  ],
+  "ticks": 300,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        3
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": -32
+    },
+    {
+      "pos": [
+        0,
+        8,
+        -1
+      ],
+      "state": "create:chute[facing=west,shape=intersection,waterlogged=false]"
+    },
+    {
+      "pos": [
+        1,
+        7,
+        -1
+      ],
+      "state": "create:chute[facing=west,shape=normal,waterlogged=false]"
+    },
+    {
+      "pos": [
+        2,
+        6,
+        -1
+      ],
+      "state": "create:smart_chute[powered=false]"
+    },
+    {
+      "pos": [
+        2,
+        4,
+        -1
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": 64
+    },
+    {
+      "pos": [
+        0,
+        9,
+        -1
+      ],
+      "state": "create:depot[waterlogged=false]"
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 8,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 14,
+      "pos": [
+        0,
+        8,
+        3
+      ]
+    },
+    {
+      "tick": 20,
+      "pos": [
+        2,
+        5,
+        -1
+      ],
+      "state": "create:encased_fan[facing=up]"
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "minecraft:diamond",
+        "face": "north",
+        "hit": [
+          0.5000000000000001,
+          0.6875,
+          0.03125
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 30,
+      "pos": [
+        2,
+        6,
+        -1
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:diamond",
+            "count": 8
+          }
+        }
+      },
+      "tick": 32,
+      "pos": [
+        0,
+        8,
+        3
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:gold_ingot",
+            "count": 17
+          }
+        }
+      },
+      "tick": 54,
+      "pos": [
+        0,
+        8,
+        3
+      ]
+    },
+    {
+      "tick": 97,
+      "pos": [
+        3,
+        6,
+        -1
+      ],
+      "state": "minecraft:redstone_block"
+    },
+    {
+      "tick": 126,
+      "pos": [
+        3,
+        6,
+        -1
+      ],
+      "state": "minecraft:air"
+    },
+    {
+      "action": {
+        "kind": "reload"
+      },
+      "tick": 1,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    }
+  ]
+}

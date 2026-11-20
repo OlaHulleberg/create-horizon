@@ -1,0 +1,10 @@
+{
+  "seed": 0,
+  "ticks": 40,
+  "blocks": [
+    {"pos": [0, 1, 0], "state": "create:creative_motor[facing=east]", "motor": 32},
+    {"pos": [1, 1, 0], "state": "create:shaft[axis=x,waterlogged=false]"},
+    {"pos": [2, 1, 0], "state": "create:cogwheel[axis=x,waterlogged=false]"},
+    {"pos": [3, 1, 0], "state": "create:mechanical_press[facing=east]"}
+  ]
+}

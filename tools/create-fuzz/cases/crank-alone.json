@@ -1,0 +1,2 @@
+{"ticks": 30, "blocks": [{"pos": [0, 1, 0], "state": "create:hand_crank[facing=down]"}, {"pos": [0, 2, 0], "state": "create:shaft[axis=y]"}],
+ "events": [{"tick": 0, "pos": [0, 1, 0], "turn": false}, {"tick": 4, "pos": [0, 1, 0], "turn": false}, {"tick": 8, "pos": [0, 1, 0], "turn": false}, {"tick": 12, "pos": [0, 1, 0], "turn": false}, {"tick": 16, "pos": [0, 1, 0], "turn": false}, {"tick": 20, "pos": [0, 1, 0], "turn": false}, {"tick": 24, "pos": [0, 1, 0], "turn": false}, {"tick": 28, "pos": [0, 1, 0], "turn": false}]}

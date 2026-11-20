@@ -1,0 +1,231 @@
+{
+  "version": 1,
+  "seed": 14,
+  "checkpoints": [
+    87
+  ],
+  "ticks": 168,
+  "blocks": [
+    {
+      "pos": [
+        -6,
+        8,
+        -3
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        -5,
+        8,
+        -3
+      ],
+      "state": "create:shaft[axis=y,waterlogged=false]"
+    },
+    {
+      "pos": [
+        -5,
+        7,
+        -3
+      ],
+      "state": "create:shaft[axis=y]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        -3
+      ],
+      "state": "create:shaft[axis=y,waterlogged=false]"
+    },
+    {
+      "pos": [
+        1,
+        8,
+        -3
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": -32
+    },
+    {
+      "pos": [
+        0,
+        7,
+        -3
+      ],
+      "state": "create:mechanical_press[facing=east]"
+    },
+    {
+      "pos": [
+        5,
+        7,
+        -3
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        5,
+        8,
+        -3
+      ],
+      "state": "create:shaft[axis=y,waterlogged=false]"
+    },
+    {
+      "pos": [
+        5,
+        9,
+        -3
+      ],
+      "state": "create:shaft[axis=y]"
+    },
+    {
+      "pos": [
+        -5,
+        8,
+        2
+      ],
+      "state": "create:shaft[axis=y,waterlogged=false]"
+    },
+    {
+      "pos": [
+        -5,
+        9,
+        2
+      ],
+      "state": "create:creative_motor[facing=down]",
+      "motor": -32
+    },
+    {
+      "pos": [
+        -5,
+        7,
+        2
+      ],
+      "state": "create:shaft[axis=y]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        1
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        0,
+        8,
+        2
+      ],
+      "state": "create:shaft[axis=y,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        7,
+        2
+      ],
+      "state": "create:shaft[axis=y]"
+    },
+    {
+      "pos": [
+        5,
+        8,
+        2
+      ],
+      "state": "create:shaft[axis=y,waterlogged=false]"
+    },
+    {
+      "pos": [
+        5,
+        8,
+        3
+      ],
+      "state": "create:creative_motor[facing=north]",
+      "motor": -32
+    },
+    {
+      "pos": [
+        5,
+        7,
+        2
+      ],
+      "state": "create:shaft[axis=y]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 88,
+      "pos": [
+        -6,
+        8,
+        -3
+      ],
+      "state": "minecraft:air"
+    },
+    {
+      "tick": 98,
+      "pos": [
+        -6,
+        8,
+        -3
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": -32
+    },
+    {
+      "tick": 98,
+      "pos": [
+        1,
+        8,
+        -3
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": 32
+    },
+    {
+      "tick": 98,
+      "pos": [
+        5,
+        7,
+        -3
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": -32
+    },
+    {
+      "tick": 98,
+      "pos": [
+        -5,
+        9,
+        2
+      ],
+      "state": "create:creative_motor[facing=down]",
+      "motor": 32
+    },
+    {
+      "tick": 98,
+      "pos": [
+        0,
+        8,
+        1
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": -32
+    },
+    {
+      "tick": 98,
+      "pos": [
+        5,
+        8,
+        3
+      ],
+      "state": "create:creative_motor[facing=north]",
+      "motor": 32
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+{"ticks": 20, "blocks": [
+  {"pos": [0, 8, 0], "state": "create:creative_motor[facing=east]"},
+  {"pos": [1, 8, 0], "state": "create:shaft[axis=x]"},
+  {"pos": [2, 8, 0], "state": "create:creative_motor[facing=west]"}]}

@@ -1,0 +1,137 @@
+{
+  "version": 3,
+  "seed": 82,
+  "checkpoints": [
+    40,
+    73,
+    75,
+    77,
+    79,
+    101
+  ],
+  "ticks": 180,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        13,
+        5
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        -1,
+        13,
+        5
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": -32
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 167.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 10,
+      "pos": [
+        0,
+        13,
+        5
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.9
+        ],
+        "yaw": 357.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 20,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:andesite_casing",
+        "face": "up",
+        "hit": [
+          0.9,
+          1.0,
+          0.1
+        ],
+        "yaw": 134.0,
+        "pitch": 0.0,
+        "sneaking": true
+      },
+      "tick": 72,
+      "pos": [
+        0,
+        13,
+        5
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:brass_casing",
+        "face": "up",
+        "hit": [
+          0.1,
+          1.0,
+          0.5
+        ],
+        "yaw": 175.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 74,
+      "pos": [
+        0,
+        13,
+        5
+      ]
+    },
+    {
+      "action": {
+        "kind": "remove"
+      },
+      "tick": 100,
+      "pos": [
+        0,
+        13,
+        5
+      ]
+    }
+  ]
+}

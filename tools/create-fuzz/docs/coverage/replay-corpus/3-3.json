@@ -1,0 +1,258 @@
+{
+  "version": 1,
+  "seed": 3,
+  "ticks": 170,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:large_cogwheel[axis=x]"
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "state": "create:hand_crank[facing=west]"
+    },
+    {
+      "pos": [
+        0,
+        9,
+        1
+      ],
+      "state": "create:cogwheel[axis=x]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 4,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 8,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 12,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 16,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 20,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 24,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 28,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 32,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 36,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 40,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 44,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 48,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 52,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 56,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 60,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 64,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 68,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 72,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 76,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 80,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 84,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 88,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 92,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 96,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 100,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    }
+  ]
+}

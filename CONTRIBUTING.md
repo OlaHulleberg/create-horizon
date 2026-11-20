@@ -31,6 +31,10 @@ Derive behaviour from Create's MIT code and data, vanilla's data in the game, or
 NeoForge's source or data (LGPL), horizon-rust/horizon at or after `fb1135c6` (LGPL), or code and tables of
 Sunrise's own (read it only to learn the API).
 
+`tools/create-fuzz`'s Java harness builds against NeoForge, Minecraft and Create as Gradle dependencies, to run
+Create for comparison. Use only their public APIs, and never commit their jars, the built harness or anything
+from their sources.
+
 ## Regenerate registry overlays
 
 From `tools/create-data/`, run `cargo run --locked -- registry --out ../../create`. This downloads the pinned jar

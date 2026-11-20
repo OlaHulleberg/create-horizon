@@ -1,0 +1,163 @@
+{
+  "version": 3,
+  "seed": 40,
+  "checkpoints": [
+    30,
+    40,
+    60,
+    80
+  ],
+  "ticks": 150,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        3,
+        0
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        0,
+        3,
+        1
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        1,
+        3,
+        0
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        1,
+        3,
+        1
+      ],
+      "state": "minecraft:stone"
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:fluid_tank",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": true
+      },
+      "tick": 12,
+      "pos": [
+        0,
+        3,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:fluid_tank",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": true
+      },
+      "tick": 13,
+      "pos": [
+        0,
+        3,
+        1
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:fluid_tank",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": true
+      },
+      "tick": 14,
+      "pos": [
+        1,
+        3,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:fluid_tank",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": true
+      },
+      "tick": 15,
+      "pos": [
+        1,
+        3,
+        1
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:wrench",
+        "face": "north",
+        "hit": [
+          0.5,
+          0.5,
+          0.0
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 55,
+      "pos": [
+        0,
+        4,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "remove"
+      },
+      "tick": 70,
+      "pos": [
+        0,
+        4,
+        0
+      ]
+    }
+  ]
+}

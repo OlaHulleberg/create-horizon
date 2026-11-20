@@ -1,0 +1,1 @@
+{"ticks": 20, "blocks": [{"pos": [0, 8, 0], "state": "create:gearbox[axis=y]"}, {"pos": [-1, 8, 0], "state": "create:creative_motor[facing=east]", "motor": 48}, {"pos": [1, 8, 0], "state": "create:shaft[axis=x]"}, {"pos": [0, 8, 1], "state": "create:shaft[axis=z]"}, {"pos": [0, 8, -1], "state": "create:shaft[axis=z]"}]}
