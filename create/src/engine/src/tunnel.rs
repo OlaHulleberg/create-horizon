@@ -209,7 +209,8 @@ pub fn distributes(axis: Axis, shape: Shape, tunnel: impl Fn(Dir) -> bool) -> bo
 
 /// `BrassTunnelBlockEntity.write/read` (`:594-639`): the server state persisted across saves and
 /// contraption carriage: `SyncedOutput`, `ConnectedLeft`, `ConnectedRight`, `StackToDistribute`,
-/// `StackEnteredFrom`, `DistributionProgress`, `PreviousIndex`, and `SelectionMode`.
+/// `StackEnteredFrom`, `DistributionProgress`, `PreviousIndex`, `SelectionMode`, `Targets` and
+/// `FilteredTargets`.
 /// `newItemArrived` is not saved (`BrassTunnelBlockEntity.java:78`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SavedBrass {
@@ -221,6 +222,7 @@ pub struct SavedBrass {
     pub synced: bool,
     pub connected_left: bool,
     pub connected_right: bool,
+    pub targets: Targets,
 }
 
 impl Default for SavedBrass {
@@ -234,6 +236,7 @@ impl Default for SavedBrass {
             synced: false,
             connected_left: false,
             connected_right: false,
+            targets: Targets::default(),
         }
     }
 }
@@ -264,6 +267,38 @@ pub struct Brass {
     /// `connectedLeft` / `connectedRight`: connected to an adjacent brass tunnel across its axis.
     pub connected_left: bool,
     pub connected_right: bool,
+    /// `distributionTargets`.
+    pub targets: Targets,
+}
+
+/// `BrassTunnelBlockEntity.distributionTargets`: Java hands out to the outputs found at the
+/// last gather, not to ones that appeared since.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Targets {
+    pub filtered: Vec<([i32; 3], Dir)>,
+    pub plain: Vec<([i32; 3], Dir)>,
+}
+
+impl Targets {
+    pub fn is_empty(&self) -> bool {
+        self.filtered.is_empty() && self.plain.is_empty()
+    }
+
+    /// `BrassTunnelBlockEntity.tick`'s `validTargets`.
+    pub fn to_hand_out(
+        &self,
+        pos: [i32; 3],
+        entered_from: Option<Dir>,
+        is_tunnel: impl Fn([i32; 3]) -> bool,
+    ) -> [Vec<([i32; 3], Dir)>; 2] {
+        let valid = |list: &[([i32; 3], Dir)]| {
+            list.iter()
+                .copied()
+                .filter(|&(p, d)| !(p == pos && Some(d) == entered_from) && is_tunnel(p))
+                .collect()
+        };
+        [valid(&self.filtered), valid(&self.plain)]
+    }
 }
 
 impl Default for Brass {
@@ -284,6 +319,7 @@ impl Brass {
             synced: self.synced,
             connected_left: self.connected_left,
             connected_right: self.connected_right,
+            targets: self.targets.clone(),
         }
     }
 
@@ -300,6 +336,7 @@ impl Brass {
             synced: saved.synced,
             connected_left: saved.connected_left,
             connected_right: saved.connected_right,
+            targets: saved.targets,
         }
     }
 
@@ -339,6 +376,7 @@ impl Brass {
             return BrassPhase::Idle;
         }
         if self.progress == -1 {
+            self.targets = Targets::default();
             BrassPhase::Gather
         } else if self.progress != 0 {
             BrassPhase::Wait
@@ -369,9 +407,19 @@ impl Brass {
         (sync_update, self.stack.is_some())
     }
 
+    /// `BrassTunnelBlockEntity.tick` (`:165-195`).
+    pub fn gathered(&mut self, targets: Targets) -> bool {
+        self.targets = targets;
+        if self.targets.is_empty() {
+            return false;
+        }
+        self.schedule_distribution();
+        true
+    }
+
     /// `BrassTunnelBlockEntity.tick` (`:186-195`): schedules the next distribution once targets
     /// were found.
-    pub fn schedule_distribution(&mut self) {
+    fn schedule_distribution(&mut self) {
         if self.new_item {
             self.new_item = false;
             self.progress = 2;
@@ -647,6 +695,44 @@ mod tests {
             Some(0)
         });
         assert_eq!(got, vec![(0, 5)]);
+    }
+
+    #[test]
+    fn a_brass_tunnel_hands_out_only_to_the_outputs_it_gathered() {
+        let t = [0, 9, 2];
+        let mut b = Brass {
+            stack: Some(("minecraft:gold_ingot".into(), 16)),
+            entered_from: Some(Dir::North),
+            progress: -1,
+            mode: Mode::ForcedRoundRobin,
+            targets: Targets {
+                filtered: Vec::new(),
+                plain: vec![(t, Dir::West)],
+            },
+            ..Default::default()
+        };
+        assert_eq!(b.begin_tick(true), BrassPhase::Gather);
+        assert!(b.targets.is_empty(), "gathered afresh");
+        let gathered = Targets {
+            filtered: Vec::new(),
+            plain: vec![(t, Dir::East), (t, Dir::North)],
+        };
+        assert!(b.gathered(gathered));
+        assert_eq!(b.progress, BRASS_TIMER);
+        for _ in 283..292 {
+            assert_eq!(b.begin_tick(true), BrassPhase::Wait);
+        }
+        assert_eq!(b.begin_tick(true), BrassPhase::Distribute);
+        let lists = b.targets.to_hand_out(t, b.entered_from, |p| p == t);
+        assert_eq!(lists, [vec![], vec![(t, Dir::East)]]);
+        let lists = b.targets.to_hand_out(t, b.entered_from, |_| false);
+        assert_eq!(lists, [vec![], vec![]]);
+        let mut idle = Brass {
+            stack: Some(("minecraft:gold_ingot".into(), 16)),
+            ..Default::default()
+        };
+        assert!(!idle.gathered(Targets::default()));
+        assert_eq!(idle.progress, -1);
     }
 
     #[test]
@@ -945,8 +1031,13 @@ mod tests {
             synced: true,
             connected_left: true,
             connected_right: false,
+            targets: Targets {
+                filtered: Vec::new(),
+                plain: vec![([1, 8, 2], Dir::East)],
+            },
         };
         let restored = Brass::from_saved(mid.to_saved());
+        assert_eq!(restored.targets, mid.targets);
         assert_eq!(restored.progress, 7);
         assert_eq!(restored.previous_output, 2);
         assert!(restored.synced);

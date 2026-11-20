@@ -1306,6 +1306,18 @@ pub(super) fn brass_to_nbt(brass: &[([i32; 3], create_engine::tunnel::SavedBrass
                 if let Some(d) = b.entered_from {
                     c.insert("StackEnteredFrom".into(), Tag::Int(d as i32));
                 }
+                for (key, list) in [
+                    ("FilteredTargets", &b.targets.filtered),
+                    ("Targets", &b.targets.plain),
+                ] {
+                    if !list.is_empty() {
+                        let v = list
+                            .iter()
+                            .flat_map(|(p, d)| [p[0], p[1], p[2], *d as i32])
+                            .collect();
+                        c.insert(key.into(), Tag::IntArray(v));
+                    }
+                }
                 if let Some((item, n)) = &b.stack {
                     c.insert("Item".into(), Tag::String(item.as_str().into()));
                     c.insert("Count".into(), Tag::Int(i32::from(*n)));
@@ -1347,6 +1359,18 @@ pub(super) fn brass_from_nbt(
                     _ => None,
                 };
                 let mode_idx = int("SelectionMode", 0).clamp(0, 6) as usize;
+                let targets = |k: &str| match c.get(&k.into()) {
+                    Some(Tag::IntArray(v)) => v
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .filter_map(|t| {
+                            let d = Dir::ALL.get(usize::try_from(t[3]).ok()?)?;
+                            Some(([t[0], t[1], t[2]], *d))
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
                 Some((
                     p,
                     create_engine::tunnel::SavedBrass {
@@ -1358,6 +1382,10 @@ pub(super) fn brass_from_nbt(
                         synced: flag("SyncedOutput"),
                         connected_left: flag("ConnectedLeft"),
                         connected_right: flag("ConnectedRight"),
+                        targets: create_engine::tunnel::Targets {
+                            filtered: targets("FilteredTargets"),
+                            plain: targets("Targets"),
+                        },
                     },
                 ))
             })
@@ -1432,6 +1460,10 @@ mod belt_save_tests {
             synced: true,
             connected_left: true,
             connected_right: false,
+            targets: create_engine::tunnel::Targets {
+                filtered: vec![([1, 8, 2], Dir::East)],
+                plain: vec![([0, 9, 2], Dir::South), ([0, 9, 2], Dir::West)],
+            },
         };
         let data = Compound::from([("brass".into(), brass_to_nbt(&[([0, 9, 2], saved.clone())]))]);
         assert_eq!(brass_from_nbt(&data), vec![([0, 9, 2], saved)]);

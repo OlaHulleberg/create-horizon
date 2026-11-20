@@ -684,7 +684,10 @@ pub(super) fn tick_brass(lv: &mut ServerLevel<'_>, t: [i32; 3]) {
     let save = |b: &tunnel::Brass| {
         with_world(|w| {
             let d = &mut w.dims[dim];
-            let changed = d.brass.get(&t).is_some_and(|x| x != b);
+            let changed = d
+                .brass
+                .get(&t)
+                .is_some_and(|x| x.to_saved() != b.to_saved());
             if let Some(x) = d.brass.get_mut(&t) {
                 *x = b.clone();
             }
@@ -738,19 +741,20 @@ pub(super) fn tick_brass(lv: &mut ServerLevel<'_>, t: [i32; 3]) {
         };
         let mut one = create_engine::belt::Item::new(&item, count, 180, false);
         one.progress = b.stack_progress.clone();
-        let outputs: Vec<([i32; 3], Dir)> = group
-            .iter()
-            .enumerate()
-            .flat_map(|(i, g)| valid_outputs_of(lv, *g, i == 0))
-            .collect();
-        let any = outputs
-            .into_iter()
-            .any(|(g, d)| insert_into_tunnel(lv, g, d, &one, true).is_some());
-        if !any {
-            save(&b);
-            return;
+        let mut targets = tunnel::Targets::default();
+        for (i, g) in group.iter().enumerate() {
+            for (g2, d) in valid_outputs_of(lv, *g, i == 0) {
+                if insert_into_tunnel(lv, g2, d, &one, true).is_none() {
+                    continue;
+                }
+                if flap_filter_empty(lv, g2, d) {
+                    targets.plain.push((g2, d));
+                } else {
+                    targets.filtered.push((g2, d));
+                }
+            }
         }
-        b.schedule_distribution();
+        b.gathered(targets);
         save(&b);
         return;
     }
@@ -759,30 +763,13 @@ pub(super) fn tick_brass(lv: &mut ServerLevel<'_>, t: [i32; 3]) {
         save(&b);
         return;
     };
-    let group = brass_group(lv, t, axis);
     let mut one = create_engine::belt::Item::new(&item, count, 180, false);
     one.progress = b.stack_progress.clone();
-    // `distributionTargets`: the filtered sides first, then the rest; never back out of
-    // the side it came in by.
-    let mut filtered = Vec::new();
-    let mut plain = Vec::new();
-    for (i, g) in group.iter().enumerate() {
-        for (g2, d) in valid_outputs_of(lv, *g, i == 0) {
-            if g2 == t && Some(d) == b.entered_from {
-                continue;
-            }
-            if insert_into_tunnel(lv, g2, d, &one, true).is_none() {
-                continue;
-            }
-            if flap_filter_empty(lv, g2, d) {
-                plain.push((g2, d));
-            } else {
-                filtered.push((g2, d));
-            }
-        }
-    }
+    let lists = b.targets.to_hand_out(t, b.entered_from, |p| {
+        with_world(|w| w.dims[dim].brass.contains_key(&p)).unwrap_or(false)
+    });
     let mut left = count;
-    for outputs in [filtered, plain] {
+    for outputs in lists {
         if left == 0 || outputs.is_empty() {
             continue;
         }
