@@ -756,11 +756,7 @@ pub fn tick_transport(lv: &mut ServerLevel<'_>) {
                 continue;
             }
             create_engine::world::TransportTick::Spout(p) => {
-                with_world(|w| {
-                    if let Some(s) = w.dims[dim].spouts.get_mut(&p) {
-                        create_engine::spout::tick(s);
-                    }
-                });
+                with_world(|w| w.tick_spout(dim, p));
                 continue;
             }
             create_engine::world::TransportTick::Drain(p) => {

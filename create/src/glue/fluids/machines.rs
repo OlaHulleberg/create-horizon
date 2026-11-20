@@ -67,7 +67,7 @@ pub(crate) fn spout_on_depot(lv: &mut ServerLevel<'_>, depot: [i32; 3]) {
     if !recipes::ready() || (!held_state.locked && lv.blocked([depot[0], depot[1] + 1, depot[2]])) {
         return;
     }
-    let before = s.fluid;
+    let before = s;
     let was_locked = held_state.locked;
     let entity = lv.host.block_entity(lv.level, depot);
     // The depot's held stack (slot 0).
@@ -146,8 +146,19 @@ pub(crate) fn spout_on_depot(lv: &mut ServerLevel<'_>, depot: [i32; 3]) {
             w.depot_changed(dim, depot);
         }
     });
-    with_world(|w| w.dims[dim].spouts.insert(pos, s));
-    if s.fluid != before {
+    put_spout(dim, pos, s, before);
+}
+
+/// The spout at `pos` is `s` again after its belt or depot callback (it was `before`): a fill
+/// started or done is saved (`notifyUpdate`), a tank that changed is read by comparators.
+fn put_spout(dim: usize, pos: [i32; 3], s: spout::Spout, before: spout::Spout) {
+    with_world(|w| {
+        w.dims[dim].spouts.insert(pos, s);
+        if s != before {
+            w.mark_unsaved(dim, pos);
+        }
+    });
+    if s.fluid != before.fluid {
         analog_touched(dim, pos);
     }
 }
@@ -170,7 +181,7 @@ pub(super) fn spout_on_belt(
         return Some(Process::Pass);
     }
     let sequenced = sequenced_filling(&item.item, item.progress.as_ref());
-    let before = s.fluid;
+    let before = s;
     let result = recipes::with(|r| match &sequenced {
         Some((a, fluid, amount)) => {
             let step = step_filling(&item.item, a, *fluid, *amount);
@@ -178,10 +189,7 @@ pub(super) fn spout_on_belt(
         }
         None => spout::on_belt(&mut s, &item.item, &r.filling, locked),
     })?;
-    with_world(|w| w.dims[dim].spouts.insert(above, s));
-    if s.fluid != before {
-        analog_touched(dim, above);
-    }
+    put_spout(dim, above, s, before);
     Some(match result {
         OnBelt::Pass => Process::Pass,
         OnBelt::Hold => Process::Hold,
@@ -446,8 +454,9 @@ pub(super) fn give_back_drained(
 
 /// Spouts' and drains' tanks and drains' stacks saved with a column, under `create_machines`
 /// (`SmartFluidTankBehaviour`'s and `ItemDrainBlockEntity`'s `HeldItem`, `ProcessingTicks`):
-/// `spouts` and `drains` hold x, y, z, fluid (255: none), amount each; `drain_items` a compound
-/// per held stack.
+/// `spout_records` holds a [`spout::record`] each (`spouts`, a column saved before them, a
+/// [`spout::LEGACY_RECORD`]); `drains` x, y, z, fluid (255: none), amount each; `drain_items` a
+/// compound per held stack.
 const KEY: &str = "create_machines";
 
 pub(super) fn chunk_data_save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
@@ -478,7 +487,10 @@ pub(super) fn chunk_data_save(dim: usize, chunk: [i32; 2], data: &mut Compound) 
                 ])))
             })
             .collect();
-        let spouts: Vec<i32> = spouts.iter().flat_map(|(p, s)| tank(p, s.fluid)).collect();
+        let spouts: Vec<i32> = spouts
+            .iter()
+            .flat_map(|(p, s)| spout::record(**p, s, &mut codes.borrow_mut()))
+            .collect();
         let drains: Vec<i32> = drains.iter().flat_map(|(p, s)| tank(p, s.fluid)).collect();
         Some((spouts, drains, items))
     })
@@ -489,7 +501,7 @@ pub(super) fn chunk_data_save(dim: usize, chunk: [i32; 2], data: &mut Compound) 
         return;
     }
     let mut own = Compound::from([
-        ("spouts".into(), Tag::IntArray(spouts)),
+        ("spout_records".into(), Tag::IntArray(spouts)),
         ("drains".into(), Tag::IntArray(drains)),
         ("drain_items".into(), Tag::List(items)),
     ]);
@@ -509,15 +521,21 @@ pub(super) fn chunk_load(dim: usize, data: &Compound) {
     let keys = super::fluid_keys(own, KEY);
     let fluid =
         |c: &[i32]| create_engine::tank::Codes::fluid(&keys, c[3]).map(|f| (f, c[4].max(0) as u32));
-    let (spouts, drains) = (ints("spouts"), ints("drains"));
+    let (legacy, spouts, drains) = (ints("spouts"), ints("spout_records"), ints("drains"));
     let items = match own.get(&"drain_items".into()) {
         Some(Tag::List(l)) => l.clone(),
         _ => Vec::new(),
     };
     with_world(|w| {
         let d = &mut w.dims[dim];
-        for c in spouts.as_chunks::<5>().0 {
-            d.spouts.entry([c[0], c[1], c[2]]).or_default().fluid = fluid(c);
+        let legacy = legacy.as_chunks::<{ spout::LEGACY_RECORD }>().0.iter();
+        let records = spouts.as_chunks::<{ spout::RECORD }>().0.iter();
+        for r in legacy
+            .map(|r| r.as_slice())
+            .chain(records.map(|r| r.as_slice()))
+        {
+            let (pos, s) = spout::read(r, &keys);
+            d.spouts.insert(pos, s);
         }
         for c in drains.as_chunks::<5>().0 {
             d.drains.entry([c[0], c[1], c[2]]).or_default().fluid = fluid(c);

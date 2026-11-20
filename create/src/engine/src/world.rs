@@ -4969,6 +4969,20 @@ impl CreateWorld {
         }
     }
 
+    /// `SpoutBlockEntity.tick` on the spout's turn: its fill runs down. Java saves
+    /// `ProcessingTicks` with whatever else the chunk holds when it is written; the port writes
+    /// a column when it changes, so the spout's column is marked each tick its fill runs.
+    pub fn tick_spout(&mut self, dim: usize, pos: [i32; 3]) {
+        let Some(s) = self.dims[dim].spouts.get_mut(&pos) else {
+            return;
+        };
+        let before = s.processing;
+        crate::spout::tick(s);
+        if s.processing != before {
+            self.mark_unsaved(dim, pos);
+        }
+    }
+
     /// One DepotBehaviour.tick, including a stack inserted by an earlier belt this tick.
     /// Returns its arrival test, before movement, so received/held callbacks run on this turn.
     pub fn tick_depot(&mut self, dim: usize, pos: [i32; 3], upright: bool) -> bool {
