@@ -67,7 +67,7 @@ pub fn chute_take(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &ItemStack) ->
         return false;
     }
     let dim = lv.dim;
-    with_world(|w| w.dims[dim].chutes.insert(pos, 1.0));
+    with_world(|w| w.set_chute_position(dim, pos, 1.0));
     crate::glue::advancements::award_placer(lv, pos, "chute");
     true
 }
@@ -367,7 +367,7 @@ fn rise(
         Fall::Out if above_chute.is_some() => {
             set_chute_stack(lv, above, Some(stack));
             set_chute_stack(lv, pos, None);
-            with_world(|w| w.dims[dim].chutes.insert(above, 0.0));
+            with_world(|w| w.set_chute_position(dim, above, 0.0));
             None
         }
         Fall::Out if container => {
@@ -439,7 +439,7 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
             let next = rise(lv, pos, position, motion, stack, active);
             with_world(|w| match next {
                 Some(p) => {
-                    w.dims[dim].chutes.insert(pos, p);
+                    w.set_chute_position(dim, pos, p);
                 }
                 None => {
                     w.dims[dim].chutes.remove(&pos);
@@ -496,7 +496,7 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
             set_chute_stack(lv, target, Some(stack));
             set_chute_stack(lv, pos, None);
             let at = if diagonal { 0.51 } else { 1.0 };
-            with_world(|w| w.dims[dim].chutes.insert(target, at));
+            with_world(|w| w.set_chute_position(dim, target, at));
         };
         let next = match step(position, motion, can) {
             Fall::At(p) => Some(p),
@@ -548,7 +548,7 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
         };
         with_world(|w| match next {
             Some(p) => {
-                w.dims[dim].chutes.insert(pos, p);
+                w.set_chute_position(dim, pos, p);
             }
             None => {
                 w.dims[dim].chutes.remove(&pos);
@@ -718,7 +718,7 @@ fn tick_chute_pulls(lv: &mut ServerLevel<'_>) {
         match taken {
             Some(stack) => {
                 set_chute_stack(lv, pos, Some(stack));
-                with_world(|w| w.dims[dim].chutes.insert(pos, start));
+                with_world(|w| w.set_chute_position(dim, pos, start));
             }
             None => {
                 with_world(|w| {
@@ -790,7 +790,7 @@ fn lift_from_below(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, powere
                 .position(&*lv.host)
                 .map_or(-1.0, |p| (p[1] - f64::from(pos[1])) as f32);
             set_chute_stack(lv, pos, Some(stack));
-            with_world(|w| w.dims[dim].chutes.insert(pos, y));
+            with_world(|w| w.set_chute_position(dim, pos, y));
             let _ = e.discard(&mut *lv.host);
             return true;
         }
@@ -839,7 +839,7 @@ fn lift_from_below(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, powere
                 }
                 set_chute_stack(lv, pos, Some(stack));
                 let start = -((i - 1) as f32);
-                with_world(|w| w.dims[dim].chutes.insert(pos, start));
+                with_world(|w| w.set_chute_position(dim, pos, start));
                 return true;
             }
             return false;

@@ -185,6 +185,34 @@ impl crate::world::CreateWorld {
         old
     }
 
+    /// `ChuteBlockEntity.itemPosition` set (`setItem`'s `startWithValue`, or `tick` moving the
+    /// stack): the stack of the chute at `pos` is at `position` (1 the top, 0 the bottom). Its
+    /// column is saved again, as `write` saves `ItemPosition`.
+    pub fn set_chute_position(&mut self, dim: usize, pos: [i32; 3], position: f32) {
+        let d = &mut self.dims[dim];
+        if d.chutes.insert(pos, position) != Some(position) {
+            d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        }
+    }
+
+    /// `ChuteBlockEntity.write`'s `ItemPosition` of the chutes in a column, to save.
+    pub fn column_chutes(&self, dim: usize, cx: i32, cz: i32) -> Vec<([i32; 3], f32)> {
+        let mut out: Vec<_> = self.dims[dim]
+            .chutes
+            .iter()
+            .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (cx, cz))
+            .map(|(p, at)| (*p, *at))
+            .collect();
+        out.sort_by_key(|e| e.0);
+        out
+    }
+
+    /// What `column_chutes` saved: each chute's stack goes on from there when its block loads
+    /// (`read`'s `itemPosition.startWithValue`).
+    pub fn load_chutes(&mut self, dim: usize, saved: impl Iterator<Item = ([i32; 3], f32)>) {
+        self.dims[dim].chute_saved.extend(saved);
+    }
+
     /// The contents of the container at `pos` changed: chutes asleep under it (or under another
     /// block of its vault) wake.
     pub fn container_changed(&mut self, dim: usize, pos: [i32; 3]) {
