@@ -165,9 +165,9 @@ pub fn slot_changed(lv: &ServerLevel<'_>, pos: [i32; 3]) {
     });
 }
 
-/// `BrassTunnelBlock.useWithoutItem`: an empty hand takes the stacks of the brass tunnel at
-/// `pos` and those connected with it (`grabAllStacksOfGroup`), with the pick-up sound. True
-/// when there were any.
+/// `BrassTunnelBlock.useWithoutItem`: the main hand, whatever it holds, takes the stacks of the
+/// brass tunnel at `pos` and those connected with it (`grabAllStacksOfGroup`), with the pick-up
+/// sound. True when there were any.
 pub fn grab_stacks(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: u128) -> bool {
     let Some(axis) = brass_axis(lv, pos) else {
         return false;
@@ -384,7 +384,8 @@ fn collect_brass_info(
 /// A player's click on a brass tunnel's side filter slot (`SidedFilteringBehaviour` through
 /// `ValueSettingsInputHandler`, at `BrassTunnelFilterSlot`): the held item becomes that side's
 /// filter (a filter item taken from the hand, the one it held given back), an empty hand clears
-/// it. True when the click was a slot's.
+/// it, and a wrench or a mechanical arm leaves it (`tunnel::filter_click`). True when the click
+/// was a slot's.
 pub fn use_tunnel_filter(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
@@ -401,21 +402,14 @@ pub fn use_tunnel_filter(
         return false;
     }
     let held = click.stack.map(|s| super::items::id_of(&*lv.host, s));
-    if held
-        .as_deref()
-        .is_some_and(|h| matches!(h, "create:wrench" | "create:mechanical_arm"))
-    {
-        return false;
-    }
     let Some(side) = Dir::from_offset(click.hit.face) else {
         return false;
     };
-    let Some(slot) = tunnel::filter_slot(axis, shape, side) else {
-        return false;
-    };
     let local = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(pos[i]));
-    if !create_engine::board::hits_box(slot, local) {
-        return false;
+    match tunnel::filter_click(axis, shape, side, local, held.as_deref()) {
+        tunnel::FilterClick::Miss => return false,
+        tunnel::FilterClick::Keep => return true,
+        tunnel::FilterClick::Set => {}
     }
     let filter = filters::take_filter(lv.host, p, click.hand);
     let dim = lv.dim;

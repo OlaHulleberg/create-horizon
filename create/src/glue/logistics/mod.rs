@@ -719,11 +719,12 @@ fn use_block(
         Block::BrassFunnel | Block::BrassBeltFunnel => {
             funnel::use_funnel_filter(&mut lv, pos, click)
         }
-        // A filter slot first (`ValueSettingsInputHandler`), then `useWithoutItem`: an empty
-        // hand takes the stacks of the tunnel's group.
+        // A filter slot first (`ValueSettingsInputHandler`), then `useWithoutItem`: the main
+        // hand takes the stacks of the tunnel's group whatever it holds (`BrassTunnelBlock`
+        // has no `useItemOn`, so the default passes a held item on to it).
         Block::BrassTunnel => {
             tunnel::use_tunnel_filter(&mut lv, pos, click)
-                || click.stack.is_none() && main && tunnel::grab_stacks(&mut lv, pos, click.player)
+                || main && tunnel::grab_stacks(&mut lv, pos, click.player)
         }
         Block::Belt => {
             // A potion named with its contents: a water bottle washes the belt as water does.
