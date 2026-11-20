@@ -26,7 +26,7 @@ use super::belt::{belt_segment, put_on_from_above};
 use super::chute::{chute_accepts, chute_at, chute_stack, set_chute_stack};
 use super::depot::depot_items;
 use super::funnel::funnel_at;
-use super::{has_collision, info_at};
+use super::info_at;
 use super::items::{self, face, random_angle, stack_limit, upright};
 use create_engine::Block;
 use create_engine::arm::{self, Kind, Point, Stack};
@@ -1347,9 +1347,15 @@ impl ejector::World for EjectorWorld<'_, '_> {
     }
 
     fn clip(&mut self, from: [f64; 3], to: [f64; 3]) -> Option<([f64; 3], [i32; 3], Dir)> {
-        let own = self.pos;
+        // `Level.clip(Block.COLLIDER)`: the host's collider boxes of each cell, Create's
+        // blocks and the vanilla ones alike.
         let lv = &*self.lv;
-        ejector::clip_blocks(from, to, |p| p != own && has_collision(lv, p))
+        ejector::clip(from, to, |p| {
+            let [x, y, z] = p.map(f64::from);
+            lv.level
+                .collision_boxes(&*lv.host, [x, y, z, x + 1.0, y + 1.0, z + 1.0])
+                .unwrap_or_default()
+        })
     }
 
     fn extracting_funnel(&mut self, pos: [i32; 3]) -> bool {

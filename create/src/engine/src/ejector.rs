@@ -586,20 +586,19 @@ pub fn target_for(pos: [i32; 3], target: [i32; 3]) -> Option<(Dir, i32, i32)> {
     Some((facing, (ddx + ddz).abs(), -ddy))
 }
 
-/// `Level.clip` as a ray through whole blocks: the first block `solid` says stops it, the point
-/// where the ray enters it and the face it enters through.
-pub fn clip_blocks(
+/// `Level.clip` with `ClipContext.Block.COLLIDER, Fluid.NONE`, as the ejector's obstacle scan
+/// uses it: the first collider box the segment from `from` to `to` enters. `colliders` gives
+/// the boxes of one cell in world units (empty for none); the nearest entry wins within a
+/// cell (`VoxelShape.clip`), and cells are visited in the segment's order, so the first cell
+/// with a hit is the hit. The cell the segment ends inside is visited too.
+pub fn clip(
     from: [f64; 3],
     to: [f64; 3],
-    mut solid: impl FnMut([i32; 3]) -> bool,
+    mut colliders: impl FnMut([i32; 3]) -> Vec<[f64; 6]>,
 ) -> Option<([f64; 3], [i32; 3], Dir)> {
     let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
     let mut cell = from.map(|v| v.floor() as i32);
     let end = to.map(|v| v.floor() as i32);
-    if solid(cell) {
-        // Inside a block already: Create's clip hits it where it starts.
-        return None;
-    }
     let step = d.map(|v| if v > 0.0 { 1 } else { -1 });
     let mut t_max = [0usize, 1, 2].map(|a| {
         if d[a] == 0.0 {
@@ -617,6 +616,12 @@ pub fn clip_blocks(
         }
     });
     for _ in 0..64 {
+        for b in colliders(cell) {
+            if let Some((t, face)) = box_clip(from, d, &b) {
+                let at = [0, 1, 2].map(|i| from[i] + d[i] * t);
+                return Some((at, cell, face));
+            }
+        }
         if cell == end {
             return None;
         }
@@ -633,20 +638,54 @@ pub fn clip_blocks(
         }
         cell[a] += step[a];
         t_max[a] += t_delta[a];
-        if solid(cell) {
-            let at = [0, 1, 2].map(|i| from[i] + d[i] * t);
-            let face = match (a, step[a] > 0) {
-                (0, true) => Dir::West,
-                (0, false) => Dir::East,
-                (1, true) => Dir::Down,
-                (1, false) => Dir::Up,
-                (_, true) => Dir::North,
-                (_, false) => Dir::South,
-            };
-            return Some((at, cell, face));
-        }
     }
     None
+}
+
+/// `AABB.clip(from, to)`: where the segment from `from` with offset `d` enters the box (world
+/// units), and the face it enters through; None when it starts inside, misses the box, or
+/// would only enter past its end. The entry is the last near plane crossed (the greatest per
+/// axis), its axis's face the one hit; ties keep the earliest axis, as `getDirection`'s
+/// insertion order (x, then y, then z) does. Axes within `1e-7` of zero never enter.
+fn box_clip(from: [f64; 3], d: [f64; 3], b: &[f64; 6]) -> Option<(f64, Dir)> {
+    const EPS: f64 = 1.0e-7;
+    let mut entry = f64::NEG_INFINITY;
+    let mut exit = f64::INFINITY;
+    let mut face: Option<(usize, bool)> = None;
+    for a in 0..3 {
+        if d[a].abs() <= EPS {
+            if from[a] < b[a] || from[a] > b[a + 3] {
+                return None;
+            }
+            continue;
+        }
+        let (near, far, front) = if d[a] > 0.0 {
+            ((b[a] - from[a]) / d[a], (b[a + 3] - from[a]) / d[a], false)
+        } else {
+            ((b[a + 3] - from[a]) / d[a], (b[a] - from[a]) / d[a], true)
+        };
+        if near > entry {
+            entry = near;
+            face = Some((a, front));
+        }
+        exit = exit.min(far);
+    }
+    // Inside already (every near plane behind), a miss, or an entry past the segment's end.
+    if face.is_none() || entry < 0.0 || entry > exit || entry > 1.0 {
+        return None;
+    }
+    let (a, front) = face.unwrap();
+    Some((
+        entry,
+        match (a, front) {
+            (0, false) => Dir::West,
+            (0, true) => Dir::East,
+            (1, false) => Dir::Down,
+            (1, true) => Dir::Up,
+            (_, false) => Dir::North,
+            (_, true) => Dir::South,
+        },
+    ))
 }
 
 /// The mod-message channel that brings ejectors to clients.
@@ -780,6 +819,12 @@ pub fn decode(mut d: &[u8]) -> Vec<Shown> {
 mod tests {
     use super::*;
 
+    /// A full-cube collider box for the cell `p`, in world units.
+    fn cube_at(p: [i32; 3]) -> [f64; 6] {
+        let [x, y, z] = p.map(f64::from);
+        [x, y, z, x + 1.0, y + 1.0, z + 1.0]
+    }
+
     #[test]
     fn messages_round_trip() {
         let s = Shown {
@@ -838,8 +883,11 @@ mod tests {
         }
         fn clip(&mut self, from: [f64; 3], to: [f64; 3]) -> Option<([f64; 3], [i32; 3], Dir)> {
             let wall = self.wall?;
-            clip_blocks(from, to, |p| {
-                p[0] == wall[0] && p[2] == wall[2] && (0..=wall[1]).contains(&p[1])
+            clip(from, to, |p| {
+                (p[0] == wall[0] && p[2] == wall[2] && (0..=wall[1]).contains(&p[1]))
+                    .then(|| cube_at(p))
+                    .into_iter()
+                    .collect::<Vec<[f64; 6]>>()
             })
         }
         fn extracting_funnel(&mut self, _: [i32; 3]) -> bool {
@@ -1031,12 +1079,51 @@ mod tests {
     }
 
     #[test]
-    fn rays_stop_at_the_first_solid_block() {
-        let hit = clip_blocks([0.5, 0.5, 0.5], [3.5, 0.5, 0.5], |p| p == [2, 0, 0]);
-        let (at, block, face) = hit.unwrap();
+    fn rays_enter_the_first_collider_box_at_its_near_face() {
+        // Boxes come per cell in world units; a full cube two cells east.
+        let cube = |p: [i32; 3]| {
+            (p == [2, 0, 0])
+                .then(|| cube_at(p))
+                .into_iter()
+                .collect::<Vec<_>>()
+        };
+        let (at, block, face) = clip([0.5, 0.5, 0.5], [3.5, 0.5, 0.5], cube).unwrap();
         assert_eq!(block, [2, 0, 0]);
         assert_eq!(face, Dir::West);
         assert!((at[0] - 2.0).abs() < 1e-9);
-        assert!(clip_blocks([0.5, 0.5, 0.5], [1.5, 0.5, 0.5], |p| p == [2, 0, 0]).is_none());
+        // e4-ejector-clip-whole-blocks: the depot ahead is `AllShapes.CASING_13PX`, 13 pixels
+        // tall. A throw descending onto it from inside its column of cells meets the top at
+        // 13/16, not the block's face: the ray from [1.05, 0.9, 0.5] to [1.25, 0.7, 0.5]
+        // enters the box at y 13/16, a 0.4375 of the way along.
+        let depot = |p: [i32; 3]| {
+            (p == [1, 0, 0])
+                .then(|| [1.0, 0.0, 0.0, 2.0, 13.0 / 16.0, 1.0])
+                .into_iter()
+                .collect::<Vec<[f64; 6]>>()
+        };
+        let (at, block, face) = clip([1.05, 0.9, 0.5], [1.25, 0.7, 0.5], depot).unwrap();
+        assert_eq!(block, [1, 0, 0]);
+        assert_eq!(face, Dir::Up);
+        assert!((at[1] - 13.0 / 16.0).abs() < 1e-9);
+        assert!((at[0] - (1.05 + 0.2 * 0.4375)).abs() < 1e-9);
+        // One that crosses into the cell's side first enters by the side face: the slab it
+        // crosses last is x, at the cell's west face, 0.5 along.
+        let (at, _, face) = clip([0.9, 0.9, 0.5], [1.1, 0.7, 0.5], depot).unwrap();
+        assert_eq!(face, Dir::West);
+        assert!((at[0] - 1.0).abs() < 1e-9);
+        assert!((at[1] - 0.8).abs() < 1e-9);
+        // A ray that passes over the 13 pixels misses the depot entirely.
+        assert!(clip([0.9, 0.95, 0.5], [1.1, 0.83, 0.5], depot).is_none());
+        // One that starts inside a box does not hit it (vanilla `AABB.clip` skips it).
+        let inside = clip([0.5, 0.5, 0.5], [3.5, 0.5, 0.5], |p| {
+            (p == [0, 0, 0])
+                .then(|| cube_at(p))
+                .into_iter()
+                .collect::<Vec<_>>()
+        });
+        assert!(inside.is_none());
+        // The cell the segment ends inside is visited: a box before its end still stops it.
+        let (at, _, _) = clip([1.6, 0.5, 0.5], [2.4, 0.5, 0.5], cube).unwrap();
+        assert!((at[0] - 2.0).abs() < 1e-9);
     }
 }
