@@ -224,6 +224,12 @@ it, so items picked up while it is open appear after the next change (Create's m
 dropped to the title screen ("End of stream") five times across three test sessions with no panic or crash report;
 none reproduced.
 
+## Potato projectile on `9425651`
+
+`tools/check-potato-projectile.py` ran with a native package staged from the signed SDK, the pinned jar, and a new world. The first shot took a pig from 10 to 5 health, consumed one inventory potato and wore the cannon by one point. A shallow shot planted one potato crop. A cake from the off hand took a pig to 2 health, consumed the cake and left the potatoes alone.
+
+In a disposable build a join veto left ammo and durability unchanged. A separate trace confirmed that the join hook and client renderer saw the shot's ammunition, that the client position moved, and that the same UUID and owner resumed the saved flight after reopening. A stuck cake followed the target's one-block sideways teleport. Client prediction and Create's ammo-specific render poses are not implemented.
+
 ## In-game smoke test on `9425651` (main `684e89b`)
 
 Built with `sunrise-launcher native-build` against `nightly-2026-11-20-9425651`, resources prepared by that build's

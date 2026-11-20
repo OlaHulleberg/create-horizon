@@ -2,22 +2,17 @@
 //! `create_engine::potato`'s): a use fires the first ammunition found (the off hand, the main
 //! hand, then the inventory, as `Player.getProjectile` looks) from the barrel beside the eyes,
 //! split shots fanned round the aim, with the type's reload as the item's cooldown, the
-//! cannon's durability or a backtank's air paid, and `FWOOMP`. Each projectile is a vanilla
-//! snowball carrying the ammunition's item, so every client draws it as that item
-//! (`ThrownItemRenderer`, as Create's `PotatoProjectileRenderer` draws its stack); the glue
-//! keeps its flight by entity id: Create's gravity and drag each tick (set over the snowball's
-//! own), sticking to what a sticky type hits, and its hits (`projectile_impact`, taken from the
-//! snowball, and the glue's own look along each move for entities, with the 0.3 margin
-//! Create's `AbstractHurtingProjectile` meets them with from its first tick, where the
-//! snowball's grows from nothing): damage, knockback, the type's entity and block actions, the item recovered or
-//! its leftover dropped, `POTATO_HIT` and the item's crumbs. A golden apple cures a weakened
+//! cannon's durability or a backtank's air paid, and `FWOOMP`. A saved `create:potato_projectile`
+//! owns its ammunition and flight state. Its tick sweeps for blocks and entities before moving,
+//! with Create's gravity, drag and hit margin. Hits apply damage from the shot and its owner,
+//! knockback, sticking, the ammo's actions, its recovery or leftover, and the sound and crumbs.
+//! A golden apple cures a weakened
 //! zombie villager (`CureZombieVillager`, through its saved `ConversionTime` as `mobInteract`'s
 //! `startConverting` sets it).
 //!
 //! Left out, for want of API:
-//! - Create's own entity type (`create:potato_projectile`): the shot is a snowball and hurts as
-//!   `create:potato_cannon` from it and the shooter. A save keeps the snowballs, not the glue's flights: one flying when the world
-//!   is saved comes back as a plain snowball showing its item.
+//! - Prediction and Create's per-ammunition pose. The client draws the synced stack, facing
+//!   the camera, at the tracked position.
 //! - The cannon's recoil in the hand (`PotatoCannonRenderHandler`: a special item model is
 //!   asked once per stack, `API_GAPS.md`) and the `potato_cannon_collide` advancement (shots of two types meeting), not wired. A monster killed or another player hit gives `potato_cannon`.
 //!
@@ -27,64 +22,127 @@
 //! (`SHAPER_SWAP`), and a shot throws two crumbs of its ammunition and two puffs of air
 //! (`create:air`) from the barrel. Create's air-flow trail (`getTrailParticle`) spawns with no
 //! motion and so removes itself at once: nothing to draw.
-//!
-//! The snowball is summoned with its item (`/summon`'s compound): a projectile spawned from a
-//! rotation carries its own type's item. During its hit on an entity the snowball can't be
-//! reached (`host.entity` answers None), so that hit is applied by its id and the snowball's own
-//! hit ends it (an item left behind is dropped where the hit was); a sticky shot's hit is
-//! cancelled instead and the snowball, there again the next tick, follows what it hit.
 
 use super::super::server::ServerLevel;
 use super::super::subsystem::Subsystem;
 use super::{creative, custom, held, set_custom, set_held};
 use create_engine::potato::{self, Type};
 use mod_api::{
-    ActiveEffect, ClientHost, Compound, EntityRef, EquipmentSlot, Flow, Hand, Host, HostSide,
-    Identifier, InteractionResult, ItemPart, ItemStack, ParticleKey, ParticleOptions, PlayerRef,
-    ProjectileImpactEvent, Registrar, RegistrationContext, ServerHost, SoundSource, Tag, Text,
-    TooltipEvent, UseItemEvent,
+    ActiveEffect, AttachmentCodec, AttachmentError, AttachmentType, BlockEntityDrawContext,
+    BlockFace, ClientHost, ClipHit, Compound, EntityPart, EntityRef, EntityRenderState,
+    EntityRenderer, EntitySpawn, EquipmentSlot, GeneralEntityCategory, GeneralEntityTickEvent,
+    GeneralSavePolicy, Hand, Holder, Host, HostSide, HostTransaction, Identifier,
+    InteractionResult, ItemDisplayContext, ItemKey, ItemPart, ItemStack, ParticleKey,
+    ParticleOptions, PlayerRef, Registrar, RegistrationContext, ServerHost, SoundSource, SpawnBody,
+    Tag, Text, TooltipEvent, UseItemEvent,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 const CANNON: &str = "create:potato_cannon";
-/// The vanilla thrown item each shot flies as.
-const SHOT: &str = "minecraft:snowball";
-/// The tag a shot carries, for the shots of a save the glue no longer tracks.
-const TAG: &str = "create_potato_projectile";
+const SHOT: &str = "create:potato_projectile";
 /// `CEquipment.maxPotatoCannonShots`: shots a full backtank pays for.
 const MAX_USES: i32 = potato::MAX_SHOTS;
-/// The snowball's own gravity and drag (`ThrowableProjectile`: gravity, then inertia, then the
-/// move), undone so that it moves by Create's motion.
-const SNOWBALL_GRAVITY: f64 = 0.03;
-const SNOWBALL_DRAG: f64 = 0.99;
+
+/// Load-resolved ammo keys for decoding the saved stack in the renderer, which has no Host.
+static AMMO_KEYS: OnceLock<HashMap<&'static str, ItemKey>> = OnceLock::new();
+
+#[derive(Clone)]
+struct Ammo {
+    saved: Compound,
+    stack: ItemStack,
+    kind: &'static Type,
+}
+
+static AMMO: AttachmentType<Option<Ammo>> = AttachmentType {
+    namespace: "create",
+    name: "potato_ammo",
+    default: || None,
+    codec: Some(AttachmentCodec {
+        encode: |ammo| Ok(ammo.as_ref().ok_or(AttachmentError::Decode)?.saved.clone()),
+        decode: |saved| {
+            let Some(Tag::String(id)) = saved.get(&"id".into()) else {
+                return Err(AttachmentError::Decode);
+            };
+            let id = id.to_string_lossy();
+            let item = AMMO_KEYS
+                .get()
+                .and_then(|keys| keys.get(id.as_str()))
+                .ok_or(AttachmentError::Decode)?;
+            let kind = potato::type_for(id.as_ref()).ok_or(AttachmentError::Decode)?;
+            let mut stack = ItemStack::of(*item);
+            match saved.get(&"components".into()) {
+                Some(Tag::Compound(patch)) => stack
+                    .set_components(patch.clone())
+                    .map_err(|_| AttachmentError::Decode)?,
+                None => {}
+                _ => return Err(AttachmentError::Decode),
+            }
+            Ok(Some(Ammo {
+                saved: saved.clone(),
+                stack,
+                kind,
+            }))
+        },
+    }),
+    copy_on_death: false,
+    sync: true,
+};
+
+#[derive(Clone, Default)]
+struct Flight {
+    recovery: f32,
+    left_owner: bool,
+    age: i32,
+    // Java saves neither the stuck target nor the shot's tick count.
+    stuck: Option<(EntityRef, [f64; 3], f64)>,
+}
+
+static FLIGHT: AttachmentType<Flight> = AttachmentType {
+    namespace: "create",
+    name: "potato_flight",
+    default: Flight::default,
+    codec: Some(AttachmentCodec {
+        encode: |flight| {
+            Ok(Compound::from([
+                ("Recovery".into(), Tag::Float(flight.recovery.to_bits())),
+                ("LeftOwner".into(), Tag::Byte(i8::from(flight.left_owner))),
+            ]))
+        },
+        decode: |saved| {
+            let (Some(Tag::Float(recovery)), Some(Tag::Byte(left_owner))) = (
+                saved.get(&"Recovery".into()),
+                saved.get(&"LeftOwner".into()),
+            ) else {
+                return Err(AttachmentError::Decode);
+            };
+            Ok(Flight {
+                recovery: f32::from_bits(*recovery),
+                left_owner: *left_owner != 0,
+                ..Flight::default()
+            })
+        },
+    }),
+    copy_on_death: false,
+    sync: false,
+};
 
 static ITEM_PARTICLE: OnceLock<ParticleKey> = OnceLock::new();
 static AIR_PARTICLE: OnceLock<ParticleKey> = OnceLock::new();
 /// `AllDataComponents.SHAPER_SWAP`: the main hand's cannon lets the off hand's fire next.
 const SWAP: &str = "create:shaper_swap";
 
-/// A shot in flight, by the snowball's entity id.
 struct Shot {
-    dimension: String,
     kind: &'static Type,
-    /// The ammunition, one of it.
     stack: ItemStack,
-    recovery: f32,
     owner: Option<EntityRef>,
-    /// The motion Create's projectile has (the snowball's is set so that it moves by it).
     motion: [f64; 3],
-    /// Stuck to an entity: it, the offset from it and the fall speed (`setStuckEntity`).
-    stuck: Option<(EntityRef, [f64; 3], f64)>,
-    /// `tickCount`.
-    age: i32,
-    /// `Projectile.leftOwner`: it has left its shooter's reach, who it may hit from then on.
-    left_owner: bool,
+    flight: Flight,
 }
 
 thread_local! {
-    static SHOTS: RefCell<HashMap<u32, Shot>> = RefCell::new(HashMap::new());
+    static CAMERA: Cell<[f32; 2]> = const { Cell::new([0.0; 2]) };
     /// The players whose main arm is the left (`Player.getMainArm`, from their client's
     /// information).
     static LEFT_HANDED: RefCell<std::collections::HashSet<u128>> =
@@ -175,10 +233,46 @@ impl Subsystem for PotatoCannon {
         let _ = AIR_PARTICLE.set(r.particle_key(AIR));
         let key = r.item_key(CANNON);
         r.item_part(key, CannonPart);
+        let _ = AMMO_KEYS.set(
+            potato::TYPES
+                .iter()
+                .flat_map(|t| t.items.iter().copied())
+                .map(|id| (id, r.item_key(id)))
+                .collect(),
+        );
+        for (id, sync) in [
+            ("create:potato_ammo", true),
+            ("create:potato_flight", false),
+        ] {
+            if let Err(e) = r.register_attachment_type(id, sync) {
+                crate::create_log!("[create] declaring potato projectile data: {e:?}");
+            }
+        }
+        if let Err(e) = r.declare_general_entity(
+            "potato_projectile",
+            GeneralEntityCategory::Misc,
+            f64::from(potato::SIZE),
+            f64::from(potato::SIZE),
+            None,
+            GeneralSavePolicy::Save,
+            false,
+            false,
+            4,
+            20,
+            1,
+            &[],
+        ) {
+            crate::create_log!("[create] potato projectile type was refused: {e:?}");
+        }
+        r.entity_part(SHOT, Projectile);
     }
 
-    fn level_tick(&self, lv: &mut ServerLevel<'_>) {
-        fly(lv);
+    fn entity_renderers(&self, renderers: &mut dyn mod_api::EntityRenderers) {
+        renderers.register(SHOT.to_owned(), Arc::new(Projectile));
+    }
+
+    fn camera_pose(&self, _host: &dyn ClientHost, event: &mut mod_api::CameraPoseEvent<'_>) {
+        CAMERA.set([event.yaw, event.pitch]);
     }
 
     /// Each player's main arm, for the barrel's side.
@@ -196,29 +290,47 @@ impl Subsystem for PotatoCannon {
     fn particle_providers(&self, providers: &mut dyn mod_api::ParticleProviders) {
         providers.register(AIR.to_owned(), std::sync::Arc::new(Air));
     }
+}
 
-    fn hears_projectile_impacts(&self) -> bool {
-        true
-    }
+struct Projectile;
 
-    fn projectile_impact(
+#[mod_api::sunrise_part]
+impl EntityPart for Projectile {
+    fn general_entity_tick(
         &self,
         host: &mut dyn ServerHost,
-        event: &mut ProjectileImpactEvent<'_>,
-    ) -> Flow {
-        let Some(shot) = SHOTS.with_borrow_mut(|s| s.remove(&event.projectile)) else {
-            return Flow::Continue;
+        event: &mut GeneralEntityTickEvent<'_>,
+    ) {
+        let e = event.entity;
+        let Some(dimension) = e.level(&*host).and_then(|l| l.dimension().id(&*host)) else {
+            return;
         };
-        // During an entity hit the snowball can't be reached (`host.entity` answers None for
-        // it): the hit is applied here and the snowball's own hit ends it, unless the shot
-        // sticks to what it hit (its hit cancelled, the snowball is there the next tick).
-        let reachable = host.entity(event.projectile).is_some();
-        let keep = impact(host, event, shot);
-        event.cancelled = reachable || keep.as_ref().is_some_and(|s| s.stuck.is_some());
-        if let Some(shot) = keep {
-            SHOTS.with_borrow_mut(|s| s.insert(event.projectile, shot));
-        }
-        Flow::Cancel
+        let Some(mut lv) = ServerLevel::new(host, &dimension) else {
+            return;
+        };
+        fly(&mut lv, e);
+    }
+}
+
+impl EntityRenderer for Projectile {
+    fn submit(
+        &self,
+        entity: &EntityRenderState,
+        draw: &mut dyn BlockEntityDrawContext,
+    ) -> Result<(), String> {
+        let Some(ammo) = entity
+            .attachments
+            .as_ref()
+            .and_then(|a| a.get(&AMMO).ok().flatten())
+            .and_then(Option::as_ref)
+        else {
+            return Ok(());
+        };
+        let [yaw, pitch] = CAMERA.get();
+        draw.rotate_about([0.0, 1.0, 0.0], -yaw, [0.0; 3]);
+        draw.rotate_about([1.0, 0.0, 0.0], pitch, [0.0; 3]);
+        draw.item(&ammo.stack, ItemDisplayContext::Ground, None, 0);
+        Ok(())
     }
 }
 
@@ -337,17 +449,6 @@ fn recovery_level(stack: &ItemStack) -> i32 {
     }
 }
 
-/// The velocity to give the snowball so that its own gravity and drag leave it moving by
-/// `motion` this tick.
-fn snowball_velocity(motion: [f64; 3]) -> [f64; 3] {
-    [
-        motion[0] / SNOWBALL_DRAG,
-        motion[1] / SNOWBALL_DRAG + SNOWBALL_GRAVITY,
-        motion[2] / SNOWBALL_DRAG,
-    ]
-}
-
-/// `PotatoCannonItem.use` on the server.
 fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
     let Some(player) = host.player(event.player) else {
         return false;
@@ -394,57 +495,69 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
     let Some(item) = shot_stack.to_nbt(&*lv.host) else {
         return false;
     };
-    // The owner as `/summon`'s int-array UUID.
-    let owner = player.uuid();
-    let uuid: Vec<i32> = (0..4)
-        .map(|i| (owner >> (96 - 32 * i)) as u32 as i32)
-        .collect();
-    for (i, m) in motions.into_iter().enumerate() {
-        // Create's first tick moves it by `fly(motion)`, from the barrel. A thrown item of
-        // vanilla's showing the ammo (`ThrowableItemProjectile`'s `Item`), summoned whole: the
-        // projectile spawn takes no item to show.
-        let first = potato::fly(m, t);
-        let v = snowball_velocity(first);
-        let nbt = Compound::from([
-            ("Item".into(), Tag::Compound(item.clone())),
-            ("Owner".into(), Tag::IntArray(uuid.clone())),
-            ("Tags".into(), Tag::List(vec![Tag::String(TAG.into())])),
-            (
-                "Motion".into(),
-                Tag::List(v.iter().map(|c| Tag::Double(c.to_bits())).collect()),
-            ),
-        ]);
-        let Some(e) = lv
-            .host
-            .summon(&dimension, SHOT, barrel, nbt)
-            .and_then(|id| lv.host.entity(id))
-        else {
-            crate::create_log!("[create] a potato cannon's shot was refused");
-            continue;
-        };
-        SHOTS.with_borrow_mut(|s| {
-            s.insert(
-                e.id(),
-                Shot {
-                    dimension: dimension.clone(),
-                    kind: t,
-                    stack: shot_stack.clone(),
+    let ammo = Some(Ammo {
+        saved: item,
+        stack: shot_stack.clone(),
+        kind: t,
+    });
+    // The use callback is outside a transaction. Stage initialized shots together so the
+    // join hook and first tracking snapshot see their ammo; check admission after commit.
+    let Ok(mut shots) = lv.host.transaction(|host, _| {
+        let mut shots = Vec::with_capacity(motions.len());
+        for (i, motion) in motions.into_iter().enumerate() {
+            let mut spawn = EntitySpawn::new(SpawnBody::General);
+            spawn.owner = Some(entity);
+            spawn.velocity = motion;
+            let Some(e) = lv.level.spawn_entity(host, SHOT, barrel, &spawn) else {
+                continue;
+            };
+            let holder = Holder::Entity(e.id());
+            AMMO.set(host, holder, ammo.clone())?;
+            FLIGHT.set(
+                host,
+                holder,
+                Flight {
                     recovery: if i == 0 { recovery } else { 0.0 },
-                    owner: Some(entity),
-                    motion: first,
-                    stuck: None,
-                    age: 0,
-                    left_owner: false,
+                    ..Flight::default()
                 },
-            )
-        });
+            )?;
+            shots.push(e);
+        }
+        Ok::<_, AttachmentError>(shots)
+    }) else {
+        return false;
+    };
+    shots.retain(|e| e.added_to_level(&*lv.host));
+    if shots.is_empty() {
+        return false;
     }
     if !creative(&*lv.host, player) {
-        match source {
-            Source::Hand(hand) => set_held(lv.host, player, hand, ammo_stack.shrink(1)),
-            Source::Slot(slot) => {
-                let _ = player.set_inventory_slot(lv.host, slot, ammo_stack.shrink(1));
+        // A join listener may have changed the input slot. Do not overwrite its new stack.
+        let current = match source {
+            Source::Hand(hand) => held(&*lv.host, player, hand),
+            Source::Slot(slot) => player.inventory_slots(&*lv.host).and_then(|slots| {
+                slots
+                    .into_iter()
+                    .find_map(|(i, stack)| (i == slot).then_some(stack))
+            }),
+        };
+        let paid = current
+            .filter(|stack| {
+                stack.count() == ammo_stack.count() && stack.is_stackable_with(&ammo_stack)
+            })
+            .is_some_and(|stack| match source {
+                Source::Hand(hand) => {
+                    living.set_hand_item(lv.host, hand, stack.shrink(1)) == Ok(true)
+                }
+                Source::Slot(slot) => player
+                    .set_inventory_slot(lv.host, slot, stack.shrink(1))
+                    .is_ok(),
+            });
+        if !paid {
+            for shot in shots {
+                shot.remove(lv.host, mod_api::RemovalReason::Discarded);
             }
+            return false;
         }
     }
     if !super::super::equipment::absorb(lv.host, player, MAX_USES) {
@@ -501,99 +614,90 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
     true
 }
 
-/// `PotatoProjectileEntity.tick` for this level's shots.
-fn fly(lv: &mut ServerLevel<'_>) {
-    let ids: Vec<u32> = SHOTS.with_borrow(|s| {
-        s.iter()
-            .filter(|(_, shot)| shot.dimension == lv.dimension)
-            .map(|(id, _)| *id)
-            .collect()
-    });
-    for id in ids {
-        let Some(mut shot) = SHOTS.with_borrow_mut(|s| s.remove(&id)) else {
-            continue;
-        };
-        let Some(e) = lv.host.entity(id).filter(|e| e.added_to_level(&*lv.host)) else {
-            continue;
-        };
-        shot.age += 1;
-        let stuck = shot.stuck.filter(|(target, ..)| alive(&*lv.host, *target));
-        if let Some((target, mut offset, mut fall)) = stuck {
-            let (Some(at), Some(own)) = (target.position(&*lv.host), e.position(&*lv.host)) else {
-                continue;
-            };
-            if own[1] < at[1] - 0.1 {
-                pop(lv, &shot, own);
-                e.discard(lv.host);
-                continue;
-            }
-            fall += 0.007 * f64::from(shot.kind.gravity);
-            offset[1] -= fall;
-            e.teleport_to(
-                lv.host,
-                [at[0] + offset[0], at[1] + offset[1], at[2] + offset[2]],
-                None,
-            );
-            e.set_velocity(lv.host, [0.0; 3]);
-            shot.stuck = Some((target, offset, fall));
-        } else {
-            shot.stuck = None;
-            shot.motion = potato::fly(shot.motion, shot.kind);
-            // Create's projectile meets the entities on its move with a margin of 0.3 from its
-            // first tick; the snowball's own grows from nothing (`computeMargin`), so the glue
-            // looks first and hits as Create's would.
-            if let Some((target, at)) = ahead(lv, e, &mut shot) {
-                let kind = target
-                    .kind(&*lv.host)
-                    .map(|k| k.id(&*lv.host).to_string())
-                    .unwrap_or_default();
-                let dimension = shot.dimension.clone();
-                let event = ProjectileImpactEvent {
-                    dimension: &dimension,
-                    projectile: id,
-                    kind: SHOT,
-                    owner: shot.owner.map_or(0, |o| o.id()),
-                    entity: Some(target.id()),
-                    entity_kind: &kind,
-                    block: [0; 3],
-                    face: [0; 3],
-                    at,
-                    cancelled: false,
-                };
-                let Some(kept) = impact(lv.host, &event, shot) else {
-                    continue;
-                };
-                shot = kept;
-                if shot.stuck.is_some() {
-                    SHOTS.with_borrow_mut(|s| s.insert(id, shot));
-                    continue;
-                }
-            }
-            e.set_velocity(lv.host, snowball_velocity(shot.motion));
+/// `PotatoProjectileEntity.tick`: either follow a stuck target or sweep once along the
+/// flight vector, then update the row's position and saved velocity.
+fn fly(lv: &mut ServerLevel<'_>, e: EntityRef) {
+    let holder = Holder::Entity(e.id());
+    let (Ok(Some(Some(ammo))), Ok(Some(mut flight))) = (
+        AMMO.get_existing(&mut *lv.host, holder),
+        FLIGHT.get_existing(&mut *lv.host, holder),
+    ) else {
+        e.remove(lv.host, mod_api::RemovalReason::Discarded);
+        return;
+    };
+    let (Some(from), Some(velocity)) = (e.position(&*lv.host), e.velocity(&*lv.host)) else {
+        return;
+    };
+    flight.age = flight.age.wrapping_add(1);
+    let mut shot = Shot {
+        stack: ammo.stack,
+        kind: ammo.kind,
+        owner: e.owner(&*lv.host),
+        motion: potato::fly(velocity, ammo.kind),
+        flight,
+    };
+    if let Some((target, mut offset, mut fall)) = shot
+        .flight
+        .stuck
+        .filter(|(target, ..)| alive(&*lv.host, *target))
+        && let Some(at) = target.position(&*lv.host)
+    {
+        if from[1] < at[1] - 0.1 {
+            pop(lv, &shot, from);
+            e.remove(lv.host, mod_api::RemovalReason::Discarded);
+            return;
         }
-        SHOTS.with_borrow_mut(|s| s.insert(id, shot));
+        fall += 0.007 * f64::from(shot.kind.gravity);
+        offset[1] -= fall;
+        e.teleport_to(lv.host, std::array::from_fn(|i| at[i] + offset[i]), None);
+        shot.flight.stuck = Some((target, offset, fall));
+    } else {
+        shot.flight.stuck = None;
+        let to = std::array::from_fn(|i| from[i] + shot.motion[i]);
+        let Some(block) = lv.level.clip(
+            &*lv.host,
+            from,
+            to,
+            mod_api::ClipBlock::Collider,
+            mod_api::ClipFluid::None,
+        ) else {
+            return;
+        };
+        if let Some((target, at)) = ahead(lv, e, from, block.location, &mut shot) {
+            if !hit_entity(lv, e, target, at, &mut shot) {
+                e.remove(lv.host, mod_api::RemovalReason::Discarded);
+                return;
+            }
+        } else if !block.miss {
+            pop(lv, &shot, block.location);
+            if !block_hit(lv, &shot, block) {
+                leave_item(lv, e, &shot);
+            }
+            e.remove(lv.host, mod_api::RemovalReason::Discarded);
+            return;
+        }
+        if shot.flight.stuck.is_some() {
+            e.set_velocity(lv.host, [0.0; 3]);
+        } else if e.teleport_to(lv.host, to, None) {
+            e.set_velocity(lv.host, shot.motion);
+        } else {
+            e.remove(lv.host, mod_api::RemovalReason::Discarded);
+            return;
+        }
     }
+    let _ = FLIGHT.set(&mut *lv.host, holder, shot.flight);
 }
 
-/// `AbstractHurtingProjectile.tick`'s entity hit (`ProjectileUtil.getHitResultOnMoveVector`,
-/// margin 0.3) for the shot `e` about to move by its motion, blocks first stopping the line;
-/// `Projectile.checkLeftOwner` before it. What it hits (`canHitEntity`: alive and pickable, not
-/// its shooter until it left them) and where.
-fn ahead(lv: &ServerLevel<'_>, e: EntityRef, shot: &mut Shot) -> Option<(EntityRef, [f64; 3])> {
+/// `AbstractHurtingProjectile.tick`'s entity hit, with the ray already clipped against blocks.
+fn ahead(
+    lv: &ServerLevel<'_>,
+    e: EntityRef,
+    from: [f64; 3],
+    to: [f64; 3],
+    shot: &mut Shot,
+) -> Option<(EntityRef, [f64; 3])> {
     let host: &dyn Host = &*lv.host;
-    let from = e.position(host)?;
     let m = shot.motion;
-    let mut to = [0, 1, 2].map(|i| from[i] + m[i]);
-    if let Some(hit) = lv.level.clip(
-        host,
-        from,
-        to,
-        mod_api::ClipBlock::Collider,
-        mod_api::ClipFluid::None,
-    ) && !hit.miss
-    {
-        to = hit.location;
-    }
     // `getBoundingBox().expandTowards(motion).inflate(1.0)`: the shot's box is 0.25 a side.
     let mut lo = [from[0] - 0.125, from[1], from[2] - 0.125];
     let mut hi = [from[0] + 0.125, from[1] + 0.25, from[2] + 0.125];
@@ -615,12 +719,12 @@ fn ahead(lv: &ServerLevel<'_>, e: EntityRef, shot: &mut Shot) -> Option<(EntityR
     let owner_root = shot.owner.map(|o| o.root_vehicle(host).unwrap_or(o));
     let same_root =
         |o: EntityRef| owner_root.is_some_and(|r| o.root_vehicle(host).unwrap_or(o) == r);
-    if !shot.left_owner {
-        shot.left_owner = !found.iter().any(|o| same_root(*o));
+    if !shot.flight.left_owner {
+        shot.flight.left_owner = !found.iter().any(|o| same_root(*o));
     }
     let boxes: Vec<(u32, [[f64; 3]; 2])> = found
         .iter()
-        .filter(|o| shot.left_owner || !same_root(**o))
+        .filter(|o| shot.flight.left_owner || !same_root(**o))
         .filter_map(|o| Some((o.id(), o.bounding_box(host)?)))
         .collect();
     let (id, at) = potato::entity_hit(from, to, &boxes, potato::HIT_MARGIN)?;
@@ -630,9 +734,6 @@ fn ahead(lv: &ServerLevel<'_>, e: EntityRef, shot: &mut Shot) -> Option<(EntityR
 /// `Entity.canBeHitByProjectile`: alive and `isPickable` (living things but spectators, carts,
 /// boats, frames, paintings, end crystals and Create's other shots).
 fn pickable(host: &dyn Host, e: EntityRef) -> bool {
-    if SHOTS.with_borrow(|s| s.contains_key(&e.id())) {
-        return true;
-    }
     if host.living(e).is_some() {
         return alive(host, e) && e.spectator(host) != Some(true);
     }
@@ -640,7 +741,8 @@ fn pickable(host: &dyn Host, e: EntityRef) -> bool {
         return false;
     };
     let id = kind.trim_start_matches("minecraft:");
-    id.ends_with("minecart")
+    kind == SHOT
+        || id.ends_with("minecart")
         || id.ends_with("boat")
         || id.ends_with("raft")
         || matches!(
@@ -669,7 +771,7 @@ fn pop(lv: &mut ServerLevel<'_>, shot: &Shot, at: [f64; 3]) {
 
 /// `recoverItem` or `spawnAtLocation(type.dropStack())` where the shot is.
 fn leave_item(lv: &mut ServerLevel<'_>, projectile: EntityRef, shot: &Shot) {
-    let stack = if f64::from(random(lv)) <= f64::from(shot.recovery) {
+    let stack = if f64::from(random(lv)) <= f64::from(shot.flight.recovery) {
         Some(shot.stack.clone())
     } else {
         shot.kind.drop.and_then(|id| {
@@ -682,90 +784,51 @@ fn leave_item(lv: &mut ServerLevel<'_>, projectile: EntityRef, shot: &Shot) {
     }
 }
 
-/// `leave_item` where an entity was hit, the snowball out of reach: the item summoned there.
-fn leave_item_at(lv: &mut ServerLevel<'_>, at: [f64; 3], shot: &Shot) {
-    let stack = if f64::from(random(lv)) <= f64::from(shot.recovery) {
-        Some(shot.stack.clone())
-    } else {
-        shot.kind.drop.and_then(|id| {
-            let key = lv.host.item_key(&Identifier::parse(id).ok()?)?;
-            ItemStack::new(key, 1)
-        })
-    };
-    if let Some(item) = stack.and_then(|s| s.to_nbt(&*lv.host)) {
-        let nbt = Compound::from([("Item".into(), Tag::Compound(item))]);
-        let dimension = lv.dimension.to_owned();
-        lv.host.summon(&dimension, "minecraft:item", at, nbt);
-    }
-}
-
-/// `onHitEntity` / `onHitBlock`; the shot back when it flies on or sticks.
-fn impact(
-    host: &mut dyn ServerHost,
-    event: &ProjectileImpactEvent<'_>,
-    mut shot: Shot,
-) -> Option<Shot> {
-    let projectile = host.entity(event.projectile);
-    let mut lv = ServerLevel::new(host, event.dimension)?;
-    if shot.stuck.is_some() {
-        return Some(shot);
-    }
-    let Some(target_id) = event.entity else {
-        let projectile = projectile?;
-        // `onHitBlock`.
-        pop(&mut lv, &shot, event.at);
-        if !block_hit(&mut lv, &shot, event) {
-            leave_item(&mut lv, projectile, &shot);
-        }
-        projectile.discard(lv.host);
-        return None;
-    };
-    let target = lv.host.entity(target_id)?;
+/// `onHitEntity`: true when the shot flies on or sticks.
+fn hit_entity(
+    lv: &mut ServerLevel<'_>,
+    projectile: EntityRef,
+    target: EntityRef,
+    at: [f64; 3],
+    shot: &mut Shot,
+) -> bool {
     if !alive(&*lv.host, target) {
-        return Some(shot);
+        return true;
     }
+    let kind = target.kind(&*lv.host).map(|k| k.id(&*lv.host));
     // Two shots meeting just out of their barrels pass through each other.
-    let young = SHOTS.with_borrow(|s| s.get(&target_id).map(|o| o.age < 10));
-    if young == Some(true) && shot.age < 10 {
-        return Some(shot);
+    if kind.as_deref() == Some(SHOT)
+        && shot.flight.age < 10
+        && FLIGHT
+            .get_existing(&mut *lv.host, Holder::Entity(target.id()))
+            .is_ok_and(|other| other.is_some_and(|flight| flight.age < 10))
+    {
+        return true;
     }
-    pop(&mut lv, &shot, event.at);
+    pop(lv, shot, at);
     // A powered wither (at half its health or less) takes nothing.
-    if event.entity_kind == "minecraft:wither"
+    if kind.as_deref() == Some("minecraft:wither")
         && let Some(l) = lv.host.living(target)
         && let (Some(h), Some(max)) = (l.health(&*lv.host), l.max_health(&*lv.host))
         && h <= max / 2.0
     {
-        discard(&mut lv, projectile);
-        return None;
+        return false;
     }
-    // `preEntityHit`: set on fire.
     if let Some(ticks) = action_arg(shot.kind, "set_on_fire").and_then(|a| a.parse().ok()) {
         target.set_remaining_fire_ticks(lv.host, ticks);
     }
-    let enderman = event.entity_kind == "minecraft:enderman";
     let (damage, knockback, invulnerable) = potato::hit(shot.kind);
-    let hurt = target.hurt(
-        lv.host,
-        "create:potato_cannon",
-        damage,
-        projectile,
-        shot.owner,
-    );
-    if hurt != Some(true) {
-        discard(&mut lv, projectile);
-        return None;
+    if target.hurt(lv.host, CANNON, damage, Some(projectile), shot.owner) != Some(true) {
+        return false;
     }
-    if enderman {
-        return Some(shot);
+    if kind.as_deref() == Some("minecraft:enderman") {
+        return true;
     }
-    if !entity_hit(&mut lv, &shot, target) {
-        leave_item_at(&mut lv, event.at, &shot);
+    if !entity_hit(lv, shot, target) {
+        leave_item(lv, projectile, shot);
     }
-    // A thing not living (a boat, a minecart) only takes the hit.
     if lv.host.living(target).is_none() {
-        discard(&mut lv, projectile);
-        return None;
+        return false;
     }
     if let Some(ticks) = invulnerable {
         target.set_invulnerable_time(lv.host, ticks);
@@ -781,7 +844,8 @@ fn impact(
     if let Some(owner) = owner {
         let monster = !alive(&*lv.host, target)
             && target.classification(&*lv.host) == Some(mod_api::MobCategory::Monster);
-        let other_player = event.entity_kind == "minecraft:player" && Some(target) != shot.owner;
+        let other_player =
+            kind.as_deref() == Some("minecraft:player") && Some(target) != shot.owner;
         if monster || other_player {
             super::super::advancements::award(lv.host, owner, "potato_cannon");
         }
@@ -794,38 +858,27 @@ fn impact(
         .living(target)
         .and_then(|l| l.attribute_value(&*lv.host, "minecraft:knockback_resistance"))
         .unwrap_or(0.0) as f32;
-    let knockback = knockback * (1.0 - resistance);
-    if let Some(v) = potato::knockback(velocity, shot.motion, knockback, ground) {
+    if let Some(v) = potato::knockback(
+        velocity,
+        shot.motion,
+        knockback * (1.0 - resistance),
+        ground,
+    ) {
         target.set_velocity(lv.host, v);
     }
-    // `setStuckEntity`: the offset from the target to the shot (where it hit, the snowball
-    // being out of reach during an entity hit).
     if shot.kind.sticky
         && alive(&*lv.host, target)
-        && let Some(at) = target.position(&*lv.host)
+        && let (Some(target_position), Some(position)) =
+            (target.position(&*lv.host), projectile.position(&*lv.host))
     {
-        let own = projectile
-            .and_then(|p| p.position(&*lv.host))
-            .unwrap_or(event.at);
-        if let Some(p) = projectile {
-            p.set_velocity(lv.host, [0.0; 3]);
-        }
-        shot.stuck = Some((
+        shot.flight.stuck = Some((
             target,
-            [own[0] - at[0], own[1] - at[1], own[2] - at[2]],
+            std::array::from_fn(|i| position[i] - target_position[i]),
             0.0,
         ));
-        return Some(shot);
+        return true;
     }
-    discard(&mut lv, projectile);
-    None
-}
-
-/// The snowball gone, when it can be reached (else its own hit ends it).
-fn discard(lv: &mut ServerLevel<'_>, projectile: Option<EntityRef>) {
-    if let Some(p) = projectile {
-        p.discard(lv.host);
-    }
+    false
 }
 
 /// The argument of the type's action named `name` (`"set_on_fire 60"` gives `"60"`).
@@ -1006,7 +1059,7 @@ fn chorus(lv: &mut ServerLevel<'_>, target: EntityRef, diameter: f64) -> bool {
 }
 
 /// `onBlockHit`: true when the type took care of the item.
-fn block_hit(lv: &mut ServerLevel<'_>, shot: &Shot, event: &ProjectileImpactEvent<'_>) -> bool {
+fn block_hit(lv: &mut ServerLevel<'_>, shot: &Shot, hit: ClipHit) -> bool {
     let Some(action) = shot.kind.action else {
         return false;
     };
@@ -1014,12 +1067,16 @@ fn block_hit(lv: &mut ServerLevel<'_>, shot: &Shot, event: &ProjectileImpactEven
     let (Some(kind), Some(block)) = (words.next(), words.next()) else {
         return false;
     };
-    let face = event.face;
-    let place = [
-        event.block[0] + face[0],
-        event.block[1] + face[1],
-        event.block[2] + face[2],
-    ];
+    let face = match hit.face {
+        BlockFace::Down => [0, -1, 0],
+        BlockFace::Up => [0, 1, 0],
+        BlockFace::North => [0, 0, -1],
+        BlockFace::South => [0, 0, 1],
+        BlockFace::West => [-1, 0, 0],
+        BlockFace::East => [1, 0, 0],
+        _ => return false,
+    };
+    let place = std::array::from_fn(|i| hit.block[i] + face[i]);
     let replaceable = lv.is_air(place)
         || lv.block_state(place).is_some_and(|s| {
             lv.host.block_in_tag(s.block(), "minecraft:replaceable") == Some(true)
@@ -1031,7 +1088,7 @@ fn block_hit(lv: &mut ServerLevel<'_>, shot: &Shot, event: &ProjectileImpactEven
                 return false;
             }
             let farmland = lv
-                .block_state(event.block)
+                .block_state(hit.block)
                 .is_some_and(|s| s.block().id(&*lv.host) == "minecraft:farmland");
             if farmland && let Some(state) = lv.host.block_state_id(block) {
                 lv.set_state(place, state, super::super::server::update_all());
@@ -1049,7 +1106,7 @@ fn block_hit(lv: &mut ServerLevel<'_>, shot: &Shot, event: &ProjectileImpactEven
                 }
             } else {
                 let empty = |lv: &ServerLevel<'_>, p: [i32; 3]| lv.is_air(p);
-                let mut y = event.at[1] - 0.5;
+                let mut y = hit.location[1] - 0.5;
                 if !empty(lv, [place[0], place[1] + 1, place[2]]) {
                     y = y.min(f64::from(place[1]));
                 }
@@ -1079,18 +1136,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_snowball_moves_by_creates_motion() {
-        // Gravity, then drag, then the move: what is left is the motion given.
-        let m = [0.4, -0.2, 1.1];
-        let v = snowball_velocity(m);
-        let moved = [
-            v[0] * SNOWBALL_DRAG,
-            (v[1] - SNOWBALL_GRAVITY) * SNOWBALL_DRAG,
-            v[2] * SNOWBALL_DRAG,
-        ];
-        for i in 0..3 {
-            assert!((moved[i] - m[i]).abs() < 1e-12);
-        }
+    fn a_saved_flight_keeps_recovery_and_the_owner_exit_flag() {
+        let flight = Flight {
+            recovery: 0.375,
+            left_owner: true,
+            age: 14,
+            stuck: None,
+        };
+        let codec = FLIGHT.codec.as_ref().unwrap();
+        let saved = (codec.encode)(&flight).unwrap();
+        let loaded = (codec.decode)(&saved).unwrap();
+        assert_eq!(loaded.recovery, 0.375);
+        assert!(loaded.left_owner);
+        assert_eq!(loaded.age, 0);
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! Create's potato cannon (`PotatoCannonItem`, `PotatoCannonProjectileType`,
 //! `PotatoProjectileEntity`): its ammunition and the projectile's flight, damage and recovery.
 //!
-//! Only the rules: the glue (`glue/items/potato.rs`) flies them as vanilla snowballs carrying
-//! the ammunition. The types are Create's data (`data/create/create/potato_projectile/type/*.json`).
+//! Only the rules: the glue (`glue/items/potato.rs`) applies them to the port's general entity.
+//! The types are Create's data (`data/create/create/potato_projectile/type/*.json`).
 
 /// `CEquipment.maxPotatoCannonShots`'s default: shots a backtank's air pays for.
 pub const MAX_SHOTS: i32 = 200;
