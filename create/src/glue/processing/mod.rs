@@ -11,7 +11,7 @@
 //! wrench's on a deployer and a crafter's edge among them; items landing on a basin or a saw
 //! are those blocks' `item_after_vertical_collision`. Some functions here are what other
 //! subsystems call: the sequenced assembly steps the spout
-//! runs on a belt or depot (`sequenced_*`, `belt_left`), basins' tanks, a stack's sequenced
+//! runs on a belt or depot (`sequenced_*`), basins' tanks, a stack's sequenced
 //! progress. The machines over a belt answer `Subsystem::belt_process`; a crafter's group takes
 //! items through its `ITEMS` handler (`crafter::provide_items`), whoever puts them in.
 //! The saw, the crushing wheels and the crafter hand their results to whatever takes items from
@@ -76,9 +76,7 @@ pub(crate) use press::{depot_turn as press_depot_turn, tick_press};
 // or depot runs a sequenced assembly's filling step, pumps reach basins' tanks), logistics (a
 // stack's sequenced progress onto and off a belt).
 pub use basin::basin_tanks;
-pub use press::{
-    belt_left, sequenced_for, sequenced_on_belt, sequenced_on_depot, sequenced_step_on_depot,
-};
+pub use press::{sequenced_for, sequenced_on_belt, sequenced_on_depot, sequenced_step_on_depot};
 pub use stacks::{sequenced_progress, set_sequenced_progress};
 
 use super::server::ServerLevel;

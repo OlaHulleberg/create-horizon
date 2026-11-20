@@ -467,6 +467,15 @@ impl Item {
         copy
     }
 
+    /// `BeltPressingCallbacks.whenItemHeld`'s `left`: `copy()` does not copy `locked`.
+    pub fn left_after_one(&self) -> Option<Self> {
+        (self.count > 1).then(|| {
+            let mut left = self.processing_copy();
+            left.count -= 1;
+            left
+        })
+    }
+
     /// `new TransportedItemStack(stack)`.
     pub fn new(item: &str, count: u8, angle: i32, upright: bool) -> Item {
         let angle = if upright { 180 } else { angle };
@@ -1697,6 +1706,20 @@ mod tests {
         assert!(!copy.locked);
         assert_eq!(copy.position, item.position);
         assert!(item.locked);
+    }
+
+    #[test]
+    fn the_rest_of_a_pressed_stack_is_not_locked() {
+        let mut item = Item::new("minecraft:gold_ingot", 2, 0, false);
+        item.locked = true;
+        item.position = 1.5019531;
+        let left = item.left_after_one().unwrap();
+        assert_eq!(
+            (left.count, left.locked, left.position),
+            (1, false, 1.5019531)
+        );
+        item.count = 1;
+        assert_eq!(item.left_after_one(), None);
     }
 
     #[test]

@@ -150,18 +150,13 @@ impl Run {
             return Some(Process::Hold);
         }
         let result = result?;
-        let mut out = item.clone();
+        let mut out = item.processing_copy();
         out.item = result.into();
         out.count = 1;
         out.progress = None;
         out.locked = true;
-        let held = (item.count > 1).then(|| {
-            let mut left = item.clone();
-            left.count -= 1;
-            left
-        });
         Some(Process::Convert {
-            held,
+            held: item.left_after_one(),
             outputs: vec![out],
         })
     }
