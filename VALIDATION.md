@@ -7,7 +7,7 @@ Checked on 2026-11-20 (Linux x86_64, Rust 1.99.1, a fresh build directory), pinn
 No SDK mirror or trusted-key override is used. Mixins stays at
 `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`, as the release SDK specifies.
 
-The in-game results below are historical: `6373106` ran on `520fc48`, the developer build was `b77574e`,
+`684e89b` on `9425651` passed the in-game smoke test below. Earlier in-game results are historical: `6373106` ran on `520fc48`, the developer build was `b77574e`,
 the first nightly smoke test used `2d81263`, and the registry smoke tests used `ed3ac19`.
 
 ## Checks
@@ -215,12 +215,36 @@ above:
 | Belt slicer follows BeltSlicer (#130, #131 except f2b, #132, #133) | Pass | Nightly game (520fc48): a belt shortened from its START and END with the wrench, lengthened and split in creative (the cut-off half stays still while the driven half carries its items) and joined again with the connector after a save and reload; a survival split is refused without a connector; create-fuzz `fuzz 0 2000` with main's driver unchanged from main |
 | Belt tunnels, funnels, chutes, inventory and item handler (#134-#140) | Pass | Nightly game (520fc48): wrench-closed andesite and brass tunnel windows stay closed through 60 ticks and a neighbour change; breaking a segment takes its belt and four tunnels in one tick; a belt funnel fills a depot and the rest queue; a hopper inserts into a belt and stops when the segment is blocked; stacked chutes fill an empty depot and wait in the middle over a full one; items picked off a stopped belt are gone within 3 ticks; all kept across a save and reload; create-fuzz `fuzz 0 2000` fixes 21 seeds, none newly differing |
 | A large water wheel's frame cell hands the sneak wrench to its wheel (#165) | Pass | Nightly game (520fc48): a sneak wrench on an edge frame cell takes the wheel into the inventory and the frame goes a moment later; a small wheel turned beside flowing water reads flow 0, speed 0 and keeps it across a relaunch; create-fuzz `fuzz 0 2000` 2000 matched |
+| Sequenced gearshifts tick in block-entity order (#173) | Fuzz only | create-fuzz case and seeds 2356, 4788, 7220, 9652, 12084 match; not reproduced in game on `9425651` (see that smoke test, item 7) |
+| Brass tunnels, funnels and the logistics tick order (#143-#149, #154) | Pass | Nightly game (`9425651`): see that smoke test, item 8; create-fuzz `fuzz 0 2000` fixes 26 seeds |
 | Kinetic state saved and loaded (#10) | Pass | Two member-motor pairs keep their roles over two save/reload cycles; a world saved before #10 loads with both pairs intact and keeps them after saving again |
 
 Known differences left: the category editor's inventory shows the inventory as it was at the last change made in
 it, so items picked up while it is open appear after the next change (Create's menu syncs them at once). The game
 dropped to the title screen ("End of stream") five times across three test sessions with no panic or crash report;
 none reproduced.
+
+## In-game smoke test on `9425651` (main `684e89b`)
+
+Built with `sunrise-launcher native-build` against `nightly-2026-11-20-9425651`, resources prepared by that build's
+`sunrise-prepare` (output format 5; the format-4 resources crash its client with `missing field 'build'`), a fresh
+creative world, driven by `sunrise-ctl`.
+
+| # | Item | Result | Evidence |
+|---|---|---|---|
+| 1 | Creative motor turning shafts | Pass | 16 rpm on both shafts; motor `Speed: 16.0f`, capacity 262144 |
+| 2 | Belt carrying a diamond onto a depot | Pass | 5-long belt made with the connector by a player; the depot holds the diamond after about 4 s |
+| 3 | Pump filling a tank | Pass | 8 mB per tick from a pool, 2288 → 3448 mB, then full; a single source gives 1000 mB and becomes air; a bucket puts 1000 mB in; with air ahead the pump places a source |
+| 4 | Fluid valve opened | Pass | Pointer `Value: 1.0f`, `enabled=true` |
+| 5 | Bearing and windmill | Pass | 4 glued planks turn at 16 rpm; a 24-sail windmill at 3 rpm, 1536 SU |
+| 6 | Player placement and breaking | Pass | Shaft (`axis=x`), gearbox (`axis=y`) and cogwheel (`axis=z`) placed against turning blocks turn at 16 rpm; broken in 1-2 ticks with the neighbour still turning; placed again and turning |
+| 7 | Sequenced gearshifts saved at a program's last tick (#173) | Not reproduced | After a relaunch every block read 0 rpm and 0 SU, the second gearshift with no network. Java's 256 SU needs the run to end on the reloaded tick; here about 21 ticks passed before the first read and the crank may have stopped before the save. The fuzz case for #173 matches |
+| 8 | Brass tunnels and funnels (#143-#149, #154) | Pass | Split, round robin and synchronize each delivered in Create's order to three depots; a tunnel replaced in a synchronizing group took its mode; a belt funnel pushed a chest onto a belt and waited when it backed up; a funnel over a depot pushed one ingot and kept the rest; a pulling funnel took a depot's item into a chest |
+| 9 | Save, quit, relaunch | Pass | Speeds, depot items, valve, bearing and windmill (still turning), tunnel modes and funnel shapes kept, and all went on working; the tank went on filling |
+
+Game log: no mod errors or crash reports once the resources matched the build. Unconfirmed: a sneak-placed funnel came
+out extracting (Create's `FunnelBlock.getStateForPlacement` makes it non-extracting, as the port's placement does);
+whether `ctl place` sent the sneak was not checked.
 
 ## In-game smoke test on `520fc48` (main `6373106`)
 
