@@ -45,18 +45,6 @@ pub(super) fn candidate(
     let facts = host.block_states();
     let has = |k: &str| state.property(&facts, k).ok().flatten().is_some();
     let class = |class| facts.block_class(state, class).ok().flatten();
-    // `CopycatSpecialCases`: Create's `GlassPaneBlock` variants and vanilla's panes
-    // inherit from `IronBarsBlock` but are not the special bar material.
-    let create_pane = create.is_some_and(|block| {
-        block.name().ends_with("_window_pane")
-            || matches!(
-                block,
-                Block::FramedGlassPane
-                    | Block::HorizontalFramedGlassPane
-                    | Block::VerticalFramedGlassPane
-                    | Block::TiledGlassPane
-            )
-    });
     Some(Candidate {
         copycat: matches!(create, Some(Block::CopycatPanel | Block::CopycatStep)),
         allow: tagged("create:copycat_allow"),
@@ -66,12 +54,33 @@ pub(super) fn candidate(
         stairs: class(BlockClass::Stair)?,
         full,
         collides,
-        bars: class(BlockClass::IronBars)?
-            && !class(BlockClass::StainedGlassPane)?
-            && id != "minecraft:glass_pane"
-            && !create_pane,
+        bars: special_bars(&id, create, class)?,
         trapdoor: class(BlockClass::TrapDoor)? && has("half") && has("open") && has("facing"),
     })
+}
+
+/// `CopycatSpecialCases`: glass panes inherit from `IronBarsBlock` without being bar material.
+/// Stained panes have their own class check; these are vanilla's clear pane and Create's panes.
+fn special_bars(
+    id: &str,
+    create: Option<Block>,
+    class: impl Fn(BlockClass) -> Option<bool>,
+) -> Option<bool> {
+    Some(
+        class(BlockClass::IronBars)?
+            && !class(BlockClass::StainedGlassPane)?
+            && id != "minecraft:glass_pane"
+            && !create.is_some_and(|block| {
+                block.name().ends_with("_window_pane")
+                    || matches!(
+                        block,
+                        Block::FramedGlassPane
+                            | Block::HorizontalFramedGlassPane
+                            | Block::VerticalFramedGlassPane
+                            | Block::TiledGlassPane
+                    )
+            }),
+    )
 }
 
 /// `getAcceptedBlockState` for the item `stack` on a copycat of `shape` at `pos`: the item's
@@ -130,4 +139,32 @@ pub(super) fn cycle_of(host: &dyn Host, state: BlockState) -> Option<(&'static s
 pub(super) fn place_sound(host: &dyn Host, state: BlockState) -> Option<String> {
     let place = host.block_states().sound(state)?.place;
     (!place.is_empty()).then(|| place.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_copycat_panel_accepts_iron_bars_but_not_create_window_panes() {
+        let panel = Shape::Panel(Dir::Up);
+        for (id, accepted) in [
+            ("create:oak_window_pane", false),
+            ("minecraft:iron_bars", true),
+        ] {
+            // Both inherit IronBarsBlock but neither has full-block bounds in this test.
+            let create = id.strip_prefix("create:").and_then(Block::from_name);
+            let facts = Candidate {
+                bars: special_bars(id, create, |class| match class {
+                    BlockClass::IronBars => Some(true),
+                    BlockClass::StainedGlassPane => Some(false),
+                    _ => None,
+                })
+                .unwrap(),
+                collides: true,
+                ..Candidate::default()
+            };
+            assert_eq!(cc::accepts(panel, &facts), accepted, "{id}");
+        }
+    }
 }
