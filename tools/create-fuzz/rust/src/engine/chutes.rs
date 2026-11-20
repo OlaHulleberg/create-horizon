@@ -121,7 +121,7 @@ impl Run {
                 count: item.count,
             },
         );
-        self.w.dims[0].chutes.insert(p, 1.);
+        self.w.set_chute_position(0, p, 1.);
         0
     }
     /// `tick_chute_shapes` (`updateChuteState`): diagonal chutes with nothing to lead into turn
@@ -202,7 +202,7 @@ impl Run {
             };
             match next {
                 Some(p) => {
-                    self.w.dims[0].chutes.insert(pos, p);
+                    self.w.set_chute_position(0, pos, p);
                 }
                 None => {
                     self.w.dims[0].chutes.remove(&pos);
@@ -290,7 +290,7 @@ impl Run {
             run.chute_stacks.remove(&pos);
             run.chute_stacks.insert(target, stack);
             let at = if diagonal { 0.51 } else { 1. };
-            run.w.dims[0].chutes.insert(target, at);
+            run.w.set_chute_position(0, target, at);
         };
         match chute::step(position, motion, can) {
             Fall::At(p) => Some(p),
@@ -374,7 +374,7 @@ impl Run {
             Fall::Out if above_chute.is_some() => {
                 self.chute_stacks.remove(&pos);
                 self.chute_stacks.insert(above, stack);
-                self.w.dims[0].chutes.insert(above, 0.);
+                self.w.set_chute_position(0, above, 0.);
                 None
             }
             Fall::Out if container => match self.depot_insert(above, &stack, false) {
