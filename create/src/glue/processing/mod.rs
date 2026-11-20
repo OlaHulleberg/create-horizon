@@ -172,17 +172,13 @@ impl Subsystem for Processing {
         r.block_part(super::states::key(Block::BlazeBurner), BurnerPlacement);
         toolbelt::register(r);
         operator::register(r);
-        let mut items = Vec::new();
         for b in Block::ALL
             .iter()
             .copied()
             .filter(|b| toolbelt::toolbox_block(*b))
         {
             r.block_part(super::states::key(b), ToolboxPart);
-            let item = r.item_key(&format!("create:{}", b.name()));
-            items.push(item);
         }
-        let _ = toolbelt::TOOLBOX_ITEMS.set(items);
     }
 
     fn world_closed(&self) {
@@ -192,7 +188,6 @@ impl Subsystem for Processing {
         basin::clear();
         spoutput::clear();
         crafter::clear();
-        toolbelt::clear();
         fist::clear();
     }
 
@@ -203,39 +198,15 @@ impl Subsystem for Processing {
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
         persist::load(lv.dim, data);
-        toolbelt::load(lv.dim, data);
     }
 
     fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
         persist::save(lv.dim, chunk, data);
-        toolbelt::save(lv.dim, chunk, data);
-    }
-
-    fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {
-        toolbelt::chunk_unload(dim, chunk);
-    }
-
-    /// A toolbox's block replaced by anything but a toolbox (`ToolboxBlock.onRemove` removing
-    /// its block entity): its compartment kinds and id go with it.
-    fn block_changed(
-        &self,
-        dim: usize,
-        pos: [i32; 3],
-        old: u32,
-        new: u32,
-        _: mod_api::BlockUpdateFlags,
-    ) {
-        let toolbox =
-            |s: u32| super::packages::block_of(s).is_some_and(create_engine::dye::is_toolbox);
-        if toolbox(old) && !toolbox(new) {
-            toolbelt::removed(dim, pos);
-        }
     }
 
     /// Legacy `level_tick_post` order: crafters, millstones, fans, crushers, burners, mixers.
     /// The drills, saws, presses and deployers are `Tools`', after logistics' belts.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
-        toolbelt::level_tick();
         crafter::tick_crafters(lv);
         millstone::tick_millstones(lv);
         fan::tick_fans(lv);
@@ -380,36 +351,6 @@ impl Subsystem for Processing {
         toolbelt::pick_item(host, event)
     }
 
-    /// A player breaking a toolbox: its contents go with its drop.
-    fn break_block(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut mod_api::BreakBlockEvent<'_>,
-    ) -> mod_api::Flow {
-        if event.cancelled {
-            return mod_api::Flow::Continue;
-        }
-        let Some(player) = host.players().acting_player() else {
-            return mod_api::Flow::Continue;
-        };
-        let Some(dimension) = player.dimension(&*host).map(|d| d.to_string()) else {
-            return mod_api::Flow::Continue;
-        };
-        if let Some(mut lv) = ServerLevel::new(host, &dimension) {
-            toolbelt::before_removal(&mut lv, event.pos);
-        }
-        mod_api::Flow::Continue
-    }
-
-    fn block_drops(
-        &self,
-        level: &dyn mod_api::LevelHost,
-        event: &mut mod_api::BlockDropsEvent<'_>,
-    ) -> mod_api::Flow {
-        toolbelt::block_drops(level, event);
-        mod_api::Flow::Continue
-    }
-
     fn render_gui_post(&self, host: &dyn ClientHost, event: &mut mod_api::RenderGuiPostEvent<'_>) {
         toolbelt::render_gui_post(host, event);
     }
@@ -505,22 +446,11 @@ impl Subsystem for Processing {
     }
 }
 
-/// A toolbox restores its item contents when placed and keeps them in its drop when exploded.
+/// A toolbox placed from its item takes the contents the item keeps.
 struct ToolboxPart;
 
 #[mod_api::sunrise_part]
 impl BlockPart for ToolboxPart {
-    fn on_block_exploded(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut mod_api::OnBlockExplodedEvent<'_>,
-    ) {
-        let dimension = event.explosion.dimension.to_owned();
-        if let Some(mut lv) = ServerLevel::new(host, &dimension) {
-            toolbelt::before_removal(&mut lv, [event.pos.x, event.pos.y, event.pos.z]);
-        }
-    }
-
     fn set_placed_by(&self, host: &mut dyn ServerHost, event: &mut mod_api::SetPlacedByEvent<'_>) {
         let Some(stack) = event.stack else {
             return;

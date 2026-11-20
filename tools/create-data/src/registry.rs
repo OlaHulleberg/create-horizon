@@ -155,6 +155,29 @@ fn gearbox_drops(doc: &mut Value) {
     }
 }
 
+/// The mod keeps the same toolbox data in vanilla custom data, not Create's Java-only
+/// component types. Copy the engine-saved slots and the port's saveAdditional fields.
+fn toolbox_drops(doc: &mut Value) {
+    let Some(modifiers) = doc["pools"][0]["entries"][0]["modifier"].as_array_mut() else {
+        return;
+    };
+    let copy = serde_json::json!({
+        "type": "minecraft:copy_custom_data",
+        "source": "block_entity",
+        "ops": [
+            { "source": "Items", "target": "\"create:toolbox_inventory\".Items", "op": "replace" },
+            { "source": "Compartments", "target": "\"create:toolbox_inventory\".Compartments", "op": "replace" },
+            { "source": "UniqueId", "target": "\"create:toolbox_uuid\"", "op": "replace" },
+        ],
+    });
+    if let Some(components) = modifiers
+        .iter_mut()
+        .find(|f| f["type"] == "minecraft:copy_components")
+    {
+        *components = copy;
+    }
+}
+
 /// A 1.21.1 loot table as 26.3 writes it, the form Horizon reads: a condition names its kind in
 /// `type` (1.21.1: `condition`), a function in `type` (1.21.1: `function`), and a pool's or
 /// entry's functions are its `modifier` list (1.21.1: `functions`).
@@ -503,6 +526,10 @@ fn data_overlays(files: &BTreeMap<String, Vec<u8>>) -> Result<BTreeMap<String, V
             convert_loot(&mut doc);
             if path == "data/create/loot_table/blocks/gearbox.json" {
                 gearbox_drops(&mut doc);
+            } else if path.starts_with("data/create/loot_table/blocks/")
+                && path.ends_with("_toolbox.json")
+            {
+                toolbox_drops(&mut doc);
             }
         }
         // 26.3's directory for configured features is `feature`.
