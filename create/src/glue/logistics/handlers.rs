@@ -7,7 +7,6 @@ use super::super::states;
 use super::super::world::{level_index, with_world};
 use crate::glue::items::filters;
 use create_engine::Block;
-use create_engine::ejector;
 use mod_api::{
     BlockEntityRef, BlockSide, ItemResource, ItemStack, LevelRef, ResourceHandler, ServerHost,
     Transaction,
@@ -155,7 +154,48 @@ fn put(
 /// `DepotItemHandler` (the ejector's `DepotBehaviour` too): in only to the held slot; a depot
 /// while it holds nothing (`canMergeItems` false), an ejector only while charged, merging onto
 /// what it holds up to its stack size (`enableMerging`, `getRemainingSpace`); out of every slot.
+/// What goes onto an ejector already holding a stack slides in on its own (`incoming`), kept in
+/// the engine: a transaction that later aborts cannot take that back (as with a belt's
+/// handler; `items::insert_room` answers ejectors from the engine).
 struct DepotItems(At);
+
+impl DepotItems {
+    /// `insertItem` on an ejector (`DepotBehaviour.insert` with merging): onto an empty one
+    /// into the held slot, journaled, its motion set at the commit (`depot_contents_changed`);
+    /// onto a held stack into `incoming` at once.
+    fn merge(
+        &self,
+        host: &mut dyn ServerHost,
+        tx: &Transaction,
+        e: BlockEntityRef,
+        resource: &ItemResource,
+        amount: u32,
+    ) -> u32 {
+        let Some(stack) = resource
+            .to_stack(amount.min(u32::from(u8::MAX)))
+            .filter(|_| amount > 0)
+        else {
+            return 0;
+        };
+        let Some(dimension) = self.0.level.dimension().id(&*host) else {
+            return 0;
+        };
+        let Some(mut lv) = super::super::server::ServerLevel::new(host, &dimension) else {
+            return 0;
+        };
+        let key = super::items::key_of(&*lv.host, &stack);
+        let count = stack.count().min(u32::from(u8::MAX)) as u8;
+        let pos = self.0.pos;
+        let motion = super::depot::handler_motion(&lv, pos, &key);
+        let held = read(&*lv.host, Some(e), 0).is_some();
+        let left = super::depot::merge_insert(&mut lv, pos, &key, count, motion, !held);
+        let n = u32::from(count - left);
+        if held {
+            return n;
+        }
+        put(host, tx, e, 0, resource, n, n)
+    }
+}
 
 impl ResourceHandler<ItemResource> for DepotItems {
     fn size(&self, _host: &mut dyn ServerHost) -> usize {
@@ -190,36 +230,14 @@ impl ResourceHandler<ItemResource> for DepotItems {
         let slots: Vec<Option<ItemStack>> = (0..create_engine::depot::SLOTS)
             .map(|i| read(&*host, Some(e), i))
             .collect();
+        if with_world(|w| w.dims[self.0.dim].ejectors.contains_key(&self.0.pos)) == Some(true) {
+            return self.merge(host, tx, e, resource, amount);
+        }
+        if slots.iter().any(Option::is_some) {
+            return 0;
+        }
         let max = limit(&*host, resource);
-        let ejector = with_world(|w| {
-            w.dims[self.0.dim]
-                .ejectors
-                .get(&self.0.pos)
-                .map(|e| (e.state, e.max_stack))
-        })
-        .flatten();
-        let room = match ejector {
-            None => {
-                if slots.iter().any(Option::is_some) {
-                    return 0;
-                }
-                max
-            }
-            Some((state, max_stack)) => {
-                if state != ejector::State::Charged {
-                    return 0;
-                }
-                let limit = if max_stack == 0 {
-                    64
-                } else {
-                    u32::from(max_stack)
-                }
-                .min(max);
-                let others: u32 = slots.iter().skip(1).flatten().map(ItemStack::count).sum();
-                limit.saturating_sub(others)
-            }
-        };
-        put(host, tx, e, 0, resource, amount, room)
+        put(host, tx, e, 0, resource, amount, max)
     }
     fn extract(
         &self,

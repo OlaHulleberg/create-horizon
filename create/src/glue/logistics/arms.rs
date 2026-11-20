@@ -617,7 +617,10 @@ impl arm::World for ArmWorld<'_, '_> {
         let (dim, pos) = (lv.dim, p.pos);
         let max = stack_limit(&*lv.host, item);
         match p.kind {
-            Kind::Depot => depot_insert(lv, pos, item, count, simulate),
+            Kind::Depot => {
+                let motion = super::depot::handler_motion(lv, pos, item);
+                depot_insert(lv, pos, item, count, motion, simulate)
+            }
             // ItemHandlerBeltSegment.insertItem: onto the segment from above while nothing just
             // put there is in the way.
             Kind::Belt => put_on_from_above(lv, pos, item, count, None, simulate).unwrap_or(count),
@@ -926,56 +929,35 @@ impl arm::World for ArmWorld<'_, '_> {
     }
 }
 
-/// `DepotItemHandler.insertItem` (slot 0) for the depot or ejector at `pos`: a depot takes a
-/// stack while it holds nothing (`canMergeItems` false); an ejector only while charged, and
-/// merges onto what it holds up to its stack size (`enableMerging`, `getRemainingSpace`).
+/// `DepotBehaviour.insert` (from `DepotItemHandler.insertItem` or
+/// `DirectBeltInputBehaviour.handleInsertion`) of `count` of `item` arriving with `motion` at
+/// the depot or ejector at `pos`: a depot takes a stack while it holds nothing (`canMergeItems`
+/// false, `isOccupied`); an ejector merges (`depot::merge_insert`). The count left.
 pub(super) fn depot_insert(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
     item: &str,
     count: u8,
+    motion: depot::Held,
     simulate: bool,
 ) -> u8 {
     let dim = lv.dim;
-    let stacks = depot_items(lv, pos);
-    let held = stacks.iter().find(|s| s.0 == 0).cloned();
-    let max = stack_limit(&*lv.host, item);
-    let ejector = with_world(|w| w.dims[dim].ejectors.get(&pos).cloned()).flatten();
-    let room = match &ejector {
-        None => {
-            if !stacks.is_empty() {
-                return count;
-            }
-            max
-        }
-        Some(e) => {
-            if e.state != ejector::State::Charged || held.as_ref().is_some_and(|h| h.1 != item) {
-                return count;
-            }
-            let present: u32 = stacks.iter().map(|s| u32::from(s.2)).sum();
-            // `getRemainingSpace`: the held stack's own max caps the limit, and an empty
-            // depot holds but one (`ItemStack.EMPTY.getMaxStackSize()`).
-            let held_max = held.as_ref().map(|_| max);
-            depot::merge_take(e.max_stack, held_max, present, count)
-        }
-    };
-    let n = count.min(room);
+    if is_ejector(dim, pos) {
+        return super::depot::merge_insert(lv, pos, item, count, motion, simulate);
+    }
+    if !depot_items(lv, pos).is_empty() {
+        return count;
+    }
+    let n = count.min(stack_limit(&*lv.host, item));
     if n == 0 {
         return count;
     }
     if !simulate {
-        let had = held.as_ref().map_or(0, |h| h.2);
-        let stack = items::stack_of(&*lv.host, item, u32::from(had + n));
+        let stack = items::stack_of(&*lv.host, item, u32::from(n));
         if !items::set_slot(lv, pos, 0, stack) {
             return count;
         }
-        if held.is_none() {
-            let h =
-                create_engine::depot::Held::new(random_angle(lv, pos), upright(&*lv.host, item));
-            with_world(|w| w.depot_put(dim, pos, Some(h)));
-        } else {
-            with_world(|w| w.depot_changed(dim, pos));
-        }
+        with_world(|w| w.depot_put(dim, pos, Some(motion)));
     }
     count - n
 }
@@ -1242,9 +1224,12 @@ fn land(
     simulate: bool,
 ) -> Option<u8> {
     let dim = lv.dim;
-    // An ejector merges what lands onto what it holds (`enableMerging`).
+    // An ejector merges what lands onto what it holds (`enableMerging`), arriving from above
+    // at the centre (`tryInsertingFromSide(UP)`).
     if is_ejector(dim, target) {
-        return Some(depot_insert(lv, target, item, count, simulate));
+        let motion =
+            create_engine::depot::Held::new(random_angle(lv, target), upright(&*lv.host, item));
+        return Some(depot_insert(lv, target, item, count, motion, simulate));
     }
     let is_depot = with_world(|w| w.dims[dim].depots.contains_key(&target)) == Some(true);
     if is_depot {
@@ -1304,36 +1289,67 @@ impl ejector::World for EjectorWorld<'_, '_> {
     }
 
     fn take_all(&mut self) -> Vec<(String, u8)> {
-        // `launchItems`: a pulling belt funnel on top facing its back takes what it can first.
+        let dim = self.lv.dim;
+        let pos = self.pos;
+        // `launchItems`: a pulling belt funnel on top facing its back takes what it can of the
+        // held stack, the incoming ones and the outputs, and nothing is launched.
         if let Some((above, f)) = self.funnel_on_top() {
-            for slot in 0..create_engine::depot::SLOTS as u32 {
-                let Some(stack) = items::slot(self.lv, self.pos, slot) else {
+            if let Some(held) = items::slot(self.lv, pos, 0) {
+                let count = held.count();
+                if let Some(left) = export_to_belt_funnel(self.lv, above, f, &held, false)
+                    && left != count
+                {
+                    if left == 0 {
+                        items::set_slot(self.lv, pos, 0, None);
+                        with_world(|w| w.depot_put(dim, pos, None));
+                    } else {
+                        items::set_slot(self.lv, pos, 0, items::with_count(&held, left));
+                    }
+                }
+            }
+            let mut incoming =
+                with_world(|w| w.depot_incoming(dim, pos).to_vec()).unwrap_or_default();
+            incoming.retain(|i| {
+                let Some(stack) = items::stack_of(&*self.lv.host, &i.item, u32::from(i.count))
+                else {
+                    return true;
+                };
+                // A remainder of the same item is not kept (`!ItemStack.isSameItem(remainder,
+                // stack)`): what the funnel took of it stays on as well.
+                export_to_belt_funnel(self.lv, above, f, &stack, false) != Some(0)
+            });
+            with_world(|w| w.depot_set_incoming(dim, pos, incoming));
+            for slot in depot::OUTPUTS {
+                let Some(stack) = items::slot(self.lv, pos, slot as u32) else {
                     continue;
                 };
                 let count = stack.count();
-                let Some(left) = export_to_belt_funnel(self.lv, above, f, &stack, false) else {
-                    continue;
-                };
-                if left != count {
+                if let Some(left) = export_to_belt_funnel(self.lv, above, f, &stack, false)
+                    && left != count
+                {
                     let rest = items::with_count(&stack, left).filter(|_| left > 0);
-                    items::set_slot(self.lv, self.pos, slot, rest);
+                    items::set_slot(self.lv, pos, slot as u32, rest);
                 }
             }
+            return Vec::new();
         }
-        let Some(slots) = items::slots(self.lv, self.pos, create_engine::depot::SLOTS as u32)
-        else {
+        // The held stack, every incoming one, then each output.
+        let Some(slots) = items::slots(self.lv, pos, depot::SLOTS as u32) else {
             return Vec::new();
         };
-        let taken: Vec<(String, u8)> = slots
-            .iter()
-            .flatten()
-            .map(|s| (items::key_of(&*self.lv.host, s), s.count().min(255) as u8))
-            .collect();
+        let key =
+            |s: &mod_api::ItemStack| (items::key_of(&*self.lv.host, s), s.count().min(255) as u8);
+        let mut taken: Vec<(String, u8)> = slots[0].iter().map(key).collect();
+        let incoming = with_world(|w| w.depot_incoming(dim, pos).to_vec()).unwrap_or_default();
+        taken.extend(incoming.into_iter().map(|i| (i.item, i.count)));
+        taken.extend(slots[depot::OUTPUTS].iter().flatten().map(key));
         if !taken.is_empty() {
-            let clear = (0..create_engine::depot::SLOTS as u32).map(|i| (i, None));
-            items::set_slots(self.lv, self.pos, clear);
-            let dim = self.lv.dim;
-            with_world(|w| w.depot_put(dim, self.pos, None));
+            let clear = (0..depot::SLOTS as u32).map(|i| (i, None));
+            items::set_slots(self.lv, pos, clear);
+            with_world(|w| {
+                w.depot_set_incoming(dim, pos, Vec::new());
+                w.depot_put(dim, pos, None);
+            });
         }
         taken
     }

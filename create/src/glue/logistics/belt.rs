@@ -432,17 +432,28 @@ pub fn handle_insertion(
     let dim = lv.dim;
     let is_depot = with_world(|w| w.dims[dim].depots.contains_key(&next)) == Some(true);
     if is_depot {
-        // An ejector merges onto what it holds, up to its stack size (`enableMerging`).
+        // DepotBehaviour.tryInsertingFromSide: the stack comes in at the edge it crossed (at
+        // the centre from above or below), its angle, side offset and fan progress kept.
+        let held = create_engine::depot::Held {
+            position: if side.axis() == Axis::Y { 0.5 } else { 0.0 },
+            from: create_engine::depot::Side::from_dir(side),
+            angle: item.angle,
+            side_offset: item.side_offset,
+            locked: false,
+            fan: item.fan,
+        };
+        // An ejector merges onto what it holds, up to its stack size (`enableMerging`): onto a
+        // held stack it slides in on its own (`incoming`).
         let mut item = item.clone();
         let mut rest = 0;
         if super::arms::is_ejector(dim, next) {
-            let left = super::arms::depot_insert(lv, next, &item.item, item.count, true);
+            let left = super::arms::depot_insert(lv, next, &item.item, item.count, held, true);
             if left == item.count || simulate {
                 return Some(left);
             }
             if !depot_items(lv, next).is_empty() {
                 return Some(super::arms::depot_insert(
-                    lv, next, &item.item, item.count, false,
+                    lv, next, &item.item, item.count, held, false,
                 ));
             }
             item.count -= left;
@@ -462,14 +473,6 @@ pub fn handle_insertion(
         if !items::set_slot(lv, next, 0, Some(put)) {
             return None;
         }
-        let held = create_engine::depot::Held {
-            position: if side.axis() == Axis::Y { 0.5 } else { 0.0 },
-            from: create_engine::depot::Side::from_dir(side),
-            angle: item.angle,
-            side_offset: item.side_offset,
-            locked: false,
-            fan: item.fan,
-        };
         with_world(|w| w.depot_put(dim, next, Some(held)));
         return Some(rest);
     }

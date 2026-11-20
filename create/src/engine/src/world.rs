@@ -221,6 +221,11 @@ pub struct Dimension {
     sequencer_steps: Vec<([i32; 3], crate::sequencer::Step)>,
     /// Depots and their held stack's motion; the stacks are in their block entities' slots.
     pub depots: HashMap<[i32; 3], Option<crate::depot::Held>>,
+    /// Merging depots' (ejectors') stacks still sliding in to join the held one
+    /// (`DepotBehaviour.incoming`), whole, and those of removed depots to drop
+    /// (`DepotBehaviour.destroy`).
+    pub depot_incoming: HashMap<[i32; 3], Vec<crate::depot::Incoming>>,
+    pub depot_drops: Vec<([i32; 3], String, u8)>,
     /// Depots whose held stack still slides.
     pub sliding: Vec<[i32; 3]>,
     block_entities: BlockEntityOrder,
@@ -2008,6 +2013,9 @@ impl CreateWorld {
                 d.sliding.retain(|p| *p != pos);
                 d.depot_changes.push(pos);
             }
+            for i in d.depot_incoming.remove(&pos).unwrap_or_default() {
+                d.depot_drops.push((pos, i.item, i.count));
+            }
             if d.settings.remove(&pos).is_some() {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
@@ -2160,6 +2168,8 @@ impl CreateWorld {
             d.backtank_saved
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.depots.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.depot_incoming
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.presses.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.gauges.retain(|p, _| {
                 let keep = (p[0] >> 4, p[2] >> 4) != (cx, cz);
@@ -3412,14 +3422,116 @@ impl CreateWorld {
 
     /// `DepotBehaviour.write`: slots retain item identity; this saves its transport state.
     pub fn saved_depot(&self, dim: usize, pos: [i32; 3]) -> Option<crate::depot::SavedDepot> {
+        let d = self.dims.get(dim)?;
         Some(crate::depot::SavedDepot {
-            held: *self.dims.get(dim)?.depots.get(&pos)?,
+            held: *d.depots.get(&pos)?,
+            incoming: d.depot_incoming.get(&pos).cloned().unwrap_or_default(),
         })
     }
 
     /// `DepotBehaviour.read`, after block_loaded and before the first depot tick.
     pub fn restore_depot(&mut self, dim: usize, pos: [i32; 3], saved: crate::depot::SavedDepot) {
         self.depot_put(dim, pos, saved.held);
+        let d = &mut self.dims[dim];
+        if !d.depots.contains_key(&pos) {
+            return;
+        }
+        if saved.incoming.is_empty() {
+            d.depot_incoming.remove(&pos);
+        } else {
+            d.depot_incoming.insert(pos, saved.incoming);
+        }
+    }
+
+    /// The stacks sliding onto the depot at `pos` (`DepotBehaviour.incoming`), oldest first.
+    pub fn depot_incoming(&self, dim: usize, pos: [i32; 3]) -> &[crate::depot::Incoming] {
+        self.dims[dim]
+            .depot_incoming
+            .get(&pos)
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// `incoming.add`: a stack put on the merging depot at `pos` while it held one.
+    pub fn depot_add_incoming(&mut self, dim: usize, pos: [i32; 3], i: crate::depot::Incoming) {
+        let d = &mut self.dims[dim];
+        if d.depots.contains_key(&pos) {
+            d.depot_incoming.entry(pos).or_default().push(i);
+            d.depot_changes.push(pos);
+        }
+    }
+
+    /// The depot at `pos`'s incoming stacks as they are now (an ejector's funnel took from them,
+    /// `launchItems` took them all).
+    pub fn depot_set_incoming(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        incoming: Vec<crate::depot::Incoming>,
+    ) {
+        let d = &mut self.dims[dim];
+        if !d.depots.contains_key(&pos) {
+            return;
+        }
+        if incoming.is_empty() {
+            if d.depot_incoming.remove(&pos).is_some() {
+                d.depot_changes.push(pos);
+            }
+        } else if d.depot_incoming.get(&pos) != Some(&incoming) {
+            d.depot_incoming.insert(pos, incoming);
+            d.depot_changes.push(pos);
+        }
+    }
+
+    /// `DepotBehaviour.tick`'s first part: each incoming stack slides
+    /// (`tick(TransportedItemStack)`, `upright` saying which items stand), and each that reaches
+    /// the centre leaves the list: it becomes the held stack when there is none (taking its
+    /// motion), else it is for the held slot's owner to join or drop. In the list's order.
+    pub fn tick_incoming(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        upright: impl Fn(&str) -> bool,
+    ) -> Vec<crate::depot::Arrival> {
+        use crate::depot::Arrival;
+        let d = &mut self.dims[dim];
+        let Some(list) = d.depot_incoming.get_mut(&pos) else {
+            return Vec::new();
+        };
+        let Some(held) = d.depots.get_mut(&pos) else {
+            return Vec::new();
+        };
+        let mut arrivals = Vec::new();
+        let mut new_held = None;
+        list.retain_mut(|i| {
+            if !i.motion.slide(upright(&i.item)) {
+                return true;
+            }
+            let item = std::mem::take(&mut i.item);
+            if held.is_none() {
+                *held = Some(i.motion);
+                new_held = Some(i.motion);
+                arrivals.push(Arrival::Held {
+                    item,
+                    count: i.count,
+                });
+            } else {
+                arrivals.push(Arrival::Onto {
+                    item,
+                    count: i.count,
+                });
+            }
+            false
+        });
+        if list.is_empty() {
+            d.depot_incoming.remove(&pos);
+        }
+        if !arrivals.is_empty() {
+            d.depot_changes.push(pos);
+        }
+        if new_held.is_some_and(|h| h.sliding()) && !d.sliding.contains(&pos) {
+            d.sliding.push(pos);
+        }
+        arrivals
     }
 
     /// A stack was put on the depot at `pos` with this motion (it slides from now on), or its
@@ -7234,7 +7346,7 @@ mod tests {
         let saved = w.saved_depot(0, pos).unwrap();
         w.column_unloaded(0, 0, 0);
         w.block_loaded(0, pos, 10);
-        w.restore_depot(0, pos, saved);
+        w.restore_depot(0, pos, saved.clone());
         assert_eq!(w.saved_depot(0, pos), Some(saved));
         for expected in [0.48592162, 0.48944122, 0.49208093] {
             let mut turns = w.transport_ticks(0, 0);
@@ -7246,8 +7358,120 @@ mod tests {
                     < 0.0000001
             );
         }
-        w.restore_depot(0, pos, crate::depot::SavedDepot { held: None });
+        w.restore_depot(
+            0,
+            pos,
+            crate::depot::SavedDepot {
+                held: None,
+                incoming: Vec::new(),
+            },
+        );
         assert_eq!(w.saved_depot(0, pos).unwrap().held, None);
+        states::clear_range();
+    }
+
+    #[test]
+    fn an_incoming_stack_slides_in_and_joins_as_in_java() {
+        // Issue #202, seed 126: an ejector holds one iron ingot at the centre; a handler puts
+        // 16 more on at tick 81 (`new TransportedItemStack(stack)`: position 0, from above).
+        // Java keeps them in `incoming` and shows them at these positions on ticks 82 to 89;
+        // at tick 90 they join the held stack, 17 at 0.5.
+        use crate::depot::{Arrival, Held, Incoming};
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        states::set_range(10, 1);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            [("create:depot", std::iter::empty())].into_iter(),
+        ));
+        let pos = [0, 8, 0];
+        w.block_changed(0, pos, 0, 10);
+        w.depot_put(0, pos, Some(Held::new(180, false)));
+        let motion = Held {
+            position: 0.0,
+            ..Held::new(37, false)
+        };
+        w.depot_add_incoming(
+            0,
+            pos,
+            Incoming {
+                item: "minecraft:iron_ingot".into(),
+                count: 16,
+                motion,
+            },
+        );
+        let java = [
+            0.125, 0.21875, 0.2890625, 0.34179688, 0.38134766, 0.41101074, 0.43325806, 0.44994354,
+        ];
+        for expected in java {
+            assert!(w.tick_incoming(0, pos, |_| false).is_empty());
+            assert_eq!(w.depot_incoming(0, pos)[0].motion.position, expected);
+        }
+        // Saved with it (`Incoming`) and back.
+        let saved = w.saved_depot(0, pos).unwrap();
+        assert_eq!(saved.incoming.len(), 1);
+        w.column_unloaded(0, 0, 0);
+        w.block_loaded(0, pos, 10);
+        w.restore_depot(0, pos, saved.clone());
+        assert_eq!(w.saved_depot(0, pos), Some(saved));
+        // Tick 90: within 1/16, it arrives onto the held stack.
+        assert_eq!(
+            w.tick_incoming(0, pos, |_| false),
+            [Arrival::Onto {
+                item: "minecraft:iron_ingot".into(),
+                count: 16
+            }]
+        );
+        assert!(w.depot_incoming(0, pos).is_empty());
+        // With nothing held, an arriving stack is the held one, motion and all.
+        w.depot_put(0, pos, None);
+        w.depot_add_incoming(
+            0,
+            pos,
+            Incoming {
+                item: "minecraft:gold_ingot".into(),
+                count: 2,
+                motion: Held::new(5, false),
+            },
+        );
+        w.depot_add_incoming(
+            0,
+            pos,
+            Incoming {
+                item: "minecraft:iron_ingot".into(),
+                count: 3,
+                motion: Held::new(9, false),
+            },
+        );
+        assert_eq!(
+            w.tick_incoming(0, pos, |_| false),
+            [
+                Arrival::Held {
+                    item: "minecraft:gold_ingot".into(),
+                    count: 2
+                },
+                Arrival::Onto {
+                    item: "minecraft:iron_ingot".into(),
+                    count: 3
+                }
+            ]
+        );
+        assert_eq!(w.dims[0].depots[&pos].unwrap().angle, 5);
+        // A removed depot's incoming stacks drop (`destroy`).
+        w.depot_add_incoming(
+            0,
+            pos,
+            Incoming {
+                item: "minecraft:iron_ingot".into(),
+                count: 4,
+                motion,
+            },
+        );
+        w.block_changed(0, pos, 10, 0);
+        assert_eq!(
+            w.dims[0].depot_drops,
+            [(pos, "minecraft:iron_ingot".to_string(), 4)]
+        );
+        assert!(w.dims[0].depot_incoming.is_empty());
         states::clear_range();
     }
 
