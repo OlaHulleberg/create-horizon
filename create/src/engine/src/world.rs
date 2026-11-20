@@ -8070,6 +8070,65 @@ mod tests {
     }
 
     #[test]
+    fn a_wheel_whose_flow_stops_on_its_first_tick_keeps_java_s_capacity() {
+        // create-fuzz `reload-u3.json` with the water source removed instead of the wrench
+        // (both sides report capacity 256 where the wrench case reports 0): a reloaded wheel
+        // holds its saved network (`KineticBlockEntity.read`) but is not in a network object
+        // until `KineticBlockEntity.initialize` on its first tick, and
+        // `WaterWheelBlock.tick` looks at the flow before block entities tick. A flow lost
+        // there runs `setFlowScoreAndUpdate` → `updateGeneratedRotation` →
+        // `applyNewSpeed(_, 0)` → `setNetwork(null)`, whose `KineticNetwork.remove` returns
+        // without `updateFromNetwork(0, 0, 0)` (`!members.containsKey(be)`), so the saved
+        // capacity stays. A wrench turn is what clears it first: `switchToBlockState` →
+        // `KineticNetwork.remove` zeroes the live figures and `read` restores 0.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:water_wheel", vec![("facing", "east")]),
+            ("create:water_wheel", vec![("facing", "south")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let wheel = [0, 8, 0];
+        let (east, south) = (10, 11);
+        w.block_changed(0, wheel, 0, east);
+        w.set_wheel_flow(0, wheel, -1);
+        w.tick(0, &mut Vec::new());
+        let saved = w.dims[0].kinetics.saved_state(wheel, 0).unwrap();
+        assert_eq!(saved.network.map(|n| n.capacity), Some(256.0));
+        w.column_unloaded(0, 0, 0);
+        w.dims[0].kinetics = crate::kinetics::Kinetics::new();
+        w.block_loaded(0, wheel, east);
+        assert!(w.dims[0].kinetics.restore_state(wheel, 0, saved));
+        w.restore_wheel_flow(0, wheel, -1);
+        // The block tick's flow determination comes before the entity's first tick: the
+        // column is gone, so the wheel scores 0 and stops.
+        w.set_wheel_flow(0, wheel, 0);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, wheel), Some(0.0));
+        assert_eq!(
+            w.dims[0].kinetics.saved_state(wheel, 0).unwrap().network,
+            None
+        );
+        assert_eq!(
+            w.dims[0].kinetics.network(wheel, 0).map(|n| n.2),
+            Some(256.0),
+            "Java keeps the restored capacity (`KineticNetwork.remove` finds no member)"
+        );
+        // A wrench turn clears the live figures first: `switchToBlockState` removes the
+        // entity from its network (`updateFromNetwork(0, 0, 0)`), and the state change clears
+        // the rest (`KineticBlock.updateIndirectNeighbourShapes`).
+        w.switching_block_state(0, wheel, south);
+        w.block_changed(0, wheel, east, south);
+        let cleared = w.dims[0].kinetics.saved_state(wheel, 0).unwrap();
+        assert_eq!((cleared.speed, cleared.network), (0.0, None));
+        assert_eq!(w.dims[0].kinetics.network(wheel, 0).map(|n| n.2), Some(0.0));
+        states::clear_range();
+    }
+
+    #[test]
     fn a_reloaded_boiler_keeps_driving_its_shaft() {
         // Issue #90, Java tick 119 of create-fuzz seed 21: a running boiler keeps its water
         // supply in its tank's block entity (`BoilerData.write`/`read`), so the next engine
