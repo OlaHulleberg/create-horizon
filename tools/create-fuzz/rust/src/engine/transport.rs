@@ -403,7 +403,7 @@ impl Run {
                     let arrived = self.w.tick_depot(0, p, false);
                     // The glue's `tick_depot`: `handleBeltFunnelOutput` before the processing.
                     if !self.depot_output(p) && arrived {
-                        self.spout_on_depot(p);
+                        self.depot_process_held(p);
                     }
                     continue;
                 }
@@ -421,6 +421,11 @@ impl Run {
                 // block entity by this walk.
                 create_engine::world::TransportTick::Ejector(p) => {
                     self.tick_ejector(p);
+                    continue;
+                }
+                // The glue's `tick_press` (`PressingBehaviour.tick` at the press's turn).
+                create_engine::world::TransportTick::Press(p) => {
+                    self.w.tick_press(0, p);
                     continue;
                 }
                 create_engine::world::TransportTick::Belt(c) => c,

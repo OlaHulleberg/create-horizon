@@ -2,8 +2,8 @@
 //! stack came to rest asks the press two above it (`tick_presses`, `press::depot_step`), which
 //! starts its cycle when a pressing recipe takes the stack and presses one of it at the head's
 //! lowest point (`results_on_depot`); a belt item under a press is held while the press runs and
-//! converted at that point (`press_on_belt`, the belt's `process`). Presses tick after the
-//! logistics phase (`processing::Tools`). Recipes are Create's plain pressing recipes of the
+//! converted at that point (`press_on_belt`, the belt's `process`). Depots ask and presses move
+//! at their turns in the transport walk. Recipes are Create's plain pressing recipes of the
 //! transport contract's items.
 use super::*;
 use crate::transport::Stack;
@@ -26,74 +26,57 @@ impl Run {
         let above = [space[0], space[1] + 1, space[2]];
         belt::processing_blocked(self.w.block_at(0, above), || self.host_collision(above))
     }
-    /// `tick_presses`: the depots whose stack arrived or changed ask the press above; running
-    /// presses move their head.
+    /// `tick_presses`: the deployers the depots asked for (none in the contract, so the asks
+    /// are dropped). Presses are asked at their depot's turn (`press_depot_turn`) and move at
+    /// their own (`tick_press`), in the transport walk.
     pub(super) fn tick_presses(&mut self) {
-        use press::{Step, Tick};
-        let d = &mut self.w.dims[0];
-        let running: Vec<Pos> = d
-            .presses
-            .iter()
-            .filter(|(_, p)| p.running)
-            .map(|(k, _)| *k)
-            .collect();
-        let work = std::mem::take(&mut d.depot_work);
-        if work.is_empty() && running.is_empty() {
+        self.w.dims[0].depot_work.clear();
+    }
+    /// glue/processing/press.rs `depot_turn`: the depot at `at`, its stack arrived and not
+    /// blocked, asks the press two above (`press::depot_step`).
+    pub(super) fn press_depot_turn(&mut self, at: Pos) {
+        use press::Step;
+        let above = [at[0], at[1] + 2, at[2]];
+        let Some(mut p) = self.w.dims[0].presses.get(&above).copied() else {
+            return;
+        };
+        let Some(Some(mut held)) = self.w.dims[0].depots.get(&at).copied() else {
+            return;
+        };
+        let Some(stack) = self.depot_stacks.get(&at).cloned() else {
+            return;
+        };
+        let speed = self.w.speed(0, above).unwrap_or(0.);
+        let fits = pressing(&stack.item).is_some();
+        match press::depot_step(&mut held, &p, speed, fits) {
+            Step::Wait => {}
+            Step::Start => {
+                p.start(press::Mode::Belt);
+                self.w.dims[0].presses.insert(above, p);
+            }
+            Step::Process => held = self.press_on_depot(at, &stack, held),
+        }
+        if let Some(h) = self.w.dims[0].depots.get_mut(&at) {
+            *h = h.map(|_| held);
+        }
+    }
+    /// glue/logistics/depot.rs `process_held`: the machine two above an arrived stack, unless
+    /// none is there or (unlocked) the block over the depot is in the way (`isBlocked`).
+    pub(super) fn depot_process_held(&mut self, at: Pos) {
+        let Some(block) = self.w.block_at(0, [at[0], at[1] + 2, at[2]]) else {
+            return;
+        };
+        if !belt::processes_below(block) {
             return;
         }
-        let mut keep = Vec::new();
-        for at in work {
-            let above = [at[0], at[1] + 2, at[2]];
-            let Some(mut p) = self.w.dims[0].presses.get(&above).copied() else {
-                continue;
-            };
-            let Some(Some(mut held)) = self.w.dims[0].depots.get(&at).copied() else {
-                continue;
-            };
-            if held.sliding() && held.position < 0.5 - 1. / 16. {
-                continue;
-            }
-            let Some(stack) = self.depot_stacks.get(&at).cloned() else {
-                continue;
-            };
-            let speed = self.w.speed(0, above).unwrap_or(0.);
-            let in_way = self.processing_blocked(at);
-            let fits = pressing(&stack.item).is_some();
-            match press::depot_step(&mut held, &p, speed, in_way, fits) {
-                Step::Idle => {}
-                Step::Wait => keep.push(at),
-                Step::Start => {
-                    p.start(press::Mode::Belt);
-                    self.w.dims[0].presses.insert(above, p);
-                    keep.push(at);
-                }
-                Step::Process => {
-                    held = self.press_on_depot(at, &stack, held);
-                    keep.push(at);
-                }
-            }
-            if let Some(h) = self.w.dims[0].depots.get_mut(&at) {
-                *h = h.map(|_| held);
-            }
+        let locked = matches!(self.w.dims[0].depots.get(&at), Some(Some(h)) if h.locked);
+        if !locked && self.processing_blocked(at) {
+            return;
         }
-        for at in running {
-            let speed = self.w.speed(0, at).unwrap_or(0.);
-            let d = &mut self.w.dims[0];
-            let Some(p) = d.presses.get_mut(&at) else {
-                continue;
-            };
-            if p.tick(speed) == Tick::Done {
-                let below = [at[0], at[1] - 2, at[2]];
-                if d.depots.contains_key(&below) && !keep.contains(&below) {
-                    keep.push(below);
-                }
-            }
-        }
-        let d = &mut self.w.dims[0];
-        for p in keep {
-            if !d.depot_work.contains(&p) {
-                d.depot_work.push(p);
-            }
+        match block {
+            create_engine::Block::Spout => self.spout_on_depot(at),
+            create_engine::Block::MechanicalPress => self.press_depot_turn(at),
+            _ => {}
         }
     }
     /// `press_on_depot` and `results_on_depot`: one of the held stack becomes the recipe's

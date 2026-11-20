@@ -73,7 +73,7 @@ impl Run {
         // block change).
         self.ejector_signals();
         self.tick_transport();
-        // `processing::Tools`: presses on what the depots and belts did this tick.
+        // `processing::Tools`: the deployers the depots asked for.
         self.tick_presses();
         self.ejectors_ticked();
         self.save_fluid_entities();
