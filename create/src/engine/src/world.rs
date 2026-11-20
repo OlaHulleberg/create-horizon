@@ -6154,7 +6154,7 @@ mod tests {
         let mut h = crate::depot::Held::new(0, false);
         h.position = 0.0;
         w.depot_put(0, e, Some(h));
-        let mut turns = w.transport_ticks(0);
+        let mut turns = w.transport_ticks(0, 0);
         assert_eq!(turns.next(&mut w), Some(TransportTick::Ejector(e)));
         // `DepotBehaviour.tick` inside `EjectorBlockEntity.tick`'s `super.tick()`: the
         // stack slides a quarter of the way left (0.125 after one tick, as Java's tick 41).
@@ -6166,7 +6166,7 @@ mod tests {
         // that began retracting while its shaft stood still still ticks, so it winds down
         // once its shaft turns.
         assert_eq!(
-            w.transport_ticks(0).next(&mut w),
+            w.transport_ticks(0, 0).next(&mut w),
             Some(TransportTick::Ejector(e))
         );
     }
@@ -6206,7 +6206,7 @@ mod tests {
     /// its kinetic base, then the depot behaviour it extends, then its own tick.
     fn walk_ejectors(w: &mut CreateWorld, ticks: usize) {
         for _ in 0..ticks {
-            let mut turns = w.transport_ticks(0);
+            let mut turns = w.transport_ticks(0, 0);
             while let Some(turn) = turns.next(w) {
                 match turn {
                     TransportTick::Ejector(p) => {
