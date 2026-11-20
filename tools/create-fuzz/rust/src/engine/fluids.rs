@@ -403,7 +403,7 @@ mod tests {
         );
         assert_eq!(d.plumbing.creative_saved[&[3, 8, 0]], Some(Fluid::Lava));
         assert_eq!(d.spouts[&[4, 8, 0]].fluid, Some((Fluid::Water, 750)));
-        assert_eq!(d.spouts[&[4, 8, 0]].processing, -1); // glue persists no spout cycle
+        assert_eq!(d.spouts[&[4, 8, 0]].processing, 8); // `ProcessingTicks`, as the glue saves it
         let dr = &d.drains[&[5, 8, 0]];
         assert_eq!(dr.processing, 7);
         assert_eq!(dr.held.as_ref().unwrap().prev, 0.375);
