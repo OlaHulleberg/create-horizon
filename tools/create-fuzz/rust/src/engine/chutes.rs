@@ -102,8 +102,27 @@ impl Run {
             self.chute_at([p[0], p[1] + 1, p[2]]),
             self.chute_motion(p),
             || !self.input_chutes(p).is_empty(),
-            true,
+            self.chute_open(p),
         )
+    }
+    /// The glue's `chute_open` (`AbstractChuteBlock.isOpenChute`).
+    fn chute_open(&self, p: Pos) -> bool {
+        match self.chute_block(p) {
+            Some((Block::Chute, _)) => {
+                chute::is_open(self.chute_at(p).unwrap_or(Dir::Down), self.chute_shape(p))
+            }
+            Some((Block::SmartChute, _)) => chute::is_open(Dir::Down, None),
+            _ => false,
+        }
+    }
+    /// The glue's `chute_shape`: `ChuteBlock.SHAPE` of the chute at `p`.
+    fn chute_shape(&self, p: Pos) -> Option<Shape> {
+        let state = self.name(self.at(p));
+        let (_, props) = crate::scenario::parse_state(&state);
+        props
+            .iter()
+            .find(|(k, _)| k == "shape")
+            .and_then(|(_, v)| Shape::read(v))
     }
     /// `chute_direct_input` and `chute_take`: the whole stack, at the top, while it is empty and
     /// takes it.
@@ -139,12 +158,7 @@ impl Run {
                 continue;
             };
             let state = self.name(self.at(pos));
-            let (_, props) = crate::scenario::parse_state(&state);
-            let shape = props
-                .iter()
-                .find(|(k, _)| k == "shape")
-                .and_then(|(_, v)| Shape::read(v))
-                .unwrap_or(Shape::Normal);
+            let shape = self.chute_shape(pos).unwrap_or(Shape::Normal);
             let facing = info.facing.unwrap_or(Dir::Down);
             let funnel_down = self
                 .funnel_at([pos[0], pos[1] + 1, pos[2]])
