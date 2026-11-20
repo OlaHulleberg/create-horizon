@@ -412,10 +412,7 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
     // `Level.blockEntityTickers`: each chute ticks at its own turn, so a stack a chute hands
     // down during its turn moves on in the same level tick when the chute below is registered
     // after it, and waits a tick when it is registered before it.
-    while let Some(turn) = with_world(|w| phase.next(w)).flatten() {
-        let create_engine::world::TransportTick::Chute(pos) = turn else {
-            continue;
-        };
+    while let Some(pos) = with_world(|w| phase.next(w)).flatten() {
         let Some(position) = with_world(|w| w.dims[dim].chutes.get(&pos).copied()).flatten() else {
             continue;
         };

@@ -19,9 +19,8 @@ fn entity_view(block: Block) -> Option<View> {
         | Block::FluidPipe
         | Block::GlassFluidPipe
         | Block::EncasedFluidPipe
-        | Block::SmartFluidPipe
-        | Block::Chute
-        | Block::SmartChute => Some(View::Transport),
+        | Block::SmartFluidPipe => Some(View::Transport),
+        Block::Chute | Block::SmartChute => Some(View::Chute),
         Block::FluidValve | Block::FluidTank | Block::CreativeFluidTank => Some(View::Transport),
         _ => None,
     }
@@ -794,17 +793,12 @@ pub enum TransportTick {
     Pipe([i32; 3]),
     Depot([i32; 3]),
     Belt([i32; 3]),
-    /// `ChuteBlockEntity.tick`, in the same registration order (a chute registered after the
-    /// one above it moves a stack handed down to it in the same level tick).
-    Chute([i32; 3]),
 }
 
 /// Resumable level transport walk; inventories are inspected at their turn.
 pub struct TransportTicks {
     dim: usize,
     entities: Walk,
-    /// Only the chutes of the order (`ChuteBlockEntity.tick` walks it apart).
-    chutes: bool,
 }
 impl TransportTicks {
     fn controller_turn(world: &mut CreateWorld, dim: usize, c: [i32; 3]) -> bool {
@@ -825,12 +819,6 @@ impl TransportTicks {
     pub fn next(&mut self, world: &mut CreateWorld) -> Option<TransportTick> {
         while let Some(p) = self.entities.next(&world.dims[self.dim].block_entities) {
             match world.block_at(self.dim, p) {
-                Some(Block::Chute | Block::SmartChute) => {
-                    if self.chutes {
-                        return Some(TransportTick::Chute(p));
-                    }
-                }
-                Some(_) if self.chutes => {}
                 Some(Block::FluidValve | Block::FluidTank | Block::CreativeFluidTank) => {
                     return Some(TransportTick::Fluid(p));
                 }
@@ -856,6 +844,18 @@ impl TransportTicks {
             }
         }
         None
+    }
+}
+
+/// Resumable walk of a level's chutes in registration order; a chute registered during the
+/// walk waits for the next one, one removed before its turn is skipped.
+pub struct ChuteTicks {
+    dim: usize,
+    entities: Walk,
+}
+impl ChuteTicks {
+    pub fn next(&mut self, world: &CreateWorld) -> Option<[i32; 3]> {
+        self.entities.next(&world.dims[self.dim].block_entities)
     }
 }
 
@@ -4949,18 +4949,16 @@ impl CreateWorld {
         TransportTicks {
             dim,
             entities: self.dims[dim].block_entities.walk(View::Transport),
-            chutes: false,
         }
     }
 
-    /// The same registration order as `transport_ticks`, walking only its chutes
-    /// (`ChuteBlockEntity.tick`): one chute registered after another moves the stack that one
+    /// The level's chutes in block-entity registration order (`ChuteBlockEntity.tick` on
+    /// `Level.blockEntityTickers`): one chute registered after another moves the stack that one
     /// hands down to it within the same level tick.
-    pub fn chute_ticks(&mut self, dim: usize) -> TransportTicks {
-        TransportTicks {
+    pub fn chute_ticks(&self, dim: usize) -> ChuteTicks {
+        ChuteTicks {
             dim,
-            entities: self.dims[dim].block_entities.walk(View::Transport),
-            chutes: true,
+            entities: self.dims[dim].block_entities.walk(View::Chute),
         }
     }
 
@@ -5416,7 +5414,10 @@ mod tests {
         // target is registered after it, and waits a tick when it is registered before it.
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
-            ("create:chute", vec![("facing", "down"), ("shape", "normal")]),
+            (
+                "create:chute",
+                vec![("facing", "down"), ("shape", "normal")],
+            ),
             ("create:smart_chute", vec![]),
         ];
         states::set_range(10, names.len() as u32);
@@ -5424,22 +5425,25 @@ mod tests {
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
         ));
-        // The chute at z 6 is placed after the one at z 5: it ticks after it.
-        w.apply_block_change(0, [0, 9, 5], 0, 10, false);
+        // Registration order, not position: the chute below is placed first, so it ticks
+        // before the one above it (whose stack then waits a tick); the one at z 6 last.
         w.apply_block_change(0, [0, 8, 5], 0, 10, false);
-        w.apply_block_change(0, [0, 8, 6], 0, 10, false);
-        let order = |mut phase: TransportTicks, w: &mut CreateWorld| {
+        w.apply_block_change(0, [0, 9, 5], 0, 10, false);
+        w.apply_block_change(0, [0, 8, 6], 0, 11, false);
+        let order = |mut phase: ChuteTicks, w: &CreateWorld| {
             let mut out = Vec::new();
-            while let Some(TransportTick::Chute(p)) = phase.next(w) {
+            while let Some(p) = phase.next(w) {
                 out.push(p);
             }
             out
         };
         assert_eq!(
-            order(w.chute_ticks(0), &mut w),
-            vec![[0, 9, 5], [0, 8, 5], [0, 8, 6]]
+            order(w.chute_ticks(0), &w),
+            vec![[0, 8, 5], [0, 9, 5], [0, 8, 6]]
         );
-        // The belts' own walk skips them (they tick in their own pass).
+        // One removed leaves the walk; the transport walk never holds them.
+        w.apply_block_change(0, [0, 8, 5], 10, 0, false);
+        assert_eq!(order(w.chute_ticks(0), &w), vec![[0, 9, 5], [0, 8, 6]]);
         let mut phase = w.transport_ticks(0);
         assert!(phase.next(&mut w).is_none());
         states::clear_range();

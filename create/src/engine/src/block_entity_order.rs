@@ -1,4 +1,4 @@
-//! Level.blockEntityTickers registration order, with one indexed transport/fluid view.
+//! Level.blockEntityTickers registration order, with indexed transport/fluid and chute views.
 //! Hash lookups and doubly linked slots make registration/removal O(1) on average;
 //! column unload visits only that column. Walks borrow no world and copy no entries.
 use std::collections::{HashMap, HashSet};
@@ -11,6 +11,8 @@ pub(crate) enum View {
     All,
     /// Belts, depots, tanks, valves, spouts, drains and pumps share their turns.
     Transport,
+    /// Chutes and smart chutes (`ChuteBlockEntity.tick`).
+    Chute,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -24,7 +26,7 @@ struct Slot {
     sequence: u64,
     live: bool,
     view: Option<View>,
-    links: [Links; 2],
+    links: [Links; 3],
 }
 
 #[derive(Default)]
@@ -39,7 +41,7 @@ pub(crate) struct BlockEntityOrder {
     columns: HashMap<(i32, i32), HashSet<Pos>>,
     slots: Vec<Slot>,
     free: Vec<usize>,
-    lists: [List; 2],
+    lists: [List; 3],
     sequence: u64,
     /// Slots removed during a walk retain their forward links until all walks end.
     /// This lease prevents reuse while a paused walk could still reference them.
@@ -60,7 +62,7 @@ impl BlockEntityOrder {
             sequence: self.sequence,
             live: true,
             view,
-            links: [Links::default(); 2],
+            links: [Links::default(); 3],
         };
         let index = if Rc::strong_count(&self.walks) == 1 {
             self.free.pop()
