@@ -102,10 +102,20 @@ pub(crate) fn tooltip_lines(host: &dyn ClientHost, stack: &ItemStack) -> Vec<mod
         .unwrap_or_default()
         .into_iter()
         .filter_map(|element| match element {
-            mod_api::TooltipElement::Text(text, _) => Some(text),
+            mod_api::TooltipElement::Text(text, color) => Some(tooltip_line_text(text, color)),
             _ => None,
         })
         .collect()
+}
+
+/// The tooltip renderer takes components only. Make the line's ABGR colour the
+/// default RGB style, leaving every explicitly styled span alone. Text has no alpha.
+fn tooltip_line_text(mut text: mod_api::Text, color: u32) -> mod_api::Text {
+    if color != u32::MAX && text.style.color.is_none() {
+        let [red, green, blue, _] = color.to_le_bytes();
+        text.style.color = Some(format!("#{red:02X}{green:02X}{blue:02X}"));
+    }
+    text
 }
 
 pub(crate) fn key(item: Item) -> Option<ItemKey> {
@@ -539,4 +549,22 @@ fn wrench_hits_minecart(host: &mut dyn ServerHost, event: &AttackEntityEvent<'_>
     };
     let me = Some(player.entity());
     let _ = cart.hurt(host, "minecraft:player_attack", 100.0, me, me);
+}
+
+#[cfg(test)]
+mod tooltip_tests {
+    use super::tooltip_line_text;
+    use mod_api::Text;
+
+    #[test]
+    fn line_color_is_a_default_for_unstyled_text() {
+        let mut child = Text::literal("child");
+        child.style.color = Some("gold".to_owned());
+        let line = Text::literal("parent").append(child.clone());
+        let styled = tooltip_line_text(line.clone(), 0xFF56_3412);
+        assert_eq!(styled.style.color.as_deref(), Some("#123456"));
+        assert_eq!(styled.children, vec![child.clone()]);
+        assert_eq!(tooltip_line_text(line.clone(), u32::MAX), line);
+        assert_eq!(tooltip_line_text(child.clone(), 0xFF56_3412), child);
+    }
 }
