@@ -144,17 +144,13 @@ fn keeper_entity(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<mod_api::EntityR
             let p = [pos[0] + dx, pos[1] - dy, pos[2] + dz];
             let lo = p.map(f64::from);
             let hi = p.map(|v| f64::from(v) + 1.0);
-            let seat = |e: mod_api::EntityRef| {
-                e.tags(&*lv.host)
-                    .is_some_and(|t| t.iter().any(|t| t == "create.seat"))
-            };
             for e in lv.level.entities_in(&*lv.host, lo, hi).unwrap_or_default() {
-                // The seat stand-in's rider, or a rider on one (a stand-in that came back
-                // from a save is not listed, its rider is).
-                let rider = if seat(e) {
+                let rider = if seat_vehicle(&*lv.host, e) {
                     e.passengers(&*lv.host).and_then(|p| p.first().copied())
                 } else {
-                    e.vehicle(&*lv.host).is_some_and(seat).then_some(e)
+                    e.vehicle(&*lv.host)
+                        .is_some_and(|v| seat_vehicle(&*lv.host, v))
+                        .then_some(e)
                 };
                 if rider.is_some() {
                     found = rider;
@@ -171,14 +167,16 @@ fn keeper_entity(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<mod_api::EntityR
     found
 }
 
+fn seat_vehicle(host: &dyn Host, entity: mod_api::EntityRef) -> bool {
+    entity
+        .kind(host)
+        .is_some_and(|kind| kind.id(host) == super::super::contraptions::seats::ENTITY_TYPE)
+}
+
 /// `getStockTickerPosition`: the one stock ticker beside a seated entity, or above that.
 pub(super) fn ticker_beside(lv: &ServerLevel<'_>, entity: mod_api::EntityRef) -> Option<[i32; 3]> {
     let root = entity.root_vehicle(&*lv.host)?;
-    if root == entity
-        || !root
-            .tags(&*lv.host)
-            .is_some_and(|t| t.iter().any(|t| t == "create.seat"))
-    {
+    if root == entity || !seat_vehicle(&*lv.host, root) {
         return None;
     }
     let at = entity.block_position(&*lv.host)?;

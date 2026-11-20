@@ -1,12 +1,13 @@
 //! Create's seats (`SeatBlock`, `SeatEntity`): a click seats the player on an invisible seat
 //! entity at the block, a mob that lands on one sits down (`updateEntityAfterFallOn`), and the
 //! seat goes, letting its rider off, once it has none or its block is gone (`SeatEntity.tick`).
-//! The game's seat stand-in is placed where Create's seat puts its rider; the dyes are
-//! `dye::SEATS`.
+//! The seat's passenger point is above its anchor; the dyes are `dye::SEATS`.
 
 /// `SeatEntity.build`: `sized(0.25f, 0.35f)`; riders sit on its top (`getPassengerRidingPosition`:
 /// its height above its position).
 pub const HEIGHT: f32 = 0.35;
+/// `SeatEntity.positionRider`: an extra sixteenth of a block above the ride point.
+pub const PASSENGER_HEIGHT: f64 = HEIGHT as f64 + 1.0 / 16.0;
 
 /// `SeatEntity.getCustomEntitySeatOffset`: how much higher some mobs sit, by their type
 /// (`instanceof`: a cave spider is a spider, a magma cube a slime).
@@ -23,14 +24,12 @@ pub fn custom_offset(kind: &str) -> f64 {
     }
 }
 
-/// Where a seat for a rider of `kind` on the seat block at `pos` goes, for a game whose seat
-/// puts its riders their own vehicle attachment below it (`Entity.positionRider`). Create's seat
-/// stands at the block's bottom centre (`sitDown`: `pos + (.5, 0, .5)`) and puts its rider 1/16
-/// above its top, less the rider's attachment, plus the custom offset (`positionRider`).
-pub fn seat_at(pos: [i32; 3], kind: &str) -> [f64; 3] {
+/// The bottom centre of the seat block, plus the rider-specific `positionRider` offset.
+/// The general entity contributes the constant part via its passenger attachment.
+pub fn seat_anchor(pos: [i32; 3], kind: &str) -> [f64; 3] {
     [
         f64::from(pos[0]) + 0.5,
-        f64::from(pos[1]) + 1.0 / 16.0 + f64::from(HEIGHT) + custom_offset(kind),
+        f64::from(pos[1]) + custom_offset(kind),
         f64::from(pos[2]) + 0.5,
     ]
 }
@@ -106,12 +105,16 @@ mod tests {
     #[test]
     fn riders_sit_where_create_s_seat_puts_them() {
         // A player (vehicle attachment 0.6) on a seat at y 64: feet at 64 + 1/16 + 0.35 - 0.6.
-        let s = seat_at([3, 64, -2], "minecraft:player");
+        let s = seat_anchor([3, 64, -2], "minecraft:player");
         assert_eq!((s[0], s[2]), (3.5, -1.5));
-        assert!((s[1] - 0.6 - (64.0 + 0.0625 + 0.35 - 0.6)).abs() < 1e-6);
+        assert_eq!(s[1], 64.0);
+        assert_eq!(
+            s[1] + PASSENGER_HEIGHT - 0.6,
+            64.0 + 0.0625 + f64::from(0.35_f32) - 0.6
+        );
         // A skeleton sits an eighth higher, a cave spider as a spider, a pig as anyone.
-        let k = seat_at([0, 0, 0], "minecraft:skeleton")[1];
-        assert!((k - (0.0625 + 0.35 + 0.125)).abs() < 1e-6);
+        let k = seat_anchor([0, 0, 0], "minecraft:skeleton")[1];
+        assert_eq!(k, 0.125);
         assert_eq!(custom_offset("minecraft:cave_spider"), 0.125);
         assert_eq!(custom_offset("minecraft:pig"), 0.0);
         assert!((custom_offset("minecraft:frog") - 0.09375).abs() < 1e-9);
