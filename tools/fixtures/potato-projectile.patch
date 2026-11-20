@@ -1,0 +1,149 @@
+--- a/create/src/glue/items/potato.rs
++++ b/create/src/glue/items/potato.rs
+@@ -301,6 +301,24 @@
+
+ struct Projectile;
+
++thread_local! {
++    static TEST_AGES: RefCell<HashMap<u32, u32>> = RefCell::new(HashMap::new());
++    static DRAWN: Cell<Option<u32>> = const { Cell::new(None) };
++    static LAST_DRAWN_AT: Cell<Option<[f64; 3]>> = const { Cell::new(None) };
++}
++
++pub(crate) fn flight_probe(host: &dyn ClientHost) {
++    if let Some(at) = DRAWN.get().and_then(|id| host.entity(id)).and_then(|e| e.position(host))
++        && LAST_DRAWN_AT.replace(Some(at)) != Some(at)
++    {
++        eprintln!("[flight] client position {at:?}");
++    }
++}
++
++pub(crate) fn ammo_probe(host: &mut dyn ServerHost, id: u32) -> Option<&'static str> {
++    Some(AMMO.get_existing(host, Holder::Entity(id)).ok()?.flatten()?.kind.id)
++}
++
+ #[mod_api::sunrise_part]
+ impl EntityPart for Projectile {
+     fn general_entity_tick(
+@@ -330,6 +348,13 @@
+             return Ok(());
+         };
+         let [yaw, pitch] = CAMERA.get();
++        if std::env::var("POTATO_TEST").as_deref() == Ok("flight") {
++            DRAWN.set(Some(entity.id));
++            thread_local! { static LAST_POSE: Cell<Option<[f32; 2]>> = const { Cell::new(None) }; }
++            if LAST_POSE.replace(Some([yaw, pitch])) != Some([yaw, pitch]) {
++                eprintln!("[flight] drawing {} as {} yaw={yaw} pitch={pitch}", entity.id, ammo.kind.id);
++            }
++        }
+         draw.rotate_about([0.0, 1.0, 0.0], 180.0 - yaw, [0.0; 3]);
+         draw.rotate_about([1.0, 0.0, 0.0], -pitch, [0.0; 3]);
+         draw.item(&ammo.stack, ItemDisplayContext::Ground, None, 0);
+@@ -671,6 +696,17 @@
+     let (Some(from), Some(velocity)) = (e.position(host), e.velocity(host)) else {
+         return;
+     };
++    let age = TEST_AGES.with_borrow_mut(|ages| {
++        let age = ages.entry(e.id()).or_default();
++        *age += 1;
++        *age
++    });
++    if age <= 90 {
++        let uuid = e.uuid(host).unwrap_or_default();
++        let owner = e.owner(host).and_then(|owner| owner.uuid(host)).unwrap_or_default();
++        let stuck = STUCK.get_existing(host, holder).ok().flatten().is_some_and(|s| s.lock().unwrap().is_some());
++        eprintln!("[flight] tick {} {uuid} age={age} from={from:?} velocity={velocity:?} owner={owner} stuck={stuck} recovery={}", e.id(), flight.recovery);
++    }
+     if let Ok(Some(stuck)) = STUCK.get_existing(host, holder) {
+         let follow = *stuck.lock().unwrap_or_else(|err| err.into_inner());
+         if let Some(mut follow) = follow {
+@@ -719,6 +755,7 @@
+             return;
+         }
+         if let Some(hit) = candidate {
++            eprintln!("[flight] hit entity {} age={age}", e.id());
+             match hit_entity(host, level, e, hit, owner, &ammo, flight) {
+                 Impact::Gone => {
+                     e.remove(host, mod_api::RemovalReason::Discarded);
+@@ -734,6 +771,7 @@
+                 Impact::Continue => {}
+             }
+         } else if !block.miss {
++            eprintln!("[flight] hit block {} age={age}", e.id());
+             pop(host, level, &ammo, block.location);
+             if !block_hit(host, level, &ammo, block) {
+                 leave_item(host, level, e, &ammo, flight);
+@@ -741,6 +779,8 @@
+             e.remove(host, mod_api::RemovalReason::Discarded);
+             return;
+         }
++    } else {
++        eprintln!("[flight] unanswered clip {} age={age} from={from:?} to={to:?}", e.id());
+     }
+     // An unanswered clip isn't evidence of either kind of hit. Keep flying, including
+     // above the build ceiling; don't publish any impact on an unanswered segment.
+--- a/create/src/lib.rs
++++ b/create/src/lib.rs
+@@ -214,6 +214,7 @@
+     }
+
+     fn client_tick_post(&self, host: &mut dyn ClientHost, _event: &mut ClientTickPostEvent) {
++        glue::items::potato::flight_probe(host);
+         for s in SUBSYSTEMS {
+             s.client_tick(host);
+         }
+@@ -377,7 +378,45 @@
+         host: &mut dyn ServerHost,
+         event: &mut EntityJoinLevelEvent<'_>,
+     ) -> Flow {
++        if event.kind == "create:potato_projectile" {
++            use std::sync::atomic::{AtomicUsize, Ordering};
++            static JOINS: AtomicUsize = AtomicUsize::new(0);
++            let ammo = glue::items::potato::ammo_probe(host, event.entity);
++            eprintln!("[flight] join {} saved={} ammo={ammo:?}", event.entity, event.loaded_from_disk);
++            if !event.loaded_from_disk {
++                let index = JOINS.fetch_add(1, Ordering::Relaxed);
++                match std::env::var("POTATO_TEST").as_deref() {
++                    Ok("veto") | Ok("partial") if index == 0 => {
++                        eprintln!("[potato check] join refused {}", event.entity);
++                        return Flow::Cancel;
++                    }
++                    Ok("swap" | "ammo_swap") => {
++                        let players = host.players().server_players();
++                        if let [player] = players.as_slice() {
++                            assert!(player.set_selected_slot(host, 2));
++                            eprintln!("[potato check] selected slot changed at join");
++                        }
++                    }
++                    _ => {}
++                }
++            }
++        }
+         until_cancel(|s| s.entity_join_level(host, event))
++    }
++
++    fn player_inventory_changed(&self, host: &mut dyn ServerHost, event: &mut mod_api::PlayerInventoryChangedEvent<'_>) {
++        if std::env::var("POTATO_TEST").as_deref() == Ok("pay_switch")
++            && let Some(Some(stack)) = event.stacks.get(1)
++            && stack.count() == 9
++            && stack.item().id(host) == "minecraft:potato"
++            && let Some(player) = host.player(event.player)
++            && player.selected_slot(host) == Some(0)
++        {
++            assert_eq!(glue::items::custom(event.stacks[0].as_ref().unwrap()).get(&"create:shaper_swap".into()), Some(&mod_api::Tag::Byte(1)));
++            assert_eq!(glue::items::custom(event.stacks[38].as_ref().unwrap()).get(&"create:backtank_air".into()), Some(&mod_api::Tag::Int(26)));
++            assert!(player.set_selected_slot(host, 2));
++            eprintln!("[potato check] selected slot changed on ammo debit");
++        }
+     }
+
+     fn key_mapping_pre(
+@@ -405,5 +444,8 @@
+         level: &mut dyn mod_api::HitHost,
+         event: &mut mod_api::LivingIncomingDamageEvent<'_>,
+     ) -> Flow {
++        if event.source.damage_type == "create:potato_cannon" {
++            eprintln!("[flight] damage source direct={} causing={}", event.source.direct, event.source.causing);
++        }
+         until_cancel(|s| s.living_incoming_damage(level, event))
+     }

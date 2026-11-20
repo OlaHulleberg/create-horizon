@@ -210,6 +210,9 @@ pub trait Subsystem: Sync {
     /// `Hooks::register_particle_providers`: the mod's particle types moved by code.
     fn particle_providers(&self, _providers: &mut dyn mod_api::ParticleProviders) {}
 
+    /// `Hooks::register_entity_renderers`: the mod's own entity models.
+    fn entity_renderers(&self, _renderers: &mut dyn mod_api::EntityRenderers) {}
+
     /// `Hooks::register_special_model_renderer`: the special item models the mod draws.
     fn special_model_renderers(&self, _renderers: &mut dyn mod_api::SpecialModelRenderers) {}
 
