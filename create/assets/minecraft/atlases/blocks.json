@@ -114,6 +114,70 @@
       "type": "minecraft:single",
       "resource": "create:particle/steam_jet_22",
       "sprite": "create:block/special/steam_jet_22"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/acacia_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/bamboo_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/birch_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/cherry_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/crimson_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/dark_oak_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/framed_glass_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/horizontal_framed_glass_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/industrial_iron_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/jungle_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/mangrove_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/oak_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/ornate_iron_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/spruce_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/vertical_framed_glass_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/warped_window_connected"
     }
   ]
 }

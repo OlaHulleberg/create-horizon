@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:framed_glass"
+  ],
+  "sprites": [
+    "create:block/palettes/framed_glass"
+  ],
+  "faces": [
+    "all"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/framed_glass_connected",
+  "table": "omni"
+}

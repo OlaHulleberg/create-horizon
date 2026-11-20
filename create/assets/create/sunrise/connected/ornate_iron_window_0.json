@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:ornate_iron_window"
+  ],
+  "sprites": [
+    "create:block/palettes/ornate_iron_window"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/ornate_iron_window_connected",
+  "table": "vertical"
+}

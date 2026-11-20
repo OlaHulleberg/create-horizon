@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:oak_window"
+  ],
+  "sprites": [
+    "create:block/palettes/oak_window"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/oak_window_connected",
+  "table": "vertical"
+}

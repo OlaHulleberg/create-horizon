@@ -29,7 +29,8 @@
 //! casing (`CasingConnectivity`): a casing joins only its own block, an encased block its own
 //! state.
 
-use std::collections::BTreeMap;
+use serde_json::json;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Create's CT types the port's blocks use, with their sheet sizes (`AllCTTypes`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1074,6 +1075,88 @@ fn tank_files(
     }
 }
 
+/// Full framed glass and the nonrandom windows use Create's block-and-cover test without
+/// custom appearance, geometry, or face orientation. Other behaviours keep their local rules.
+fn native(plan: &Plan) -> bool {
+    matches!(
+        plan.name.as_str(),
+        "framed_glass" | "horizontal_framed_glass" | "vertical_framed_glass"
+    ) || (plan.name.ends_with("_window") && plan.name != "weathered_iron_window")
+}
+
+/// Generated Sunrise rules and the sprites they require. The outcomes use exactly the
+/// existing Create context and sheet index; only ids and neighbour masks are written.
+pub(super) fn native_assets() -> (BTreeMap<String, Vec<u8>>, BTreeSet<String>) {
+    let mut files = BTreeMap::new();
+    let mut sprites = BTreeSet::new();
+    for plan in plans().into_iter().filter(native) {
+        for (i, rule) in plan.rules.into_iter().enumerate() {
+            let sheet = format!("create:block/{}", rule.sheet);
+            sprites.insert(sheet.clone());
+            let table = rule.ty.name();
+            files
+                .entry(format!(
+                    "assets/create/sunrise/connected_tables/{table}.json"
+                ))
+                .or_insert_with(|| {
+                    let grid = rule.ty.sheet_size();
+                    let tests: &[(&str, u8)] = match rule.ty {
+                        CtType::Horizontal | CtType::HorizontalKryppers => {
+                            &[("left", L), ("right", R)]
+                        }
+                        CtType::Vertical => &[("up", U), ("down", D)],
+                        CtType::Rectangle => &[("up", U), ("right", R), ("down", D), ("left", L)],
+                        _ => &[
+                            ("up", U),
+                            ("up_right", UR),
+                            ("right", R),
+                            ("down_right", DR),
+                            ("down", D),
+                            ("down_left", DL),
+                            ("left", L),
+                            ("up_left", UL),
+                        ],
+                    };
+                    let tiles: Vec<_> = (0..1 << tests.len())
+                        .map(|outcome| {
+                            let mask = tests
+                                .iter()
+                                .enumerate()
+                                .filter(|(bit, _)| outcome & (1 << bit) != 0)
+                                .fold(0, |mask, (_, (_, offset))| mask | offset);
+                            rule.ty.index(context(mask))
+                        })
+                        .collect();
+                    crate::pretty(&json!({
+                        "tests": tests.iter().map(|(name, _)| name).collect::<Vec<_>>(),
+                        "cover": rule.seams,
+                        "grid": [grid, grid],
+                        "tiles": tiles,
+                    }))
+                });
+            let faces: &[&str] = match rule.faces {
+                Faces::All => &["all"],
+                Faces::Sides => &["sides"],
+                Faces::Ends => &["up", "down"],
+                Faces::Some(_) => unreachable!("glass cube rules use all faces, sides or ends"),
+            };
+            files.insert(
+                format!("assets/create/sunrise/connected/{}_{i}.json", plan.name),
+                crate::pretty(&json!({
+                    "method": "table",
+                    "blocks": [format!("create:{}", plan.name)],
+                    "sprites": [rule.original],
+                    "faces": faces,
+                    "connect": "block",
+                    "sheet": sheet,
+                    "table": table,
+                })),
+            );
+        }
+    }
+    (files, sprites)
+}
+
 /// The files connected textures add: one OptiFine `ctm` properties file per block and sheet,
 /// and each sheet's tiles. Block models stay as Create's: only the terrain mesher swaps the
 /// tiles in. `read` gives a file of the sources. Returns the files and what was left out, with
@@ -1115,7 +1198,7 @@ pub fn files(read: &dyn Fn(&str) -> Option<Vec<u8>>) -> (BTreeMap<String, Vec<u8
             }
         })
     };
-    for plan in plans() {
+    for plan in plans().into_iter().filter(|plan| !native(plan)) {
         let block = plan.blocks[0].split(':').next().unwrap_or_default();
         if read(&format!("assets/create/blockstates/{block}.json")).is_none() {
             skipped.push(format!("{}: no blockstate", plan.name));
@@ -1184,6 +1267,33 @@ mod tests {
 
     fn ctx(mask: u8) -> Ctx {
         context(mask)
+    }
+
+    #[test]
+    fn sunrise_tables_keep_create_s_face_directions() {
+        let (files, _) = native_assets();
+        let table = |name| {
+            serde_json::from_slice::<serde_json::Value>(
+                &files[&format!("assets/create/sunrise/connected_tables/{name}.json")],
+            )
+            .unwrap()
+        };
+        let horizontal = table("horizontal_kryppers");
+        assert_eq!(horizontal["tests"], json!(["left", "right"]));
+        assert_eq!(horizontal["tiles"], json!([0, 3, 2, 1]));
+        let vertical = table("vertical");
+        assert_eq!(vertical["tests"], json!(["up", "down"]));
+        assert_eq!(vertical["tiles"], json!([0, 1, 2, 3]));
+        let omni = table("omni");
+        assert_eq!(omni["tiles"][0x82], json!(0)); // two unsupported diagonal neighbours
+        assert_eq!(omni["tiles"][0xff], json!(54));
+        assert_eq!(omni["cover"], json!(true));
+        assert!(!native(
+            &plans()
+                .into_iter()
+                .find(|p| p.name == "framed_glass_pane")
+                .unwrap()
+        ));
     }
 
     #[test]

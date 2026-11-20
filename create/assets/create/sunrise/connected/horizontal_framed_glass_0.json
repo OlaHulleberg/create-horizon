@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:horizontal_framed_glass"
+  ],
+  "sprites": [
+    "create:block/palettes/framed_glass"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/horizontal_framed_glass_connected",
+  "table": "horizontal_kryppers"
+}

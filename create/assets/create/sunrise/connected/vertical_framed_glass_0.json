@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:vertical_framed_glass"
+  ],
+  "sprites": [
+    "create:block/palettes/framed_glass"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/vertical_framed_glass_connected",
+  "table": "vertical"
+}

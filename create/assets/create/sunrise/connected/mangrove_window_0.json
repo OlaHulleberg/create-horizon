@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:mangrove_window"
+  ],
+  "sprites": [
+    "create:block/palettes/mangrove_window"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/mangrove_window_connected",
+  "table": "vertical"
+}

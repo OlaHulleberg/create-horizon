@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:industrial_iron_window"
+  ],
+  "sprites": [
+    "create:block/palettes/industrial_iron_window"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/industrial_iron_window_connected",
+  "table": "rectangle"
+}

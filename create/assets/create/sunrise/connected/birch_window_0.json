@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:birch_window"
+  ],
+  "sprites": [
+    "create:block/palettes/birch_window"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/birch_window_connected",
+  "table": "vertical"
+}
