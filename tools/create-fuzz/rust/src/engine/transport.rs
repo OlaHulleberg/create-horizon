@@ -58,8 +58,10 @@ impl Run {
                         remainder = None;
                     }
                 } else if self.is_ejector(p) {
-                    // `item_landed`: an ejector merges it onto what it holds.
-                    let left = self.ejector_insert(p, stack, false);
+                    // `item_landed`: an ejector merges it onto what it holds, arriving from
+                    // above at the centre.
+                    let motion = depot::Held::new(180, false);
+                    let left = self.ejector_insert(p, stack, motion, false);
                     remainder = (left > 0).then(|| Stack {
                         item: stack.item.clone(),
                         count: left,
@@ -400,6 +402,7 @@ impl Run {
                     continue;
                 }
                 create_engine::world::TransportTick::Depot(p) => {
+                    self.land_incoming(p);
                     let arrived = self.w.tick_depot(0, p, false);
                     // The glue's `tick_depot`: `handleBeltFunnelOutput` before the processing.
                     if !self.depot_output(p) && arrived {
@@ -603,7 +606,18 @@ impl Run {
             return Some(self.chute_direct_input(p, item));
         }
         if self.w.dims[0].depots.contains_key(&p) {
-            // An ejector merges onto what it holds, up to its stack size (`enableMerging`).
+            // `DepotBehaviour.tryInsertingFromSide`: in at the edge it crossed (at the centre
+            // from above or below), its angle, side offset and fan progress kept.
+            let motion = depot::Held {
+                position: if side.axis() == Axis::Y { 0.5 } else { 0. },
+                from: depot::Side::from_dir(side),
+                angle: item.angle,
+                side_offset: item.side_offset,
+                locked: false,
+                fan: item.fan,
+            };
+            // An ejector merges onto what it holds, up to its stack size (`enableMerging`):
+            // onto a held stack it slides in on its own (`incoming`).
             let mut item = item.clone();
             let mut rest = 0;
             if self.is_ejector(p) {
@@ -611,12 +625,12 @@ impl Run {
                     item: item.item.clone(),
                     count: item.count,
                 };
-                let left = self.ejector_insert(p, &s, true);
+                let left = self.ejector_insert(p, &s, motion, true);
                 if left == item.count || simulate {
                     return Some(left);
                 }
                 if self.depot_stacks.contains_key(&p) {
-                    return Some(self.ejector_insert(p, &s, false));
+                    return Some(self.ejector_insert(p, &s, motion, false));
                 }
                 item.count -= left;
                 rest = left;
@@ -640,18 +654,7 @@ impl Run {
                     count: item.count,
                 },
             );
-            self.w.depot_put(
-                0,
-                p,
-                Some(depot::Held {
-                    position: if side.axis() == Axis::Y { 0.5 } else { 0. },
-                    from: depot::Side::from_dir(side),
-                    angle: item.angle,
-                    side_offset: item.side_offset,
-                    locked: false,
-                    fan: item.fan,
-                }),
-            );
+            self.w.depot_put(0, p, Some(motion));
             return Some(rest);
         }
         let Some((c, index, seg)) = self.belt_location(p) else {
@@ -720,7 +723,7 @@ impl Run {
             self.w.block_at(0, p),
             Some(Block::Depot | Block::WeightedEjector)
         ) {
-            let items = self
+            let mut items: Vec<ObservedItem> = self
                 .depot_stacks
                 .get(&p)
                 .map(|s| {
@@ -740,6 +743,23 @@ impl Run {
                 })
                 .into_iter()
                 .collect();
+            // An ejector's stacks still sliding in (`incoming`), as the harness lists them.
+            items.extend(self.w.depot_incoming(0, p).iter().map(|i| ObservedItem {
+                stack: Stack {
+                    item: i.item.clone(),
+                    count: i.count,
+                },
+                position: i.motion.position,
+                locked: i.motion.locked,
+                pending: true,
+                stalled: None,
+            }));
+            items.sort_by(|a, b| {
+                a.position
+                    .total_cmp(&b.position)
+                    .then(a.stack.item.cmp(&b.stack.item))
+                    .then(a.stack.count.cmp(&b.stack.count))
+            });
             let mut outputs: Vec<Stack> = self
                 .depot_outputs
                 .get(&p)
