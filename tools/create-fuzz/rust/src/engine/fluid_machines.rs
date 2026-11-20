@@ -1,7 +1,7 @@
 //! The item drain/spout fluid phase and player boundaries from glue/fluids/machines.rs.
 use super::*;
 use crate::transport::{Input, Outcome, Stack};
-use create_engine::{Block, belt, drain, kinetics::Dir, spout};
+use create_engine::{Block, belt, depot, drain, kinetics::Dir, spout};
 impl Run {
     pub(super) fn fluid_item_input(&mut self, p: Pos, input: &Input) -> Option<Outcome> {
         if self.w.block_at(0, p) != Some(Block::ItemDrain) {
@@ -97,20 +97,20 @@ impl Run {
         let Some(mut h) = self.w.dims[0].depots.get(&depot).copied().flatten() else {
             return;
         };
-        // `lv.blocked`: anything with a collision shape over the depot (a funnel too) stops an
-        // unlocked stack.
-        if !h.locked && self.host_collision(add(depot, [0, 1, 0])) {
-            return;
-        }
         {
             let depot = add(p, [0, -2, 0]);
             let held = self.depot_stacks.get(&depot).cloned();
-            let before = s.fluid;
+            let before = s;
             let result = held
                 .as_ref()
                 .map(|stack| spout::on_depot(&mut s, &mut h, &stack.item, &recipes));
-            if let Some(Some(h)) = self.w.dims[0].depots.get_mut(&depot) {
-                h.locked = !matches!(result, Some(spout::OnBelt::Pass));
+            // glue/fluids/machines.rs: the lock, and a filled stack back at the centre
+            // (`spout::on_depot`).
+            if let Some(Some(held)) = self.w.dims[0].depots.get_mut(&depot) {
+                *held = depot::Held {
+                    locked: !matches!(result, Some(spout::OnBelt::Pass)),
+                    ..h
+                };
             }
             let filled = match result {
                 Some(spout::OnBelt::Fill(out)) => Some(out),
@@ -134,11 +134,7 @@ impl Run {
                 }
                 self.w.depot_changed(0, depot);
             }
-            self.w.dims[0].spouts.insert(p, s);
-            if s.fluid != before {
-                self.w.dims[0].analog_checks.push(p);
-                self.mark_column(p);
-            }
+            self.put_spout(p, s, before);
         }
     }
     pub(super) fn tick_drain(&mut self, p: Pos) {
@@ -198,13 +194,10 @@ impl Run {
         locked: bool,
     ) -> Option<belt::Process> {
         let above = add(p, [0, 2, 0]);
-        let s = self.w.dims[0].spouts.get_mut(&above)?;
-        let before = s.fluid;
-        let result = spout::on_belt(s, &item.item, &crate::fluid_recipes::filling(), locked);
-        if s.fluid != before {
-            self.w.dims[0].analog_checks.push(above);
-            self.mark_column(above);
-        }
+        let mut s = self.w.dims[0].spouts.get(&above).copied()?;
+        let before = s;
+        let result = spout::on_belt(&mut s, &item.item, &crate::fluid_recipes::filling(), locked);
+        self.put_spout(above, s, before);
         Some(match result {
             spout::OnBelt::Pass => belt::Process::Pass,
             spout::OnBelt::Hold => belt::Process::Hold,
@@ -226,6 +219,17 @@ impl Run {
                 }
             }
         })
+    }
+    /// glue/fluids/machines.rs `put_spout`: a fill started or done marks the column, a tank
+    /// that changed is read by comparators.
+    fn put_spout(&mut self, p: Pos, s: spout::Spout, before: spout::Spout) {
+        self.w.dims[0].spouts.insert(p, s);
+        if s != before {
+            self.mark_column(p);
+        }
+        if s.fluid != before.fluid {
+            self.w.dims[0].analog_checks.push(p);
+        }
     }
     pub(super) fn fluid_storage(&self, p: Pos) -> Option<crate::fluid_machines::Storage> {
         let (fluid, capacity) = if let Some(s) = self.w.dims[0].spouts.get(&p) {

@@ -1000,10 +1000,7 @@ fn fan_on_depot(lv: &mut ServerLevel<'_>, at: [i32; 3], kind: Kind) -> bool {
         lv.spawn_items(p, &i, u32::from(n));
     }
     // getSimilar keeps the motion and the progress (done: -1, never again by this type).
-    let next = (!results.is_empty()).then_some(depot::Held {
-        position: 0.5,
-        ..held
-    });
+    let next = (!results.is_empty()).then_some(held.centred());
     with_world(|w| {
         w.dims[dim].depots.insert(at, next);
         w.depot_changed(dim, at);

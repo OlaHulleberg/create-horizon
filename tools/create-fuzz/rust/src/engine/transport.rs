@@ -386,7 +386,8 @@ impl Run {
                     continue;
                 }
                 create_engine::world::TransportTick::Spout(p) => {
-                    create_engine::spout::tick(self.w.dims[0].spouts.get_mut(&p).unwrap());
+                    // The glue's `w.tick_spout` (glue/logistics/belt.rs `tick_transport`).
+                    self.w.tick_spout(0, p);
                     continue;
                 }
                 create_engine::world::TransportTick::Drain(p) => {
@@ -402,7 +403,7 @@ impl Run {
                     let arrived = self.w.tick_depot(0, p, false);
                     // The glue's `tick_depot`: `handleBeltFunnelOutput` before the processing.
                     if !self.depot_output(p) && arrived {
-                        self.spout_on_depot(p);
+                        self.depot_process_held(p);
                     }
                     continue;
                 }
@@ -420,6 +421,11 @@ impl Run {
                 // block entity by this walk.
                 create_engine::world::TransportTick::Ejector(p) => {
                     self.tick_ejector(p);
+                    continue;
+                }
+                // The glue's `tick_press` (`PressingBehaviour.tick` at the press's turn).
+                create_engine::world::TransportTick::Press(p) => {
+                    self.w.tick_press(0, p);
                     continue;
                 }
                 create_engine::world::TransportTick::Belt(c) => c,
@@ -891,6 +897,15 @@ impl belt::Surroundings for Side<'_> {
         locked: bool,
     ) -> Option<belt::Process> {
         let p = belt::position_for_offset(self.controller, &self.segment, self.length, index);
+        // The glue's `BeltSide::process`: no machine two above, or (arriving) `isBlocked`, and
+        // nothing acts.
+        let above = self.run.w.block_at(0, [p[0], p[1] + 2, p[2]]);
+        if !above.is_some_and(belt::processes_below) {
+            return None;
+        }
+        if !locked && self.run.processing_blocked(p) {
+            return None;
+        }
         // `belt_process` in subsystem order: processing (presses) before fluids (spouts).
         if let Some(r) = self.run.press_on_belt(p, item, locked) {
             return Some(r);

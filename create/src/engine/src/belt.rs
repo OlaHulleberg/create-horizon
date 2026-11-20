@@ -893,6 +893,29 @@ pub enum TunnelStep {
     Hold,
 }
 
+/// Whether `block`'s block entity has a `BeltProcessingBehaviour`, working what lies on the belt
+/// segment or depot two below it: the press's `PressingBehaviour`, the deployer's and the
+/// spout's.
+pub fn processes_below(block: crate::Block) -> bool {
+    use crate::Block;
+    matches!(
+        block,
+        Block::MechanicalPress | Block::Deployer | Block::Spout
+    )
+}
+
+/// `BeltProcessingBehaviour.isBlocked`: whether the block `above` a processing space (a belt
+/// segment or a depot), which `collides` says has a collision shape, keeps the machine two above
+/// the space from a stack arriving there. A funnel never does (`AbstractFunnelBlock.isFunnel`).
+/// `BeltInventory` and `DepotBehaviour.tick` ask it before `handleReceivedItem`, not for a held
+/// stack.
+pub fn processing_blocked(above: Option<crate::Block>, collides: impl FnOnce() -> bool) -> bool {
+    if above.is_some_and(crate::funnel::is_funnel) {
+        return false;
+    }
+    collides()
+}
+
 /// What a machine over a segment does with an item (`BeltProcessingBehaviour.ProcessingResult`),
 /// or what it turned it into (`TransportedResult`: the item is replaced by `held`, put back held
 /// at the segment's centre, and `outputs` beside it).
@@ -2183,6 +2206,25 @@ mod tests {
             inv.tick(2, movement_speed(96.0), true, &mut world);
         }
         assert!((inv.items[0].position - (2.0 - 0.45)).abs() < 1e-5);
+    }
+
+    /// `o3-funnel-blocks-spout`: a pulling belt funnel stands on the depot under a spout (its
+    /// collision shape fills the space); Java's spout still takes the sweet berries arriving
+    /// there (`isBlocked` lets funnels through), a stone block there stops it, air does not.
+    #[test]
+    fn a_funnel_over_the_processing_space_never_blocks_it() {
+        use crate::Block;
+        for funnel in [
+            Block::AndesiteBeltFunnel,
+            Block::BrassBeltFunnel,
+            Block::AndesiteFunnel,
+            Block::BrassFunnel,
+        ] {
+            assert!(!processing_blocked(Some(funnel), || true), "{funnel:?}");
+        }
+        assert!(processing_blocked(None, || true), "a solid block");
+        assert!(processing_blocked(Some(Block::Depot), || true));
+        assert!(!processing_blocked(None, || false), "nothing there");
     }
 
     /// A machine over segment 1 holds the item at the segment's centre, then turns it into

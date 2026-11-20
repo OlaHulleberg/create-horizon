@@ -7,7 +7,7 @@ use super::super::server::ServerLevel;
 use super::super::world::with_world;
 use super::arms::arms_touched;
 use super::items::{self, random_angle, upright};
-use create_engine::depot;
+use create_engine::{Block, depot};
 use mod_api::PlayerRef;
 
 /// The stacks of the depot at `pos`, by slot: (slot, item named with its components
@@ -157,7 +157,30 @@ pub(super) fn tick_depot(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let arrived = with_world(|w| w.tick_depot(lv.dim, pos, standing)) == Some(true);
     // `handleBeltFunnelOutput` before the processing above.
     if !super::funnel::depot_output(lv, pos) && arrived {
-        crate::glue::fluids::machines::spout_on_depot(lv, pos);
+        process_held(lv, pos);
+    }
+}
+
+/// `DepotBehaviour.tick`'s `BeltProcessingBehaviour` two above an arrived stack: none, or an
+/// unlocked stack with the block over the depot in the way (`isBlocked`), and nothing happens;
+/// else the spout's or press's callbacks run now. A deployer's run with the deployers
+/// (`processing::Tools`).
+fn process_held(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let Some((block, _)) = super::info_at(lv, [pos[0], pos[1] + 2, pos[2]]) else {
+        return;
+    };
+    if !create_engine::belt::processes_below(block) {
+        return;
+    }
+    let locked = with_world(|w| matches!(w.dims[dim].depots.get(&pos), Some(Some(h)) if h.locked));
+    if locked != Some(true) && lv.processing_blocked(pos) {
+        return;
+    }
+    match block {
+        Block::Spout => crate::glue::fluids::machines::spout_on_depot(lv, pos),
+        Block::MechanicalPress => crate::glue::processing::press_depot_turn(lv, pos),
+        _ => {}
     }
 }
 

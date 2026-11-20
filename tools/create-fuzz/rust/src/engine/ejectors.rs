@@ -208,7 +208,8 @@ impl Run {
         // inside `super.tick()`: the slide, then what its arrival asks.
         self.w.ejector_base_tick(0, pos);
         if self.w.tick_depot(0, pos, false) {
-            self.spout_on_depot(pos);
+            // The glue's `process_held` (via `depot::tick_depot`).
+            self.depot_process_held(pos);
         }
         let speed = self.w.speed(0, pos).unwrap_or(0.);
         let before = e.state;
