@@ -26,8 +26,8 @@ use create_engine::{seat, turntable};
 use mod_api::{
     BlockPart, ClientHost, EntityInsideEvent, EntityJoinLevelEvent, EntityMountEvent, EntityRef,
     EntitySpawn, FallOnEvent, Flow, GeneralEntityCategory, GeneralSavePolicy, InteractionResult,
-    LeashHolder, LevelRandomHost, Registrar, RegistrationContext, ServerHost, SpawnBody,
-    UseItemOnEvent,
+    LeashHolder, LevelRandomHost, Registrar, RegistrationContext, RemovalReason, ServerHost,
+    SpawnBody, UseItemOnEvent,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -212,8 +212,8 @@ fn sit_down(lv: &mut ServerLevel<'_>, pos: [i32; 3], rider: EntityRef) -> bool {
     true
 }
 
-/// The stand-ins that came back: one in a seat block no other stand-in holds is that seat's
-/// again (Create's `SeatEntity` is the block's by where it stands).
+/// Claim the seats whose blocks still exist (`SeatEntity.tick`). Retire unclaimed carriers
+/// and leave their riders and any already-claimed seat in the world.
 fn take_back(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let loaded: Vec<u32> = LOADED.with_borrow_mut(|l| {
@@ -234,6 +234,8 @@ fn take_back(lv: &mut ServerLevel<'_>) {
         let pos = at.map(|v| v.floor() as i32);
         let free = is_seat(lv, pos) && !SEATS.with_borrow(|s| s.contains_key(&(dim, pos)));
         if !free {
+            // Removing a general entity dismounts its passengers without removing them.
+            e.remove(&mut *lv.host, RemovalReason::Discarded);
             continue;
         }
         // A seat's riders are players or mobs.

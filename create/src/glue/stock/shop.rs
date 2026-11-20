@@ -1779,7 +1779,9 @@ fn checkout_overlay(
         return;
     };
     let Some(list) = List::of(&held) else { return };
-    if keeper.vehicle(host).is_none()
+    if !keeper
+        .root_vehicle(host)
+        .is_some_and(|root| root != keeper && super::keeper::seat_vehicle(host, root))
         || keeper.kind(host).map(|k| k.id(host)).as_deref() == Some("create:package")
     {
         return;

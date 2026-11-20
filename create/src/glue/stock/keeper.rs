@@ -167,7 +167,7 @@ fn keeper_entity(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<mod_api::EntityR
     found
 }
 
-fn seat_vehicle(host: &dyn Host, entity: mod_api::EntityRef) -> bool {
+pub(super) fn seat_vehicle(host: &dyn Host, entity: mod_api::EntityRef) -> bool {
     entity
         .kind(host)
         .is_some_and(|kind| kind.id(host) == super::super::contraptions::seats::ENTITY_TYPE)
