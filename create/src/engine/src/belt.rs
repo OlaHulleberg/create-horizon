@@ -958,8 +958,17 @@ impl Inventory {
         self.to_insert.extend(items);
     }
 
-    /// What a save keeps: the items and those still waiting to go on (`write` inserts them).
+    /// What a save keeps (`BeltInventory.write`): the items, those still waiting to go on
+    /// inserted, and those marked `toRemove` gone.
     pub fn to_save(&self) -> Inventory {
+        let mut copy = self.transported();
+        copy.items.retain(|s| !s.removing);
+        copy
+    }
+
+    /// The stacks a belt slicer moves (`getTransportedItems()`, the ones marked `toRemove`
+    /// included), with those still waiting to go on inserted.
+    pub fn transported(&self) -> Inventory {
         let mut copy = self.clone();
         for i in std::mem::take(&mut copy.to_insert) {
             copy.insert(i);
@@ -967,10 +976,12 @@ impl Inventory {
         copy
     }
 
-    /// Equality of the fields persisted by the belt inventory codec. Queued insertions
-    /// participate as in Java's `BeltInventory.write`; client and fan tick caches do not.
+    /// Equality of the fields persisted by the belt inventory codec. Queued insertions and
+    /// removals participate as in Java's `BeltInventory.write`; client and fan tick caches do
+    /// not.
     pub fn saved_eq(&self, other: &Self) -> bool {
-        if !self.to_insert.is_empty() || !other.to_insert.is_empty() {
+        let pending = |i: &Self| !i.to_insert.is_empty() || i.items.iter().any(|s| s.removing);
+        if pending(self) || pending(other) {
             return self.to_save().saved_eq(&other.to_save());
         }
         let (a, b) = (self, other);
@@ -1959,11 +1970,8 @@ mod tests {
         );
         assert!(inv.items[0].removing);
         assert!(!inv.can_insert_at_from_side(2, Dir::Up, Dir::South));
-        assert_eq!(
-            inv.to_save().items.len(),
-            1,
-            "a save keeps the marked stack"
-        );
+        // A save writes it gone (`write` removes `toRemove` first).
+        assert!(inv.to_save().items.is_empty());
         // A second take in the same tick does not take it twice.
         assert!(inv.take_within(2.5, 0.55).is_empty());
         // The next tick removes it, stopped belt included.
