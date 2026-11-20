@@ -207,6 +207,44 @@ pub fn distributes(axis: Axis, shape: Shape, tunnel: impl Fn(Dir) -> bool) -> bo
         .any(|d| d.axis() != axis && !tunnel(d))
 }
 
+/// `BrassTunnelBlockEntity.write/read` (`:594-639`): the server state persisted across saves and
+/// contraption carriage: `SyncedOutput`, `ConnectedLeft`, `ConnectedRight`, `StackToDistribute`,
+/// `StackEnteredFrom`, `DistributionProgress`, `PreviousIndex`, and `SelectionMode`.
+/// `newItemArrived` is not saved (`BrassTunnelBlockEntity.java:78`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SavedBrass {
+    pub stack: Option<(String, u8)>,
+    pub entered_from: Option<Dir>,
+    pub progress: i32,
+    pub previous_output: usize,
+    pub mode: Mode,
+    pub synced: bool,
+    pub connected_left: bool,
+    pub connected_right: bool,
+}
+
+impl Default for SavedBrass {
+    fn default() -> SavedBrass {
+        SavedBrass {
+            stack: None,
+            entered_from: None,
+            progress: -1,
+            previous_output: 0,
+            mode: Mode::Split,
+            synced: false,
+            connected_left: false,
+            connected_right: false,
+        }
+    }
+}
+
+impl SavedBrass {
+    /// Whether this state matches a freshly placed tunnel and needs no saved entry.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// A brass tunnel's typed state: the stack it holds to hand out, the side it came in through,
 /// `distributionProgress` (-1 to look for outputs), whether it just arrived, and
 /// `previousOutputIndex`.
@@ -223,19 +261,237 @@ pub struct Brass {
     pub stack_progress: Option<crate::sequenced::Progress>,
     /// `syncedOutputActive`: a synchronizing group of tunnels all hold a stack and hand it out.
     pub synced: bool,
+    /// `connectedLeft` / `connectedRight`: connected to an adjacent brass tunnel across its axis.
+    pub connected_left: bool,
+    pub connected_right: bool,
 }
 
 impl Default for Brass {
     fn default() -> Brass {
+        Brass::from_saved(SavedBrass::default())
+    }
+}
+
+impl Brass {
+    /// Extracts the persisted state (`BrassTunnelBlockEntity.write`).
+    pub fn to_saved(&self) -> SavedBrass {
+        SavedBrass {
+            stack: self.stack.clone(),
+            entered_from: self.entered_from,
+            progress: self.progress,
+            previous_output: self.previous_output,
+            mode: self.mode,
+            synced: self.synced,
+            connected_left: self.connected_left,
+            connected_right: self.connected_right,
+        }
+    }
+
+    /// Restores a brass tunnel from its saved state (`BrassTunnelBlockEntity.read`).
+    pub fn from_saved(saved: SavedBrass) -> Brass {
         Brass {
-            stack: None,
-            entered_from: None,
-            progress: -1,
+            stack: saved.stack,
+            entered_from: saved.entered_from,
+            progress: saved.progress,
             new_item: false,
-            previous_output: 0,
-            mode: Mode::Split,
+            previous_output: saved.previous_output,
+            mode: saved.mode,
             stack_progress: None,
-            synced: false,
+            synced: saved.synced,
+            connected_left: saved.connected_left,
+            connected_right: saved.connected_right,
+        }
+    }
+
+    /// Whether the tunnel needs ticking (`stackToDistribute` held or `syncedOutputActive`).
+    pub fn is_running(&self) -> bool {
+        self.stack.is_some() || self.synced
+    }
+    /// `BrassTunnelBlockEntity.canInsert`: whether an item entering from `side` is accepted by
+    /// the tunnel's own filter and (when distributing) its held slot; false means `stuckAtTunnel`.
+    pub fn can_insert(&self, distributing: bool, filter_passes: bool) -> bool {
+        filter_passes && (!distributing || self.stack.is_none())
+    }
+
+    /// `BrassTunnelBlockEntity.canTakeItems`: holds no stack and is not handing out with a
+    /// synchronized group.
+    pub fn can_take(&self) -> bool {
+        self.stack.is_none() && !self.synced
+    }
+
+    /// `BrassTunnelItemHandler.insertItem` (`:33-49`): where an item-handler insert goes.
+    pub fn handler_target(&self, distributing: bool) -> HandlerTarget {
+        if !distributing {
+            HandlerTarget::BeltBelow
+        } else if self.can_take() {
+            HandlerTarget::Distribute
+        } else {
+            HandlerTarget::Busy
+        }
+    }
+
+    /// `BrassTunnelBlockEntity.tick` (`:131-200`): advances the timer and decides the tick phase.
+    pub fn begin_tick(&mut self, belt_moving: bool) -> BrassPhase {
+        if self.progress > 0 {
+            self.progress -= 1;
+        }
+        if !belt_moving || (self.stack.is_none() && !self.synced) {
+            return BrassPhase::Idle;
+        }
+        if self.progress == -1 {
+            BrassPhase::Gather
+        } else if self.progress != 0 {
+            BrassPhase::Wait
+        } else {
+            BrassPhase::Distribute
+        }
+    }
+
+    /// `BrassTunnelBlockEntity.tick` (`:146-163`, `:517`): checks `syncedOutputActive` *before*
+    /// updating it from the group's stacks (`gatherValidOutputs`), returning `Some(new_synced)`
+    /// when the whole group should update `synced`, and `true` if gathering may proceed to check
+    /// targets (`validOutputs != null && !stackToDistribute.isEmpty()`).
+    pub fn gather_sync(&mut self, group_has_stack: &[bool]) -> (Option<bool>, bool) {
+        let was_synced = self.synced;
+        let mut sync_update = None;
+        if self.mode == Mode::Synchronize {
+            let all_full = group_has_stack.iter().all(|h| *h);
+            let all_empty = group_has_stack.iter().all(|h| !*h);
+            if all_full || all_empty {
+                let next_synced = !all_empty;
+                self.synced = next_synced;
+                sync_update = Some(next_synced);
+            }
+            if !was_synced {
+                return (sync_update, false);
+            }
+        }
+        (sync_update, self.stack.is_some())
+    }
+
+    /// `BrassTunnelBlockEntity.tick` (`:186-195`): schedules the next distribution once targets
+    /// were found.
+    pub fn schedule_distribution(&mut self) {
+        if self.new_item {
+            self.new_item = false;
+            self.progress = 2;
+        } else if self.mode != Mode::Synchronize || self.synced {
+            self.progress = BRASS_TIMER;
+        }
+    }
+}
+
+/// What a brass tunnel's tick (`BrassTunnelBlockEntity.tick`) needs next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrassPhase {
+    /// Belt stopped, or nothing held and not synced (`:133-136`).
+    Idle,
+    /// `distributionProgress == -1`: gather outputs and update `syncedOutputActive` (`:140-196`).
+    Gather,
+    /// Waiting for countdown (`distributionProgress > 0`).
+    Wait,
+    /// `distributionProgress == 0`: distribute held stack (`:198-218`).
+    Distribute,
+}
+
+/// Where `BrassTunnelItemHandler.insertItem` routes an insertion (`BrassTunnelItemHandler.java:33-49`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandlerTarget {
+    /// `!hasDistributionBehaviour()`: delegate to the belt segment below (`getBeltCapability`).
+    BeltBelow,
+    /// `hasDistributionBehaviour() && canTakeItems()`: take into `stackToDistribute`.
+    Distribute,
+    /// `hasDistributionBehaviour() && !canTakeItems()`: refuse while holding or synced.
+    Busy,
+}
+
+/// `BrassTunnelBlockEntity.getAdjacent`: the adjacent position across `axis` (`left` is
+/// counter-clockwise from the axis' positive direction).
+pub fn adjacent_pos(pos: [i32; 3], axis: Axis, left: bool) -> [i32; 3] {
+    let side = match (axis, left) {
+        (Axis::X, true) => Dir::North,
+        (Axis::X, false) => Dir::South,
+        (_, true) => Dir::East,
+        (_, false) => Dir::West,
+    };
+    let o = side.offset();
+    [pos[0] + o[0], pos[1], pos[2] + o[2]]
+}
+
+/// `BrassTunnelBlockEntity`'s `selectionMode.withCallback`: propagates `mode` across connected
+/// brass tunnels. Records every tunnel whose mode changed.
+pub fn set_group_mode(
+    pos: [i32; 3],
+    mode: Mode,
+    tunnels: &mut std::collections::HashMap<[i32; 3], Brass>,
+    info: &impl Fn([i32; 3]) -> Option<(Axis, bool)>,
+    changed: &mut Vec<[i32; 3]>,
+) {
+    let Some(b) = tunnels.get_mut(&pos) else {
+        return;
+    };
+    if b.mode == mode {
+        return;
+    }
+    b.mode = mode;
+    changed.push(pos);
+    let (left, right) = (b.connected_left, b.connected_right);
+    let Some((axis, _)) = info(pos) else {
+        return;
+    };
+    for (is_left, connected) in [(true, left), (false, right)] {
+        if !connected {
+            continue;
+        }
+        let adj = adjacent_pos(pos, axis, is_left);
+        if info(adj).is_some_and(|(ax, _)| ax == axis) {
+            set_group_mode(adj, mode, tunnels, info, changed);
+        }
+    }
+}
+
+/// `BrassTunnelBlockEntity.updateTunnelConnections`: updates `connected_left`/`connected_right`
+/// from `info` (`Some((axis, has_flaps))` for brass tunnels), notifies newly connected or
+/// disconnected neighbours, and hands this tunnel's mode onto them (so a tunnel joining an
+/// existing group takes the group's mode when the neighbour updates back).
+pub fn update_connections(
+    pos: [i32; 3],
+    tunnels: &mut std::collections::HashMap<[i32; 3], Brass>,
+    info: &impl Fn([i32; 3]) -> Option<(Axis, bool)>,
+    changed: &mut Vec<[i32; 3]>,
+) {
+    let Some((axis, has_flaps)) = info(pos) else {
+        return;
+    };
+    for is_left in [true, false] {
+        let now_connected = has_flaps && {
+            let adj = adjacent_pos(pos, axis, is_left);
+            info(adj).is_some_and(|(ax, adj_flaps)| ax == axis && adj_flaps)
+        };
+        let was_connected = tunnels.get(&pos).map(|b| {
+            if is_left {
+                b.connected_left
+            } else {
+                b.connected_right
+            }
+        });
+        if was_connected == Some(now_connected) {
+            continue;
+        }
+        if let Some(b) = tunnels.get_mut(&pos) {
+            if is_left {
+                b.connected_left = now_connected;
+            } else {
+                b.connected_right = now_connected;
+            }
+            changed.push(pos);
+        }
+        let adj = adjacent_pos(pos, axis, is_left);
+        if info(adj).is_some_and(|(ax, _)| ax == axis) {
+            update_connections(adj, tunnels, info, changed);
+            if let Some(mode) = tunnels.get(&pos).map(|b| b.mode) {
+                set_group_mode(adj, mode, tunnels, info, changed);
+            }
         }
     }
 }
@@ -516,5 +772,187 @@ mod tests {
         assert!(
             b.contains(&[2., 10., 14., 14., 16., 16.]) && b.contains(&[2., -5., 0., 14., 16., 2.])
         );
+    }
+
+    #[test]
+    fn tunnel_joining_connected_group_takes_groups_mode() {
+        // Observed in t3-brass-mode-on-join: a tunnel at [0, 9, 2] on a Z-axis belt is set to
+        // RoundRobin, then a second tunnel at [1, 9, 2] is placed beside it; updating connections
+        // from the new tunnel connects both and gives [1, 9, 2] the group's RoundRobin mode.
+        let mut tunnels = std::collections::HashMap::new();
+        let a = [0, 9, 2];
+        let b = [1, 9, 2];
+        tunnels.insert(
+            a,
+            Brass {
+                mode: Mode::RoundRobin,
+                ..Default::default()
+            },
+        );
+        tunnels.insert(b, Brass::default());
+        let info = |p: [i32; 3]| (p == a || p == b).then_some((Axis::Z, true));
+        let mut changed = Vec::new();
+        update_connections(b, &mut tunnels, &info, &mut changed);
+        assert!(tunnels[&a].connected_left);
+        assert!(!tunnels[&a].connected_right);
+        assert!(!tunnels[&b].connected_left);
+        assert!(tunnels[&b].connected_right);
+        assert_eq!(tunnels[&a].mode, Mode::RoundRobin);
+        assert_eq!(tunnels[&b].mode, Mode::RoundRobin);
+
+        // Changing the mode on one updates the connected group.
+        changed.clear();
+        set_group_mode(b, Mode::Synchronize, &mut tunnels, &info, &mut changed);
+        assert_eq!(tunnels[&a].mode, Mode::Synchronize);
+        assert_eq!(tunnels[&b].mode, Mode::Synchronize);
+    }
+
+    #[test]
+    fn synchronizing_tunnel_gathers_outputs_one_tick_after_syncing() {
+        // Observed in t6-brass-sync-gather: a Synchronize brass tunnel receives 3 iron ingots at
+        // tick 40 (new_item=true, progress=-1, synced=false). In Java, gatherValidOutputs checks
+        // syncedOutputActive before syncSet sets it true, so progress stays -1 on tick 40, becomes
+        // 2 on tick 41, 1 on tick 42, and distributes on tick 43.
+        let mut b = Brass {
+            stack: Some(("minecraft:iron_ingot".into(), 3)),
+            new_item: true,
+            mode: Mode::Synchronize,
+            ..Default::default()
+        };
+
+        // Tick 40: syncs the group, but validOutputs was null so progress remains -1.
+        assert_eq!(b.begin_tick(true), BrassPhase::Gather);
+        let (sync_update, can_gather) = b.gather_sync(&[true]);
+        assert_eq!(sync_update, Some(true));
+        assert!(!can_gather);
+        assert_eq!((b.progress, b.synced, b.new_item), (-1, true, true));
+
+        // Tick 41: already synced, so it gathers outputs and sets progress = 2.
+        assert_eq!(b.begin_tick(true), BrassPhase::Gather);
+        let (_, can_gather) = b.gather_sync(&[true]);
+        assert!(can_gather);
+        b.schedule_distribution();
+        assert_eq!((b.progress, b.synced, b.new_item), (2, true, false));
+
+        // Tick 42: counts down to 1.
+        assert_eq!(b.begin_tick(true), BrassPhase::Wait);
+        assert_eq!(b.progress, 1);
+
+        // Tick 43: counts down to 0 and distributes.
+        assert_eq!(b.begin_tick(true), BrassPhase::Distribute);
+        b.stack = None;
+        b.progress = -1;
+
+        // Tick 44: all empty, clears synced.
+        assert_eq!(b.begin_tick(true), BrassPhase::Gather);
+        let (sync_update, can_gather) = b.gather_sync(&[false]);
+        assert_eq!(sync_update, Some(false));
+        assert!(!can_gather);
+        assert!(!b.synced);
+    }
+
+    #[test]
+    fn non_distributing_tunnel_passes_handler_inserts_to_belt() {
+        // Observed in t7-brass-item-handler-belt: a straight brass tunnel with nothing beside it
+        // (`hasDistributionBehaviour() == false`) delegates item-handler inserts to its belt
+        // capability, even if it holds or doesn't hold distribution state.
+        let mut b = Brass::default();
+        assert_eq!(b.handler_target(false), HandlerTarget::BeltBelow);
+        assert_eq!(b.handler_target(true), HandlerTarget::Distribute);
+
+        b.stack = Some(("minecraft:iron_ingot".into(), 3));
+        assert_eq!(b.handler_target(false), HandlerTarget::BeltBelow);
+        assert_eq!(b.handler_target(true), HandlerTarget::Busy);
+
+        b.stack = None;
+        b.synced = true;
+        assert_eq!(b.handler_target(true), HandlerTarget::Busy);
+    }
+
+    #[test]
+    fn saved_brass_preserves_index_progress_and_synced_across_reload() {
+        // Observed in t8-brass-reload-index: a RoundRobin brass tunnel between two depots hands
+        // 1 iron ingot to depot 0 (previous_output becomes 1). After a save and reload, a gold
+        // ingot arrives and goes immediately to depot 1 instead of retrying full depot 0.
+        let mut b = Brass {
+            mode: Mode::RoundRobin,
+            stack: Some(("minecraft:iron_ingot".into(), 1)),
+            new_item: true,
+            ..Default::default()
+        };
+        let mut depot0_full = false;
+        let mut got = Vec::new();
+        let left = distribute(1, 2, b.previous_output, b.mode, 0, |t, n, sim| {
+            if t == 0 && depot0_full {
+                return Some(n);
+            }
+            if !sim {
+                if t == 0 {
+                    depot0_full = true;
+                }
+                got.push((t, n));
+            }
+            Some(0)
+        });
+        assert_eq!((left, got), (Some(0), vec![(0, 1)]));
+        b.stack = None;
+        b.progress = -1;
+        b.previous_output = (b.previous_output + 1) % 2;
+        assert_eq!(b.previous_output, 1);
+
+        let saved = b.to_saved();
+        assert!(!saved.is_default());
+        let mut reloaded = Brass::from_saved(saved);
+        assert_eq!(reloaded.previous_output, 1);
+        assert_eq!(reloaded.progress, -1);
+        assert!(!reloaded.new_item);
+
+        reloaded.stack = Some(("minecraft:gold_ingot".into(), 1));
+        reloaded.new_item = true;
+        assert_eq!(reloaded.begin_tick(true), BrassPhase::Gather);
+        reloaded.schedule_distribution();
+        assert_eq!(reloaded.progress, 2);
+        assert_eq!(reloaded.begin_tick(true), BrassPhase::Wait);
+        assert_eq!(reloaded.begin_tick(true), BrassPhase::Distribute);
+        let mut got2 = Vec::new();
+        let left2 = distribute(
+            1,
+            2,
+            reloaded.previous_output,
+            reloaded.mode,
+            0,
+            |t, n, sim| {
+                if t == 0 && depot0_full {
+                    return Some(n);
+                }
+                if !sim {
+                    got2.push((t, n));
+                }
+                Some(0)
+            },
+        );
+        assert_eq!((left2, got2), (Some(0), vec![(1, 1)]));
+
+        // Mid-countdown progress, synced, and connections also round-trip; running covers synced.
+        let mid = Brass {
+            stack: None,
+            entered_from: Some(Dir::North),
+            progress: 7,
+            new_item: true,
+            previous_output: 2,
+            mode: Mode::Synchronize,
+            stack_progress: None,
+            synced: true,
+            connected_left: true,
+            connected_right: false,
+        };
+        let restored = Brass::from_saved(mid.to_saved());
+        assert_eq!(restored.progress, 7);
+        assert_eq!(restored.previous_output, 2);
+        assert!(restored.synced);
+        assert!(restored.connected_left);
+        assert_eq!(restored.entered_from, Some(Dir::North));
+        assert!(!restored.new_item);
+        assert!(restored.is_running());
     }
 }

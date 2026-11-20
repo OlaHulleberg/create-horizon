@@ -754,7 +754,8 @@ pub fn break_pass(lv: &mut ServerLevel<'_>) {
 pub fn tick_transport(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     crate::glue::fluids::pipes::tick_pipes(lv);
-    let Some(mut phase) = with_world(|w| w.transport_ticks(dim)) else {
+    let now = lv.game_time().max(0) as u64;
+    let Some(mut phase) = with_world(|w| w.transport_ticks(dim, now)) else {
         return;
     };
     while let Some(turn) = with_world(|w| phase.next(w)).flatten() {
@@ -783,6 +784,14 @@ pub fn tick_transport(lv: &mut ServerLevel<'_>) {
             }
             create_engine::world::TransportTick::Depot(p) => {
                 super::depot::tick_depot(lv, p);
+                continue;
+            }
+            create_engine::world::TransportTick::Brass(p) => {
+                super::tunnel::tick_brass(lv, p);
+                continue;
+            }
+            create_engine::world::TransportTick::Funnel(p) => {
+                super::funnel::tick_funnel(lv, p);
                 continue;
             }
             create_engine::world::TransportTick::Belt(c) => c,
@@ -1090,19 +1099,19 @@ impl belt::Surroundings for BeltSide<'_, '_> {
 
     /// `flapTunnelsAndCheckIfStuck`: the tunnel over segment `segment` may take some of `item`;
     /// unless it must wait, the tunnels it leaves and enters flap.
-    fn tunnel(&mut self, segment: i32, item: &mut belt::Item) -> bool {
+    fn tunnel(&mut self, segment: i32, item: &mut belt::Item) -> belt::TunnelStep {
         if self.segment.slope != belt::Slope::Horizontal {
-            return false;
+            return belt::TunnelStep::Pass;
         }
         let before = item.count;
-        let stuck = self.tunnel_takes(segment, item);
-        if !stuck || item.count == 0 && before > 0 {
+        let step = self.tunnel_takes(segment, item);
+        if step == belt::TunnelStep::Pass || (item.count == 0 && before > 0) {
             let movement = self.movement();
-            let step = if self.positive { 1 } else { -1 };
-            super::flaps::tunnel(self.lv, self.at(segment - step), movement, false);
+            let step_dir = if self.positive { 1 } else { -1 };
+            super::flaps::tunnel(self.lv, self.at(segment - step_dir), movement, false);
             super::flaps::tunnel(self.lv, self.at(segment), movement.opposite(), true);
         }
-        stuck
+        step
     }
 
     /// The machines over segment `segment` (presses, deployers, spouts) are the processing
@@ -1121,13 +1130,12 @@ impl belt::Surroundings for BeltSide<'_, '_> {
 }
 
 impl BeltSide<'_, '_> {
-    /// The tunnel over segment `segment` of a horizontal belt takes some of `item` (`tunnel`):
-    /// true when it must wait.
-    fn tunnel_takes(&mut self, segment: i32, item: &mut belt::Item) -> bool {
+    /// The tunnel over segment `segment` of a horizontal belt takes some of `item` (`tunnel`).
+    fn tunnel_takes(&mut self, segment: i32, item: &mut belt::Item) -> belt::TunnelStep {
         let at = self.at(segment);
         let t = [at[0], at[1] + 1, at[2]];
         let Some((axis, shape)) = tunnel_state(self.lv, t) else {
-            return false;
+            return belt::TunnelStep::Pass;
         };
         let movement = self.movement();
         // `transferred`: the stack as it entered, told to the tunnel's display links once it
@@ -1139,24 +1147,24 @@ impl BeltSide<'_, '_> {
         // holds back the next.
         if with_world(|w| w.dims[dim].brass.contains_key(&t)) == Some(true) {
             // `stuckAtTunnel` (`canInsert`): its own filter on the side the item comes in by
-            // must pass it.
+            // must pass it, and if distributing its held slot must be empty.
             let from = movement.opposite();
-            if !super::tunnel::own_filter_passes(self.lv, t, from, &item.item) {
-                return true;
+            if !super::tunnel::can_insert(self.lv, t, from, &item.item) {
+                return belt::TunnelStep::Stuck;
             }
             if !super::tunnel::has_distribution(self.lv, t) {
-                return false;
+                return belt::TunnelStep::Pass;
             }
             if !super::tunnel::can_take(self.lv, t) {
-                return true;
+                return belt::TunnelStep::Hold;
             }
             super::tunnel::set_stack(self.lv, t, item, Some(from));
             item.count = 0;
-            return true;
+            return belt::TunnelStep::Hold;
         }
         if !create_engine::tunnel::splits(axis, shape, movement, item.count) {
             super::super::display::items_through_tunnel(self.lv, t, transferred);
-            return false;
+            return belt::TunnelStep::Pass;
         }
         for d in create_engine::tunnel::sides(axis, shape) {
             if d.axis() == axis {
@@ -1179,7 +1187,7 @@ impl BeltSide<'_, '_> {
             match insert_into(self.lv, out, d, &one) {
                 None => continue,
                 Some(0) => super::flaps::tunnel(self.lv, at, d, false),
-                Some(_) => return true,
+                Some(_) => return belt::TunnelStep::Hold,
             }
             item.count -= 1;
             if item.count <= 1 {
@@ -1187,7 +1195,7 @@ impl BeltSide<'_, '_> {
             }
         }
         super::super::display::items_through_tunnel(self.lv, t, transferred);
-        false
+        belt::TunnelStep::Pass
     }
 }
 

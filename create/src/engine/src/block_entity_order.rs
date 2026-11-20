@@ -9,7 +9,8 @@ type Pos = [i32; 3];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum View {
     All,
-    /// Belts, depots, tanks, valves, spouts, drains and pumps share their turns.
+    /// Belts, depots, tanks, valves, spouts, drains, pumps, brass tunnels and funnels share
+    /// their turns.
     Transport,
     /// Chutes and smart chutes (`ChuteBlockEntity.tick`).
     Chute,

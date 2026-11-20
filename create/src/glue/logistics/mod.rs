@@ -288,9 +288,7 @@ impl Subsystem for Logistics {
         chute::tick_chute_shapes(lv);
         chute::tick_chutes(lv);
         funnel::tick_funnel_shapes(lv);
-        funnel::tick_funnels(lv);
         tunnel::tick_tunnels(lv);
-        tunnel::tick_brass(lv);
         belt::tick_covers(lv);
         belt::tick_transport(lv);
         depot::send_changed_depots(lv);
@@ -1092,7 +1090,14 @@ pub(super) fn belts_to_nbt(belts: &[([i32; 3], create_engine::belt::Inventory)])
                     Tag::List(
                         inv.items
                             .iter()
-                            .map(|i| Tag::String(i.item.as_str().into()))
+                            .map(|i| {
+                                let id = if i.count == 0 {
+                                    "minecraft:air"
+                                } else {
+                                    i.item.as_str()
+                                };
+                                Tag::String(id.into())
+                            })
                             .collect(),
                     ),
                 );
@@ -1158,13 +1163,12 @@ pub(super) fn belts_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::b
                 .zip(ids)
                 .filter_map(|(n, id)| {
                     let Tag::String(id) = id else { return None };
-                    // `ItemStack`'s codec takes a count from 1; an empty stack (which the
-                    // funnel's remainder or a pickup leaves for a tick) is `minecraft:air`
-                    // with 0.
-                    let empty = id.to_string_lossy() == "minecraft:air";
-                    let count = n[3].clamp(i32::from(!empty), 255) as u8;
-                    let mut item =
-                        create_engine::belt::Item::new(&id.to_string_lossy(), count, n[2], false);
+                    let mut item = create_engine::belt::Item::from_saved(
+                        id.to_string_lossy(),
+                        n[3],
+                        n[2],
+                        false,
+                    );
                     item.position = f32::from_bits(n[0] as u32);
                     item.side_offset = f32::from_bits(n[1] as u32);
                     item.locked = n[4] != 0;
@@ -1202,59 +1206,118 @@ pub(super) fn belts_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::b
         .collect()
 }
 
-/// Brass tunnels' stacks: x, y, z, mode, side it came in by (6: none), count, then the item ids.
-pub(super) fn brass_to_nbt(brass: &[([i32; 3], create_engine::tunnel::Brass)]) -> Tag {
-    let mut nums = Vec::new();
-    let mut items = Vec::new();
-    for (p, b) in brass {
-        let (item, n) = b.stack.clone().unwrap_or_default();
-        nums.extend([
-            p[0],
-            p[1],
-            p[2],
-            b.mode.index() as i32,
-            b.entered_from.map_or(6, |d| d as i32),
-            i32::from(n),
-        ]);
-        items.push(Tag::String(item.as_str().into()));
-    }
-    let mut c = Compound::new();
-    c.insert("nums".into(), Tag::IntArray(nums));
-    c.insert("items".into(), Tag::List(items));
-    Tag::Compound(c)
+/// Brass tunnels' saved state (`BrassTunnelBlockEntity.write`: `SyncedOutput`, `ConnectedLeft`,
+/// `ConnectedRight`, `StackToDistribute`, `StackEnteredFrom`, `DistributionProgress`,
+/// `PreviousIndex`, and `SelectionMode`).
+pub(super) fn brass_to_nbt(brass: &[([i32; 3], create_engine::tunnel::SavedBrass)]) -> Tag {
+    Tag::List(
+        brass
+            .iter()
+            .map(|(p, b)| {
+                let mut c = Compound::from([
+                    ("Pos".into(), Tag::IntArray(p.to_vec())),
+                    ("SelectionMode".into(), Tag::Int(b.mode.index() as i32)),
+                    ("DistributionProgress".into(), Tag::Int(b.progress)),
+                    ("PreviousIndex".into(), Tag::Int(b.previous_output as i32)),
+                    ("SyncedOutput".into(), Tag::Byte(i8::from(b.synced))),
+                    (
+                        "ConnectedLeft".into(),
+                        Tag::Byte(i8::from(b.connected_left)),
+                    ),
+                    (
+                        "ConnectedRight".into(),
+                        Tag::Byte(i8::from(b.connected_right)),
+                    ),
+                ]);
+                if let Some(d) = b.entered_from {
+                    c.insert("StackEnteredFrom".into(), Tag::Int(d as i32));
+                }
+                if let Some((item, n)) = &b.stack {
+                    c.insert("Item".into(), Tag::String(item.as_str().into()));
+                    c.insert("Count".into(), Tag::Int(i32::from(*n)));
+                }
+                Tag::Compound(c)
+            })
+            .collect(),
+    )
 }
 
-/// What `brass_to_nbt` wrote.
-pub(super) fn brass_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::tunnel::Brass)> {
-    let Some(Tag::Compound(c)) = data.get(&"brass".into()) else {
-        return Vec::new();
-    };
-    let (Some(Tag::IntArray(nums)), Some(Tag::List(items))) =
-        (c.get(&"nums".into()), c.get(&"items".into()))
-    else {
-        return Vec::new();
-    };
-    nums.as_chunks::<6>()
-        .0
-        .iter()
-        .zip(items)
-        .map(|(v, item)| {
-            let item = match item {
-                Tag::String(s) => s.to_string_lossy(),
-                _ => String::new(),
+/// What `brass_to_nbt` wrote, plus the legacy packed-int format.
+pub(super) fn brass_from_nbt(
+    data: &Compound,
+) -> Vec<([i32; 3], create_engine::tunnel::SavedBrass)> {
+    match data.get(&"brass".into()) {
+        Some(Tag::List(list)) => list
+            .iter()
+            .filter_map(|tag| {
+                let Tag::Compound(c) = tag else { return None };
+                let Some(Tag::IntArray(pos)) = c.get(&"Pos".into()) else {
+                    return None;
+                };
+                let p = [*pos.first()?, *pos.get(1)?, *pos.get(2)?];
+                let int = |k: &str, default: i32| match c.get(&k.into()) {
+                    Some(Tag::Int(v)) => *v,
+                    _ => default,
+                };
+                let flag = |k: &str| matches!(c.get(&k.into()), Some(Tag::Byte(v)) if *v != 0);
+                let item = match c.get(&"Item".into()) {
+                    Some(Tag::String(s)) => s.to_string_lossy(),
+                    _ => String::new(),
+                };
+                let n = int("Count", 0).clamp(0, 64) as u8;
+                let entered_from = match c.get(&"StackEnteredFrom".into()) {
+                    Some(Tag::Int(v)) => usize::try_from(*v)
+                        .ok()
+                        .and_then(|i| Dir::ALL.get(i))
+                        .copied(),
+                    _ => None,
+                };
+                let mode_idx = int("SelectionMode", 0).clamp(0, 6) as usize;
+                Some((
+                    p,
+                    create_engine::tunnel::SavedBrass {
+                        stack: (!item.is_empty() && n > 0).then_some((item, n)),
+                        entered_from,
+                        progress: int("DistributionProgress", -1),
+                        previous_output: int("PreviousIndex", 0).max(0) as usize,
+                        mode: create_engine::tunnel::Mode::ALL[mode_idx],
+                        synced: flag("SyncedOutput"),
+                        connected_left: flag("ConnectedLeft"),
+                        connected_right: flag("ConnectedRight"),
+                    },
+                ))
+            })
+            .collect(),
+        Some(Tag::Compound(c)) => {
+            let (Some(Tag::IntArray(nums)), Some(Tag::List(items))) =
+                (c.get(&"nums".into()), c.get(&"items".into()))
+            else {
+                return Vec::new();
             };
-            let n = v[5].clamp(0, 64) as u8;
-            (
-                [v[0], v[1], v[2]],
-                create_engine::tunnel::Brass {
-                    stack: (!item.is_empty() && n > 0).then_some((item, n)),
-                    entered_from: Dir::ALL.get(v[4].clamp(0, 6) as usize).copied(),
-                    mode: create_engine::tunnel::Mode::ALL[v[3].clamp(0, 6) as usize],
-                    ..Default::default()
-                },
-            )
-        })
-        .collect()
+            nums.as_chunks::<6>()
+                .0
+                .iter()
+                .zip(items)
+                .map(|(v, item)| {
+                    let item = match item {
+                        Tag::String(s) => s.to_string_lossy(),
+                        _ => String::new(),
+                    };
+                    let n = v[5].clamp(0, 64) as u8;
+                    (
+                        [v[0], v[1], v[2]],
+                        create_engine::tunnel::SavedBrass {
+                            stack: (!item.is_empty() && n > 0).then_some((item, n)),
+                            entered_from: Dir::ALL.get(v[4].clamp(0, 6) as usize).copied(),
+                            mode: create_engine::tunnel::Mode::ALL[v[3].clamp(0, 6) as usize],
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -1271,5 +1334,32 @@ mod belt_save_tests {
         let data = Compound::from([("belts".into(), belts_to_nbt(&[([0, 8, 0], inv)]))]);
         let saved = belts_from_nbt(&data);
         assert_eq!(saved[0].1.items[0], item);
+    }
+
+    #[test]
+    fn emptied_belt_stack_round_trips_empty() {
+        let mut item = create_engine::belt::Item::new("minecraft:iron_ingot", 0, 180, false);
+        item.position = 1.9708341;
+        let inv = create_engine::belt::Inventory::from_saved(vec![item], true);
+        let data = Compound::from([("belts".into(), belts_to_nbt(&[([0, 8, 0], inv)]))]);
+        let saved = belts_from_nbt(&data);
+        assert_eq!(saved[0].1.items[0].item, "minecraft:air");
+        assert_eq!(saved[0].1.items[0].count, 0);
+    }
+
+    #[test]
+    fn brass_save_round_trips_index_progress_and_synced() {
+        let saved = create_engine::tunnel::SavedBrass {
+            stack: Some(("minecraft:gold_ingot".into(), 2)),
+            entered_from: Some(Dir::South),
+            progress: 7,
+            previous_output: 1,
+            mode: create_engine::tunnel::Mode::RoundRobin,
+            synced: true,
+            connected_left: true,
+            connected_right: false,
+        };
+        let data = Compound::from([("brass".into(), brass_to_nbt(&[([0, 9, 2], saved.clone())]))]);
+        assert_eq!(brass_from_nbt(&data), vec![([0, 9, 2], saved)]);
     }
 }

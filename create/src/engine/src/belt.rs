@@ -490,6 +490,24 @@ impl Item {
         i
     }
 
+    /// `TransportedItemStack.read` (`ItemStack.parseOptional`): an emptied stack (`count == 0`,
+    /// or saved as `minecraft:air`) reads back as empty (`minecraft:air`, count 0), never
+    /// clamped up to 1.
+    pub fn from_saved(item: impl Into<String>, count: i32, angle: i32, upright: bool) -> Item {
+        let item = item.into();
+        let count = if item == "minecraft:air" {
+            0
+        } else {
+            count.clamp(0, 255) as u8
+        };
+        let item = if count == 0 {
+            "minecraft:air".to_owned()
+        } else {
+            item
+        };
+        Item::new(&item, count, angle, upright)
+    }
+
     /// `getTargetSideOffset`.
     pub fn target_side_offset(&self) -> f32 {
         (self.angle - 180) as f32 / (360.0 * 3.0)
@@ -863,6 +881,18 @@ impl Ending {
     }
 }
 
+/// `BeltTunnelInteractionHandler.flapTunnelsAndCheckIfStuck`: whether an item entering a tunnel
+/// segment may continue, must stop just before it (`stuckAtTunnel`), or wait where it is (a
+/// synchronizing brass tunnel holding its turn, or a full andesite side output).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TunnelStep {
+    Pass,
+    /// `stuckAtTunnel`: clamped to `currentSegment + (positive ? .99 : .01)`.
+    Stuck,
+    /// Held where it is without clamping (`!canTakeItems()` or full andesite output).
+    Hold,
+}
+
 /// What a machine over a segment does with an item (`BeltProcessingBehaviour.ProcessingResult`),
 /// or what it turned it into (`TransportedResult`: the item is replaced by `held`, put back held
 /// at the segment's centre, and `outputs` beside it).
@@ -889,11 +919,10 @@ pub trait Surroundings {
     /// machine there, or something blocks it (`isBlocked`, received only).
     fn process(&mut self, segment: i32, item: &mut Item, locked: bool) -> Option<Process>;
     /// `BeltTunnelInteractionHandler.flapTunnelsAndCheckIfStuck`: `item` enters segment
-    /// `segment` (-1 past the start); a tunnel over it may take some of it. True when it must
-    /// wait where it is.
-    fn tunnel(&mut self, segment: i32, item: &mut Item) -> bool {
+    /// `segment` (-1 past the start); a tunnel over it may take some of it or stop it.
+    fn tunnel(&mut self, segment: i32, item: &mut Item) -> TunnelStep {
         let _ = (segment, item);
-        false
+        TunnelStep::Pass
     }
     /// The belt funnel over segment `segment` (any offset along the belt's line), with the way
     /// the belt moves; None when there is none.
@@ -1258,15 +1287,27 @@ impl Inventory {
                 if !positive && next == 0.0 {
                     upcoming = -1;
                 }
-                if current as i32 != upcoming {
+                let current_segment = current as i32;
+                if current_segment != upcoming {
                     let before = item.count;
-                    let stuck = world.tunnel(upcoming, &mut item);
+                    let step = world.tunnel(upcoming, &mut item);
                     if item.count != before {
                         out.changed = true;
                     }
-                    if stuck {
-                        set_stalled(&mut item, true, &mut out);
-                        return true;
+                    match step {
+                        TunnelStep::Stuck => {
+                            // `BeltTunnelInteractionHandler.flapTunnelsAndCheckIfStuck` (:42)
+                            item.position =
+                                current_segment as f32 + if positive { 0.99 } else { 0.01 };
+                            let still = current == item.position;
+                            set_stalled(&mut item, still, &mut out);
+                            return true;
+                        }
+                        TunnelStep::Hold => {
+                            set_stalled(&mut item, true, &mut out);
+                            return true;
+                        }
+                        TunnelStep::Pass => {}
                     }
                 }
                 // Held at the end the move is a float's rounding away from none: what counts is
@@ -2092,22 +2133,22 @@ mod tests {
             fn process(&mut self, _: i32, _: &mut Item, _: bool) -> Option<Process> {
                 None
             }
-            fn tunnel(&mut self, segment: i32, item: &mut Item) -> bool {
+            fn tunnel(&mut self, segment: i32, item: &mut Item) -> TunnelStep {
                 self.entered.push(segment);
                 if segment != 2 {
-                    return false;
+                    return TunnelStep::Pass;
                 }
                 for _ in 0..2 {
                     if item.count <= 1 {
                         break;
                     }
                     if self.room == 0 {
-                        return true;
+                        return TunnelStep::Hold;
                     }
                     self.room -= 1;
                     item.count -= 1;
                 }
-                false
+                TunnelStep::Pass
             }
         }
         let mut inv = Inventory::default();
@@ -2239,6 +2280,114 @@ mod tests {
         };
         let m = encode(std::slice::from_ref(&c));
         assert_eq!(decode(&m[0]), vec![c]);
+    }
+
+    #[test]
+    fn emptied_stack_reads_back_empty_and_clears_on_next_tick() {
+        // Observed in s3-emptied-stack-saved-as-one: a 4-item iron ingot stack at 1.9708341 on a
+        // 5-long belt at 32 rpm enters segment 2 where a brass tunnel empties it; that tick's save
+        // holds an empty stack (`minecraft:air`, 0) that survives a stopped reload and is removed
+        // on the next moving tick.
+        struct TakeAll;
+        impl Surroundings for TakeAll {
+            fn ending(&mut self) -> Ending {
+                Ending::Eject
+            }
+            fn insert(&mut self, _: &Item) -> Option<u8> {
+                None
+            }
+            fn process(&mut self, _: i32, _: &mut Item, _: bool) -> Option<Process> {
+                None
+            }
+            fn tunnel(&mut self, segment: i32, item: &mut Item) -> TunnelStep {
+                if segment == 2 {
+                    item.count = 0;
+                    return TunnelStep::Hold;
+                }
+                TunnelStep::Pass
+            }
+        }
+        let mut stack = Item::new("minecraft:iron_ingot", 4, 180, false);
+        stack.position = 1.9708341;
+        let mut inv = Inventory::from_saved(vec![stack], true);
+        inv.tick(5, movement_speed(32.0), true, &mut TakeAll);
+        let saved = inv.to_save();
+        assert_eq!(saved.items.len(), 1);
+        assert_eq!(saved.items[0].count, 0);
+
+        let mut reloaded_item = Item::from_saved(
+            &saved.items[0].item,
+            i32::from(saved.items[0].count),
+            saved.items[0].angle,
+            false,
+        );
+        reloaded_item.position = saved.items[0].position;
+        assert_eq!(reloaded_item.item, "minecraft:air");
+        assert_eq!(reloaded_item.count, 0);
+
+        let mut reloaded = Inventory::from_saved(vec![reloaded_item], true);
+        reloaded.tick(5, 0.0, true, &mut TakeAll);
+        assert_eq!(reloaded.items.len(), 1);
+        assert_eq!(reloaded.items[0].count, 0);
+        reloaded.tick(5, movement_speed(32.0), true, &mut TakeAll);
+        assert!(reloaded.items.is_empty());
+    }
+
+    #[test]
+    fn item_stuck_at_tunnel_stops_at_99_or_01_and_clears_stalled_that_tick() {
+        // Observed in t4-brass-stuck-position: a 4-item iron ingot stack at 1.9708341 moving
+        // positively at 32 rpm is stuck at a brass tunnel over segment 2; Java clamps it to 1.99
+        // with stalled=false that tick and stalled=true on the next. Negative belts clamp to .01.
+        struct StuckAt(i32, TunnelStep);
+        impl Surroundings for StuckAt {
+            fn ending(&mut self) -> Ending {
+                Ending::Blocked
+            }
+            fn insert(&mut self, _: &Item) -> Option<u8> {
+                None
+            }
+            fn process(&mut self, _: i32, _: &mut Item, _: bool) -> Option<Process> {
+                None
+            }
+            fn tunnel(&mut self, segment: i32, _: &mut Item) -> TunnelStep {
+                if segment == self.0 {
+                    self.1
+                } else {
+                    TunnelStep::Pass
+                }
+            }
+        }
+        let mut stack = Item::new("minecraft:iron_ingot", 4, 180, false);
+        stack.position = 1.9708341;
+        let mut inv = Inventory::from_saved(vec![stack], true);
+        let mut world = StuckAt(2, TunnelStep::Stuck);
+        inv.tick(5, movement_speed(32.0), true, &mut world);
+        assert_eq!(inv.items[0].position, 1.99);
+        assert!(!inv.items[0].stalled);
+        inv.tick(5, movement_speed(32.0), true, &mut world);
+        assert_eq!(inv.items[0].position, 1.99);
+        assert!(inv.items[0].stalled);
+
+        // Negative belt entering segment 1 from segment 2 clamps to 2.01.
+        let mut neg_stack = Item::new("minecraft:iron_ingot", 4, 180, false);
+        neg_stack.position = 2.029166;
+        let mut neg_inv = Inventory::from_saved(vec![neg_stack], false);
+        let mut neg_world = StuckAt(1, TunnelStep::Stuck);
+        neg_inv.tick(5, -movement_speed(32.0), true, &mut neg_world);
+        assert_eq!(neg_inv.items[0].position, 2.01);
+        assert!(!neg_inv.items[0].stalled);
+        neg_inv.tick(5, -movement_speed(32.0), true, &mut neg_world);
+        assert_eq!(neg_inv.items[0].position, 2.01);
+        assert!(neg_inv.items[0].stalled);
+
+        // Hold keeps the current position without clamping.
+        let mut hold_stack = Item::new("minecraft:iron_ingot", 4, 180, false);
+        hold_stack.position = 1.9708341;
+        let mut hold_inv = Inventory::from_saved(vec![hold_stack], true);
+        let mut hold_world = StuckAt(2, TunnelStep::Hold);
+        hold_inv.tick(5, movement_speed(32.0), true, &mut hold_world);
+        assert_eq!(hold_inv.items[0].position, 1.9708341);
+        assert!(hold_inv.items[0].stalled);
     }
 }
 
