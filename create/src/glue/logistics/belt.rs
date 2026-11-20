@@ -572,11 +572,7 @@ pub fn direct_input_accepts(lv: &ServerLevel<'_>, pos: [i32; 3], side: Dir) -> b
         return f.belt.is_none() && !f.extracting && f.facing == Dir::Up;
     }
     if super::chute::chute_at(lv, pos).is_some() {
-        let above = [pos[0], pos[1] + 1, pos[2]];
-        let below = [pos[0], pos[1] - 1, pos[2]];
-        return super::chute::chute_at(lv, above).is_none()
-            && !(super::chute::chute_motion(lv, pos) > 0.0
-                && super::chute::chute_at(lv, below).is_none());
+        return super::chute::can_directly_insert(lv, pos);
     }
     if let Some((c, _, seg)) = belt_segment(lv, pos) {
         let dim = lv.dim;
@@ -633,8 +629,7 @@ fn funnel_direct_input(
 }
 
 /// `ChuteBlockEntity`'s `DirectBeltInputBehaviour`: while it may take items
-/// (`canDirectlyInsert`: no chute above leading down into it, not blown up without a chute
-/// feeding it) its handler takes the whole stack when empty (`ChuteItemHandler.insertItem`).
+/// (`canDirectlyInsert`) its handler takes the whole stack when empty (`ChuteItemHandler.insertItem`).
 /// The count left.
 fn chute_direct_input(
     lv: &mut ServerLevel<'_>,
@@ -644,12 +639,7 @@ fn chute_direct_input(
     item: &belt::Item,
     simulate: bool,
 ) -> u8 {
-    let above = [pos[0], pos[1] + 1, pos[2]];
-    let below = [pos[0], pos[1] - 1, pos[2]];
-    if super::chute::chute_at(lv, above).is_some()
-        || (super::chute::chute_motion(lv, pos) > 0.0
-            && super::chute::chute_at(lv, below).is_none())
-    {
+    if !super::chute::can_directly_insert(lv, pos) {
         return item.count;
     }
     let Some(stack) = belt_stack(lv, item) else {

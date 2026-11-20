@@ -285,6 +285,17 @@ pub fn chute_motion(lv: &ServerLevel<'_>, pos: [i32; 3]) -> f32 {
     create_engine::chute::item_motion(chute_push(lv, pos, 0), chute_pull(lv, pos, 0))
 }
 
+/// `ChuteBlockEntity.canDirectlyInsert` of the chute at `pos`: whether it takes a stack straight
+/// from a belt's end (`create_engine::chute::can_directly_insert`).
+pub fn can_directly_insert(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    create_engine::chute::can_directly_insert(
+        chute_facing(lv, [pos[0], pos[1] + 1, pos[2]]),
+        chute_motion(lv, pos),
+        || !input_chutes(lv, pos).is_empty(),
+        true,
+    )
+}
+
 /// `getInputChutes`: the chutes leading into the one at `pos`, the one above facing down and
 /// the diagonal ones above beside it facing toward it.
 fn input_chutes(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Vec<[i32; 3]> {

@@ -73,6 +73,27 @@ pub fn can_output_down(
     !diagonal && drop()
 }
 
+/// `ChuteBlockEntity.canDirectlyInsert` (its `DirectBeltInputBehaviour.onlyInsertWhen`): whether
+/// a chute takes a stack straight from a belt's end or another direct inserter. Not under a chute
+/// leading down into it (`facing_above`: `getChuteFacing` of the block above, None when it is no
+/// chute); not while the fans blow its stacks up (`motion`, `getItemMotion`) unless a chute leads
+/// into it (`has_inputs`, `getInputChutes` not empty); else while it is `open`
+/// (`isOpenChute`).
+pub fn can_directly_insert(
+    facing_above: Option<Dir>,
+    motion: f32,
+    has_inputs: impl FnOnce() -> bool,
+    open: bool,
+) -> bool {
+    if facing_above == Some(Dir::Down) {
+        return false;
+    }
+    if motion > 0.0 && !has_inputs() {
+        return false;
+    }
+    open
+}
+
 /// `ChuteBlockEntity.getExtractionAmount`: a chute takes up to 16 at once.
 pub const CHUTE_AMOUNT: u32 = 16;
 /// `SmartChuteBlockEntity.getExtractionAmount` with the filter's default count (64, "up to"):
@@ -419,6 +440,24 @@ mod tests {
         assert!(!can_output_down(false, None, None, || false));
         assert!(!can_output_down(true, None, None, || true));
         assert!(can_output_down(false, None, Some(true), || false));
+    }
+
+    #[test]
+    fn a_chute_the_fans_blow_up_takes_from_a_belt_only_while_a_chute_leads_in() {
+        // Java issue #163: `canDirectlyInsert` refuses while `getItemMotion() > 0 &&
+        // getInputChutes().isEmpty()` (`ChuteBlockEntity.java:133`). Observed in Java: a fan
+        // turning at 16 rpm under two chutes blows them up at 16 / 64 / 20 chutes a tick; the
+        // top one, at a belt's end with a chute below it and a depot over it, refuses the belt's
+        // stacks (they wait stalled at its end). The port asked for a chute below instead.
+        let up = item_motion(16.0, 0.0);
+        assert_eq!(up, 0.0125);
+        assert!(!can_directly_insert(None, up, || false, true));
+        // A diagonal chute over it leading in (not facing down) feeds it: it takes them.
+        assert!(can_directly_insert(Some(Dir::East), up, || true, true));
+        // Falling, it takes them whatever leads in.
+        assert!(can_directly_insert(None, MOTION, || false, true));
+        // Under a chute leading down into it, never.
+        assert!(!can_directly_insert(Some(Dir::Down), MOTION, || true, true));
     }
 
     #[test]
