@@ -441,6 +441,10 @@ pub struct Item {
     pub fan: crate::fan::Progress,
     /// `lockedExternally`: a mechanical arm reaching for it holds it still for a tick.
     pub held_externally: bool,
+    /// `BeltInventory.toRemove` holds this stack: taken off the belt, but still in `items`
+    /// until the inventory's next tick removes it. Membership is per inventory: an item that
+    /// leaves for another belt (the slicer's transfer) is unmarked. Not saved.
+    pub removing: bool,
     /// A belt funnel facing against the belt holds it at its entry (drawn standing still).
     pub at_funnel: bool,
     /// It didn't move last tick: queued behind another stack or held at the belt's end. Clients
@@ -459,6 +463,7 @@ impl Item {
         copy.locked = false;
         copy.at_funnel = false;
         copy.stalled = false;
+        copy.removing = false;
         copy
     }
 
@@ -476,6 +481,7 @@ impl Item {
             inserted_from: None,
             fan: Default::default(),
             held_externally: false,
+            removing: false,
             at_funnel: false,
             stalled: false,
             progress: None,
@@ -952,8 +958,17 @@ impl Inventory {
         self.to_insert.extend(items);
     }
 
-    /// What a save keeps: the items and those still waiting to go on (`write` inserts them).
+    /// What a save keeps (`BeltInventory.write`): the items, those still waiting to go on
+    /// inserted, and those marked `toRemove` gone.
     pub fn to_save(&self) -> Inventory {
+        let mut copy = self.transported();
+        copy.items.retain(|s| !s.removing);
+        copy
+    }
+
+    /// The stacks a belt slicer moves (`getTransportedItems()`, the ones marked `toRemove`
+    /// included), with those still waiting to go on inserted.
+    pub fn transported(&self) -> Inventory {
         let mut copy = self.clone();
         for i in std::mem::take(&mut copy.to_insert) {
             copy.insert(i);
@@ -961,10 +976,12 @@ impl Inventory {
         copy
     }
 
-    /// Equality of the fields persisted by the belt inventory codec. Queued insertions
-    /// participate as in Java's `BeltInventory.write`; client and fan tick caches do not.
+    /// Equality of the fields persisted by the belt inventory codec. Queued insertions and
+    /// removals participate as in Java's `BeltInventory.write`; client and fan tick caches do
+    /// not.
     pub fn saved_eq(&self, other: &Self) -> bool {
-        if !self.to_insert.is_empty() || !other.to_insert.is_empty() {
+        let pending = |i: &Self| !i.to_insert.is_empty() || i.items.iter().any(|s| s.removing);
+        if pending(self) || pending(other) {
             return self.to_save().saved_eq(&other.to_save());
         }
         let (a, b) = (self, other);
@@ -1028,18 +1045,59 @@ impl Inventory {
     }
 
     /// `applyToEachWithin` taking every item within `max` of `position` off the belt (a player's
-    /// empty hand, `BeltBlock.useItemOn`).
+    /// empty hand, `BeltBlock.useItemOn`): the stacks are returned for the caller, and each one
+    /// left on the belt is emptied where it stands (`placeItemBackInInventory` fills the very
+    /// stack) and only marked `toRemove` — it stays in `items`, blocking inserts, until the
+    /// inventory's next tick removes it.
     pub fn take_within(&mut self, position: f32, max: f32) -> Vec<Item> {
-        let (taken, kept): (Vec<Item>, Vec<Item>) = std::mem::take(&mut self.items)
-            .into_iter()
-            .partition(|s| (position - s.position).abs() < max);
-        self.items = kept;
+        let mut taken = Vec::new();
+        for s in &mut self.items {
+            if s.removing || (position - s.position).abs() >= max {
+                continue;
+            }
+            taken.push(s.clone());
+            s.item = "minecraft:air".to_owned();
+            s.count = 0;
+            s.removing = true;
+        }
         taken
     }
 
+    /// `getStackAtOffset`: the first item within segment `offset` (`offset < position <= offset
+    /// + 1`), skipping one already marked `toRemove`.
+    pub fn stack_at(&self, offset: i32) -> Option<&Item> {
+        let (min, max) = (offset as f32, offset as f32 + 1.0);
+        self.items
+            .iter()
+            .find(|s| !s.removing && s.position <= max && s.position > min)
+    }
+
+    /// `ItemHandlerBeltSegment.extractItem`: up to `amount` of the stack at segment `offset`
+    /// splits off (the item's stack shrinks in place; `simulate` leaves it untouched); one it
+    /// empties is only marked `toRemove`. None when no stack is at the segment. What was taken,
+    /// and its name.
+    pub fn extract_at(&mut self, offset: i32, amount: u8, simulate: bool) -> Option<(String, u8)> {
+        let (min, max) = (offset as f32, offset as f32 + 1.0);
+        let within = |s: &Item| !s.removing && s.position <= max && s.position > min;
+        let i = self.items.iter().position(within)?;
+        let name = self.items[i].item.clone();
+        let taken = amount.min(self.items[i].count);
+        if simulate {
+            return Some((name, taken));
+        }
+        let s = &mut self.items[i];
+        s.count -= taken;
+        if s.count == 0 {
+            s.item = "minecraft:air".to_owned();
+            s.removing = true;
+        }
+        Some((name, taken))
+    }
+
     /// `applyToEachWithin`: `f` processes each item within `max` of `position`; one it converts
-    /// leaves, its held output put back at the segment's middle and its outputs where it was, all
-    /// on the belt from the next tick. True when anything changed.
+    /// is only marked `toRemove` (it stays in `items` until the next tick's top), its held
+    /// output put back at the segment's middle and its outputs where it was, all on the belt
+    /// from the next tick. True when anything changed.
     pub fn apply_within(
         &mut self,
         position: f32,
@@ -1049,14 +1107,14 @@ impl Inventory {
         let mut dirty = false;
         let mut i = 0;
         while i < self.items.len() {
-            if (position - self.items[i].position).abs() >= max {
+            if self.items[i].removing || (position - self.items[i].position).abs() >= max {
                 i += 1;
                 continue;
             }
             match f(&mut self.items[i]) {
                 Process::Convert { held, outputs } => {
                     dirty = true;
-                    self.items.remove(i);
+                    self.items[i].removing = true;
                     if let Some(mut h) = held {
                         let nudge = if self.positive {
                             1.0 / 512.0
@@ -1067,6 +1125,7 @@ impl Inventory {
                         self.to_insert.push(h);
                     }
                     self.to_insert.extend(outputs);
+                    i += 1;
                 }
                 _ => i += 1,
             }
@@ -1110,10 +1169,13 @@ impl Inventory {
         world: &mut impl Surroundings,
     ) -> Ticked {
         let mut out = Ticked::default();
-        if !self.to_insert.is_empty() {
+        // Added/removed items from previous cycle (`BeltInventory.tick`'s top): the queued
+        // insertions go on, the stacks marked `toRemove` leave, both before the speed check.
+        if !self.to_insert.is_empty() || self.items.iter().any(|s| s.removing) {
             for item in std::mem::take(&mut self.to_insert) {
                 self.insert(item);
             }
+            self.items.retain(|s| !s.removing);
             out.changed = true;
         }
         if speed == 0.0 {
@@ -1182,7 +1244,6 @@ impl Inventory {
                 }
                 // Belt funnels: a funnel over a segment the item reaches takes what it can of it.
                 match self.funnels(&mut item, next, length, world, &mut out) {
-                    FunnelStep::Gone => return false,
                     FunnelStep::Held => {
                         return true;
                     }
@@ -1360,11 +1421,14 @@ impl Inventory {
                 world.funnel_insert(segment, &*item)
             };
             if let Some(left) = left.filter(|l| *l != before) {
+                // `currentItem.stack = remainder`: an empty remainder is assigned too — the
+                // item stays until the next tick's movement loop drops empty stacks
+                // (`BeltInventory.java:109-113`), still blocking inserts for that tick.
+                if left == 0 {
+                    item.item = "minecraft:air".to_owned();
+                }
                 item.count = left;
                 out.changed = true;
-                if left == 0 {
-                    return FunnelStep::Gone;
-                }
             }
             if blocking {
                 held = true;
@@ -1405,7 +1469,6 @@ enum Step {
 enum FunnelStep {
     Free,
     Held,
-    Gone,
 }
 
 /// The mod-message channel that brings belts' items to clients.
@@ -1546,6 +1609,7 @@ pub fn decode(mut d: &[u8]) -> Vec<Contents> {
                 inserted_from: None,
                 fan: Default::default(),
                 held_externally: false,
+                removing: false,
                 at_funnel: r[11] & 2 != 0,
                 stalled: r[11] & 4 != 0,
                 progress: None,
@@ -1718,6 +1782,7 @@ mod tests {
     /// A belt with funnels over some of its segments, each taking up to `room` items.
     struct Funnels {
         at: Vec<(i32, crate::funnel::OnBelt)>,
+        movement: Dir,
         room: u8,
         taken: Vec<(i32, u8)>,
     }
@@ -1733,7 +1798,7 @@ mod tests {
         }
         fn funnel(&mut self, segment: i32) -> Option<(crate::funnel::OnBelt, Dir)> {
             let f = self.at.iter().find(|(s, _)| *s == segment)?.1;
-            Some((f, Dir::South))
+            Some((f, self.movement))
         }
         fn funnel_insert(&mut self, segment: i32, item: &Item) -> Option<u8> {
             let n = item.count.min(self.room);
@@ -1755,6 +1820,7 @@ mod tests {
         };
         let mut world = Funnels {
             at: vec![(2, blocking)],
+            movement: Dir::South,
             room: 3,
             taken: Vec::new(),
         };
@@ -1773,8 +1839,15 @@ mod tests {
         assert_eq!(inv.items.len(), 1);
         assert_eq!(inv.items[0].count, 2);
         assert_eq!(inv.items[0].position, 2.5);
-        // Room again: the rest goes in and the item is gone.
+        // Room again: the rest goes in. The emptied stack stays for the rest of this tick
+        // (`currentItem.stack = remainder`), held at the funnel's entry, and leaves at the
+        // next tick's loop top.
         world.room = 64;
+        inv.tick(4, 0.1, true, &mut world);
+        assert_eq!(inv.items.len(), 1);
+        assert_eq!(inv.items[0].count, 0);
+        assert_eq!(inv.items[0].item, "minecraft:air");
+        assert_eq!(inv.items[0].position, 2.5);
         inv.tick(4, 0.1, true, &mut world);
         assert!(inv.items.is_empty());
         // Powered, a blocking funnel still holds items but takes none.
@@ -1799,6 +1872,7 @@ mod tests {
                     powered: false,
                 },
             )],
+            movement: Dir::South,
             room: 1,
             taken: Vec::new(),
         };
@@ -1821,6 +1895,130 @@ mod tests {
         inv.tick(4, 0.1, true, &mut world);
         assert_eq!(inv.items[0].position, at);
         assert!(!inv.items[0].held_externally);
+    }
+
+    #[test]
+    fn a_funnels_emptied_stack_lingers_one_tick_where_it_was_taken() {
+        // Java issue #136: `BeltFunnelInteractionHandler` assigns the empty remainder
+        // (`currentItem.stack = remainder`), so the stack is still in the item list — and the
+        // saved inventory, blocking `canInsertAt` — until `BeltInventory.tick`'s loop top
+        // removes it next tick (BeltInventory.java:109-113). Observed in Java: an extended
+        // funnel facing against a belt of length 5 moving at -32 RPM takes a whole stack at
+        // its entry 2.999 (2 + .5 + .499); the empty (minecraft:air, 0) item sits there one
+        // tick, gone the next.
+        use crate::funnel::{BeltShape, OnBelt};
+        let blocking = OnBelt {
+            facing: Dir::South,
+            shape: BeltShape::Extended,
+            powered: false,
+        };
+        let mut world = Funnels {
+            at: vec![(2, blocking)],
+            movement: Dir::North,
+            room: 10,
+            taken: Vec::new(),
+        };
+        let mut inv = Inventory::from_saved(Vec::new(), false);
+        let mut item = Item::new("minecraft:diamond", 10, 180, false);
+        item.position = 2.6;
+        item.inserted_at = 2;
+        item.inserted_from = Some(Dir::Up);
+        inv.add(item);
+        inv.tick(5, -0.1, true, &mut world);
+        assert_eq!(world.taken, [(2, 10)]);
+        assert_eq!(inv.items.len(), 1);
+        assert_eq!(
+            (inv.items[0].item.as_str(), inv.items[0].count),
+            ("minecraft:air", 0)
+        );
+        assert!((inv.items[0].position - 2.999).abs() < 1e-6);
+        // Still blocking a stack put on from above at that segment this tick.
+        assert!(!inv.can_insert_at_from_side(2, Dir::Up, Dir::North));
+        // The saved inventory holds it for this one tick (Create saves `items` as they are).
+        assert_eq!(inv.to_save().items.len(), 1);
+        inv.tick(5, -0.1, true, &mut world);
+        assert!(inv.items.is_empty());
+        assert!(
+            world.taken.len() == 1,
+            "an empty stack is not offered again"
+        );
+    }
+
+    #[test]
+    fn taken_stacks_leave_at_the_next_tick_even_while_stopped() {
+        // Java issue #137: `applyToEachWithin` only marks a taken stack `toRemove`
+        // (BeltInventory.java:476); it stays in `items` — where it still blocks
+        // `canInsertAtFromSide` — until the inventory's next tick, whose top removes it
+        // before the stopped-belt return (`BeltInventory.tick`).
+        let mut item = Item::new("minecraft:iron_ingot", 5, 0, false);
+        item.position = 2.5;
+        item.inserted_at = 2;
+        item.inserted_from = Some(Dir::Up);
+        let mut inv = Inventory::from_saved(vec![item], true);
+        let taken = inv.take_within(2.5, 0.55);
+        assert_eq!(
+            taken
+                .iter()
+                .map(|i| (i.item.as_str(), i.count))
+                .collect::<Vec<_>>(),
+            [("minecraft:iron_ingot", 5)]
+        );
+        assert_eq!(inv.items.len(), 1, "the stack is only marked");
+        assert_eq!(
+            (inv.items[0].item.as_str(), inv.items[0].count),
+            ("minecraft:air", 0)
+        );
+        assert!(inv.items[0].removing);
+        assert!(!inv.can_insert_at_from_side(2, Dir::Up, Dir::South));
+        // A save writes it gone (`write` removes `toRemove` first).
+        assert!(inv.to_save().items.is_empty());
+        // A second take in the same tick does not take it twice.
+        assert!(inv.take_within(2.5, 0.55).is_empty());
+        // The next tick removes it, stopped belt included.
+        inv.tick(4, 0.0, true, &mut Open(Ending::Eject));
+        assert!(inv.items.is_empty());
+    }
+
+    #[test]
+    fn the_handler_takes_from_the_segment_and_only_marks_when_empty() {
+        // `ItemHandlerBeltSegment`: `getStackAtOffset` finds the first stack inside the
+        // segment (skipping one already marked `toRemove`); `extractItem` splits it in place,
+        // and one it empties is only marked `toRemove` (itself skipped from then on).
+        let mut a = Item::new("minecraft:gold_ingot", 8, 0, false);
+        a.position = 2.25;
+        a.inserted_at = 2;
+        let mut b = Item::new("minecraft:diamond", 3, 0, false);
+        b.position = 2.75;
+        b.inserted_at = 2;
+        let mut inv = Inventory::from_saved(vec![a, b], true);
+        assert_eq!(inv.stack_at(2).unwrap().item, "minecraft:gold_ingot");
+        assert_eq!(
+            inv.extract_at(2, 5, true),
+            Some(("minecraft:gold_ingot".into(), 5))
+        );
+        assert_eq!(inv.items[0].count, 8, "a simulated extract changes nothing");
+        assert_eq!(
+            inv.extract_at(2, 5, false),
+            Some(("minecraft:gold_ingot".into(), 5))
+        );
+        assert_eq!(inv.items[0].count, 3);
+        assert!(!inv.items[0].removing);
+        assert_eq!(
+            inv.extract_at(2, 4, false),
+            Some(("minecraft:gold_ingot".into(), 3))
+        );
+        assert_eq!(
+            (
+                inv.items[0].item.as_str(),
+                inv.items[0].count,
+                inv.items[0].removing
+            ),
+            ("minecraft:air", 0, true)
+        );
+        assert_eq!(inv.stack_at(2).unwrap().item, "minecraft:diamond");
+        inv.tick(4, 0.0, true, &mut Open(Ending::Eject));
+        assert_eq!(inv.items.len(), 1);
+        assert_eq!(inv.items[0].item, "minecraft:diamond");
     }
 
     #[test]

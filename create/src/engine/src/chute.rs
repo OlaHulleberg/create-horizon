@@ -50,6 +50,29 @@ pub fn step(position: f32, motion: f32, can_output: bool) -> Fall {
     Fall::At(next)
 }
 
+/// `handleDownwardOutput(true)`, the question `tick` asks past the middle: whether the stack
+/// may go on. `inventory`: an item handler below and whether a simulated `insertItemStacked`
+/// takes any of the stack; `target`: the chute it leads into and whether it `canAcceptItem`;
+/// `drop`: nothing below stops it falling out (no funnel facing down, no rigid top). A
+/// straight chute over an inventory goes no further than the inventory's answer; a diagonal
+/// one asks its target next and never drops.
+pub fn can_output_down(
+    diagonal: bool,
+    inventory: Option<bool>,
+    target: Option<bool>,
+    drop: impl FnOnce() -> bool,
+) -> bool {
+    match inventory {
+        Some(true) => return true,
+        Some(false) if !diagonal => return false,
+        _ => {}
+    }
+    if let Some(accepts) = target {
+        return accepts;
+    }
+    !diagonal && drop()
+}
+
 /// `ChuteBlockEntity.getExtractionAmount`: a chute takes up to 16 at once.
 pub const CHUTE_AMOUNT: u32 = 16;
 /// `SmartChuteBlockEntity.getExtractionAmount` with the filter's default count (64, "up to"):
@@ -343,6 +366,32 @@ pub fn extract<K: PartialEq>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stack_over_an_inventory_that_refuses_it_waits_in_the_middle() {
+        // Java issue #140: over a depot that already holds a stack, the chute's next stack
+        // waits at 0.5 (`ChuteBlockEntity.tick` stays there when `handleDownwardOutput(true)`
+        // fails), where the port cycled 0.3, 0.1, 0.5. Observed in Java: 34 gold ingots at
+        // 0.5, tick after tick.
+        let refused = can_output_down(false, Some(false), None, || true);
+        assert!(!refused);
+        assert_eq!(fall(0.5, refused), Fall::At(0.5));
+        assert_eq!(fall(0.7, refused), Fall::At(0.5));
+        // Room for any of it: it goes on, and leaves past the bottom.
+        let taken = can_output_down(false, Some(true), None, || false);
+        assert_eq!(fall(0.5, taken), Fall::At(0.3));
+        assert_eq!(fall(0.1, taken), Fall::Out);
+        // A diagonal chute over a refusing inventory asks the chute it leads into next
+        // (`if (direction == Direction.DOWN) return false;` stops only a straight one).
+        assert!(can_output_down(true, Some(false), Some(true), || false));
+        assert!(!can_output_down(true, Some(false), Some(false), || true));
+        // Nothing below: a straight chute drops it unless something stops it; a diagonal
+        // one never does.
+        assert!(can_output_down(false, None, None, || true));
+        assert!(!can_output_down(false, None, None, || false));
+        assert!(!can_output_down(true, None, None, || true));
+        assert!(can_output_down(false, None, Some(true), || false));
+    }
 
     #[test]
     fn diagonal_chutes_lead_down_beside_and_join_as_create_s_do() {

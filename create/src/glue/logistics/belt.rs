@@ -738,13 +738,21 @@ pub fn save_belts(lv: &mut ServerLevel<'_>) {
 /// drop, then the engine visits depots and belts in level registration order,
 /// applying each transfer before the next entity's turn (`BeltBlockEntity.tick`,
 /// `DepotBehaviour.tick`), including empty inventories' direction updates.
-pub fn tick_transport(lv: &mut ServerLevel<'_>) {
-    let dim = lv.dim;
+/// `BeltBlock.onRemove`'s break cascade: it runs at block-change time in Java, before any
+/// block entity ticks, so the whole chain (and the tunnels the removals notify) is gone within
+/// the same tick. The port commits the breaks where its hosts tell it of them, so this pass
+/// leads the logistics tick.
+pub fn break_pass(lv: &mut ServerLevel<'_>) {
     belt::break_cascade(&mut BeltBreakWorld(lv));
+    let dim = lv.dim;
     let drops = with_world(|w| std::mem::take(&mut w.dims[dim].belt_drops)).unwrap_or_default();
     for (c, seg, length, item) in drops {
         eject_item(lv, c, &seg, length, 0.0, &item);
     }
+}
+
+pub fn tick_transport(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
     crate::glue::fluids::pipes::tick_pipes(lv);
     let Some(mut phase) = with_world(|w| w.transport_ticks(dim)) else {
         return;

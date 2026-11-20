@@ -20,6 +20,7 @@ fn entity_view(block: Block) -> Option<View> {
         | Block::GlassFluidPipe
         | Block::EncasedFluidPipe
         | Block::SmartFluidPipe => Some(View::Transport),
+        Block::Chute | Block::SmartChute => Some(View::Chute),
         Block::FluidValve | Block::FluidTank | Block::CreativeFluidTank => Some(View::Transport),
         _ => None,
     }
@@ -846,6 +847,18 @@ impl TransportTicks {
     }
 }
 
+/// Resumable walk of a level's chutes in registration order; a chute registered during the
+/// walk waits for the next one, one removed before its turn is skipped.
+pub struct ChuteTicks {
+    dim: usize,
+    entities: Walk,
+}
+impl ChuteTicks {
+    pub fn next(&mut self, world: &CreateWorld) -> Option<[i32; 3]> {
+        self.entities.next(&world.dims[self.dim].block_entities)
+    }
+}
+
 /// What breaking a belt segment does to the next ones (`BeltBlock.onRemove`): each becomes a
 /// shaft on the belt's axis (a pulley) or air.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1033,9 +1046,6 @@ impl CreateWorld {
             d.deployer_power_checks.push(pos);
             // A depot below may have work for it.
             d.depot_work.push([pos[0], pos[1] - 2, pos[2]]);
-        }
-        if block == Block::AndesiteTunnel || block == Block::BrassTunnel {
-            d.tunnel_fresh.push(pos);
         }
         if block == Block::BrassTunnel && !d.brass.contains_key(&pos) {
             // `read`: what it held and its mode, saved with the column.
@@ -1748,6 +1758,11 @@ impl CreateWorld {
             if tunnel(new) && !tunnel(old) {
                 // `BeltTunnelItem`: the belt below is cased.
                 self.dims[dim].tunnels_new.push(pos);
+                // `BeltTunnelBlock.getStateForPlacement`: a tunnel just placed takes the shape
+                // its surroundings give at once. A later state change of its own (the wrench's
+                // window toggle sets `UPDATE_CLIENTS` only) runs no shape update at all, and
+                // `updateShape` keeps a state whose window fits, so it is not recomputed.
+                self.dims[dim].tunnel_fresh.push(pos);
             }
             if self.table.get(new).map(|(b, _)| b) == Some(Block::Millstone) {
                 self.dims[dim].millstones.entry(pos).or_default();
@@ -4951,6 +4966,16 @@ impl CreateWorld {
         }
     }
 
+    /// The level's chutes in block-entity registration order (`ChuteBlockEntity.tick` on
+    /// `Level.blockEntityTickers`): one chute registered after another moves the stack that one
+    /// hands down to it within the same level tick.
+    pub fn chute_ticks(&self, dim: usize) -> ChuteTicks {
+        ChuteTicks {
+            dim,
+            entities: self.dims[dim].block_entities.walk(View::Chute),
+        }
+    }
+
     /// One DepotBehaviour.tick, including a stack inserted by an earlier belt this tick.
     /// Returns its arrival test, before movement, so received/held callbacks run on this turn.
     pub fn tick_depot(&mut self, dim: usize, pos: [i32; 3], upright: bool) -> bool {
@@ -5393,6 +5418,82 @@ mod tests {
         states::set_range(2, names.len() as u32);
         let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
         CreateWorld::new(table)
+    }
+
+    #[test]
+    fn chutes_tick_in_their_registration_order() {
+        // Java issue #139: `ChuteBlockEntity.tick` runs on the level's block-entity ticker in
+        // registration order, so a stack a chute hands down during its own tick (`handleDownwardOutput`
+        // sets the target chute's item at the top) moves on in the same level tick when the
+        // target is registered after it, and waits a tick when it is registered before it.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            (
+                "create:chute",
+                vec![("facing", "down"), ("shape", "normal")],
+            ),
+            ("create:smart_chute", vec![]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        // Registration order, not position: the chute below is placed first, so it ticks
+        // before the one above it (whose stack then waits a tick); the one at z 6 last.
+        w.apply_block_change(0, [0, 8, 5], 0, 10, false);
+        w.apply_block_change(0, [0, 9, 5], 0, 10, false);
+        w.apply_block_change(0, [0, 8, 6], 0, 11, false);
+        let order = |mut phase: ChuteTicks, w: &CreateWorld| {
+            let mut out = Vec::new();
+            while let Some(p) = phase.next(w) {
+                out.push(p);
+            }
+            out
+        };
+        assert_eq!(
+            order(w.chute_ticks(0), &w),
+            vec![[0, 8, 5], [0, 9, 5], [0, 8, 6]]
+        );
+        // One removed leaves the walk; the transport walk never holds them.
+        w.apply_block_change(0, [0, 8, 5], 10, 0, false);
+        assert_eq!(order(w.chute_ticks(0), &w), vec![[0, 9, 5], [0, 8, 6]]);
+        let mut phase = w.transport_ticks(0);
+        assert!(phase.next(&mut w).is_none());
+        states::clear_range();
+    }
+
+    #[test]
+    fn only_a_newly_placed_tunnel_takes_a_fresh_shape() {
+        // Java issue #134: `BeltTunnelBlock.onWrenched` sets the window with `UPDATE_CLIENTS`
+        // alone, so no shape update runs on the tunnel; `updateShape`, when a neighbour does
+        // change, keeps a state whose `hasWindow` fits (`BeltTunnelBlock.java:117-127`,
+        // `:196-204`). A fresh shape is only `getStateForPlacement`'s, for a tunnel just
+        // placed — not for a state change of its own, nor for one loaded with the world.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let shape = |s| ("create:andesite_tunnel", vec![("axis", "z"), ("shape", s)]);
+        let names = [shape("straight"), shape("window"), shape("closed")];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let at = [0, 9, 5];
+        // Placed: the placement state is computed fresh (`getStateForPlacement`).
+        w.apply_block_change(0, at, 0, 10, false);
+        assert_eq!(w.dims[0].tunnel_fresh, vec![at]);
+        assert_eq!(w.dims[0].tunnels_new, vec![at]);
+        w.dims[0].tunnel_fresh.clear();
+        // The wrench toggles the window (`UPDATE_CLIENTS`): no shape update runs at all.
+        w.apply_block_change(0, at, 10, 11, false);
+        w.apply_block_change(0, at, 11, 12, false);
+        assert!(w.dims[0].tunnel_fresh.is_empty());
+        // A neighbour's change asks `updateShape`, which keeps a window that fits: that queue
+        // (`neighbor_changed`) is not the fresh one.
+        w.neighbor_changed(0, at, 12);
+        assert!(w.dims[0].tunnel_fresh.is_empty());
+        assert_eq!(w.dims[0].tunnel_checks, vec![at]);
+        states::clear_range();
     }
 
     fn item_belt_world(rpm: f32) -> CreateWorld {

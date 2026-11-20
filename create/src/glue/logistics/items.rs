@@ -376,6 +376,14 @@ pub fn insert_room(
     if let Some(room) = actors::psi_room(lv, pos, stack) {
         return Some(room);
     }
+    // A belt's handler answers from the engine (`ItemHandlerBeltSegment`), whose insert is
+    // not a journaled write this aborting transaction could take back.
+    if super::belt::belt_segment(lv, pos).is_some_and(|(_, _, s)| s.transports()) {
+        let (id, progress) = super::belt::belt_name(&*lv.host, stack);
+        let count = stack.count().min(u32::from(u8::MAX)) as u8;
+        return super::belt::put_on_from_above(lv, pos, &id, count, progress, true)
+            .map(|left| u32::from(count - left));
+    }
     let to = items_at(lv, pos, Some(side))?;
     let resource = ItemResource::of(stack);
     let limit = u32::from(stack_limit(&*lv.host, &id_of(&*lv.host, stack)));

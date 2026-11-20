@@ -278,6 +278,10 @@ impl Subsystem for Logistics {
     }
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        // The belt break cascade first: `BeltBlock.onRemove` runs at block-change time in
+        // Java, before every block entity tick, and `BeltTunnelBlock.neighborChanged` breaks
+        // a tunnel over a segment it removes in the same tick.
+        belt::break_pass(lv);
         placement::tick_vault_layers(lv);
         chute::tick_vaults(lv);
         chute::tick_chute_shapes(lv);
@@ -323,6 +327,11 @@ impl Subsystem for Logistics {
         let set = |lv: &mut ServerLevel<'_>, key: &str, value: &str| {
             lv.set_property(pos, key, value, super::server::update_all());
         };
+        // `BeltTunnelBlock.onWrenched` sets the toggled window with `UPDATE_CLIENTS` alone:
+        // no neighbour hears of it, so nothing runs a shape update on the tunnel.
+        let set_clients = |lv: &mut ServerLevel<'_>, key: &str, value: &str| {
+            lv.set_property(pos, key, value, super::server::UPDATE_CLIENTS);
+        };
         match block {
             Block::Belt => {
                 belt::wrench_belt(lv, pos, player, clicked);
@@ -367,8 +376,8 @@ impl Subsystem for Logistics {
             }
             // BeltTunnelBlock.onWrenched: a straight tunnel's window opens or closes.
             Block::AndesiteTunnel | Block::BrassTunnel => match prop(lv, "shape").as_deref() {
-                Some("window") => set(lv, "shape", "closed"),
-                Some("closed") => set(lv, "shape", "window"),
+                Some("window") => set_clients(lv, "shape", "closed"),
+                Some("closed") => set_clients(lv, "shape", "window"),
                 _ => {}
             },
             _ => return false,
@@ -1142,12 +1151,13 @@ pub(super) fn belts_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::b
                 .zip(ids)
                 .filter_map(|(n, id)| {
                     let Tag::String(id) = id else { return None };
-                    let mut item = create_engine::belt::Item::new(
-                        &id.to_string_lossy(),
-                        n[3].clamp(1, 255) as u8,
-                        n[2],
-                        false,
-                    );
+                    // `ItemStack`'s codec takes a count from 1; an empty stack (which the
+                    // funnel's remainder or a pickup leaves for a tick) is `minecraft:air`
+                    // with 0.
+                    let empty = id.to_string_lossy() == "minecraft:air";
+                    let count = n[3].clamp(i32::from(!empty), 255) as u8;
+                    let mut item =
+                        create_engine::belt::Item::new(&id.to_string_lossy(), count, n[2], false);
                     item.position = f32::from_bits(n[0] as u32);
                     item.side_offset = f32::from_bits(n[1] as u32);
                     item.locked = n[4] != 0;
