@@ -490,14 +490,20 @@ impl Item {
         i
     }
 
-    /// `TransportedItemStack.read`: an emptied stack (`count == 0`) reads back as empty
-    /// (`minecraft:air`, count 0), never clamped up to 1.
+    /// `TransportedItemStack.read` (`ItemStack.parseOptional`): an emptied stack (`count == 0`,
+    /// or saved as `minecraft:air`) reads back as empty (`minecraft:air`, count 0), never
+    /// clamped up to 1.
     pub fn from_saved(item: impl Into<String>, count: i32, angle: i32, upright: bool) -> Item {
-        let count = count.clamp(0, 255) as u8;
+        let item = item.into();
+        let count = if item == "minecraft:air" {
+            0
+        } else {
+            count.clamp(0, 255) as u8
+        };
         let item = if count == 0 {
             "minecraft:air".to_owned()
         } else {
-            item.into()
+            item
         };
         Item::new(&item, count, angle, upright)
     }
@@ -1285,9 +1291,6 @@ impl Inventory {
                 if current_segment != upcoming {
                     let before = item.count;
                     let step = world.tunnel(upcoming, &mut item);
-                    if item.count == 0 {
-                        item.item = "minecraft:air".to_owned();
-                    }
                     if item.count != before {
                         out.changed = true;
                     }
@@ -2310,7 +2313,6 @@ mod tests {
         inv.tick(5, movement_speed(32.0), true, &mut TakeAll);
         let saved = inv.to_save();
         assert_eq!(saved.items.len(), 1);
-        assert_eq!(saved.items[0].item, "minecraft:air");
         assert_eq!(saved.items[0].count, 0);
 
         let mut reloaded_item = Item::from_saved(
