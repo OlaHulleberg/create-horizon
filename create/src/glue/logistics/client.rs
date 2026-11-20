@@ -488,8 +488,7 @@ pub fn predict_click(
     };
     if filter_slot_hit(block, &info, click) {
         let held = click.stack.map(|s| s.item().id(&*host));
-        // A brass tunnel's slot takes a wrench's or an arm's click too
-        // (`tunnel::FilterClick::Keep`); a clipboard copies settings instead.
+        // Java takes a wrench's or an arm's click on a brass tunnel's slot.
         let passes = match held.as_deref() {
             Some("create:clipboard") => true,
             Some("create:wrench" | "create:mechanical_arm") => block != Block::BrassTunnel,

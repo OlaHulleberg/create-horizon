@@ -719,9 +719,7 @@ fn use_block(
         Block::BrassFunnel | Block::BrassBeltFunnel => {
             funnel::use_funnel_filter(&mut lv, pos, click)
         }
-        // A filter slot first (`ValueSettingsInputHandler`), then `useWithoutItem`: the main
-        // hand takes the stacks of the tunnel's group whatever it holds (`BrassTunnelBlock`
-        // has no `useItemOn`, so the default passes a held item on to it).
+        // `BrassTunnelBlock` has no `useItemOn`, so a held item reaches `useWithoutItem`.
         Block::BrassTunnel => {
             tunnel::use_tunnel_filter(&mut lv, pos, click)
                 || main && tunnel::grab_stacks(&mut lv, pos, click.player)

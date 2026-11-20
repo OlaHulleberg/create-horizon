@@ -222,8 +222,6 @@ impl Run {
                     && item == "create:wrench")
                 && name != "create:brass_casing"
                 && name != "create:andesite_casing"
-                // `tunnel_use` took the tunnel's own handlers; a click they pass goes on to the
-                // held item's `useOn` (nothing for an empty hand or a plain item).
                 && !matches!(block, Block::BrassTunnel | Block::AndesiteTunnel)
                 && !(name == "create:belt"
                     && sneaking

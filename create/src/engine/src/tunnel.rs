@@ -553,23 +553,16 @@ pub fn filter_slot(axis: Axis, shape: Shape, side: Dir) -> Option<[f64; 3]> {
         .then(|| crate::board::sided_offset([0.5, 13.0 / 16.0, 15.5 / 16.0], side))
 }
 
-/// What a player's click on side `side` of a brass tunnel (axis `axis`, shape `shape`), at
-/// `local` in the block and holding `held` (None: an empty hand), does to its filters.
-/// `ValueSettingsInputHandler.onBlockActivated` takes a click on the side's filter slot
-/// whatever is held, then `FilteringBehaviour.onShortInteract` sets the filter unless
-/// `canShortInteract` refuses the held item.
+/// `ValueSettingsInputHandler.onBlockActivated` on a `SidedFilteringBehaviour`, then
+/// `FilteringBehaviour.onShortInteract`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FilterClick {
-    /// Not on a filter slot: the click goes on to the block (`useItemOn`).
     Miss,
-    /// On the slot with a wrench or a mechanical arm: the click is taken, the filter kept.
+    /// Java cancels the click before `canShortInteract` refuses a wrench or an arm.
     Keep,
-    /// On the slot: the held item becomes the side's filter (an empty hand clears it).
     Set,
 }
 
-/// `FilterClick` for a click (see there). The caller checks `ValueSettingsInputHandler`'s
-/// `canInteract` (not sneaking, may build) first.
 pub fn filter_click(
     axis: Axis,
     shape: Shape,
@@ -714,8 +707,7 @@ mod tests {
 
     #[test]
     fn filter_clicks_take_only_their_open_sides_slots() {
-        // Create's own run: a `t_left` tunnel along z has sides south, west and north
-        // (`Sides:[3,4,2]`); its slot is 8, 13, 15.5 px on the south side turned to each.
+        // Create's run: a `t_left` tunnel along z saved `Sides:[3,4,2]`.
         let (axis, shape) = (Axis::Z, Shape::TLeft);
         let east = [0.96875, 0.8125, 0.5];
         let west = [0.03125, 0.8125, 0.5];
@@ -723,7 +715,6 @@ mod tests {
         let slot = filter_slot(axis, shape, Dir::West).unwrap();
         assert!((0..3).all(|i| (slot[i] - west[i]).abs() < 1e-9));
         let click = |side, at, held| filter_click(axis, shape, side, at, held);
-        // No slot on the east side: a diamond there goes on to the block.
         assert_eq!(
             click(Dir::East, east, Some("minecraft:diamond")),
             FilterClick::Miss
@@ -733,11 +724,9 @@ mod tests {
             FilterClick::Set
         );
         assert_eq!(click(Dir::West, west, None), FilterClick::Set);
-        // `canShortInteract` refuses them, but the handler has taken the click.
         for held in ["create:wrench", "create:mechanical_arm"] {
             assert_eq!(click(Dir::West, west, Some(held)), FilterClick::Keep);
         }
-        // Off the slot (its box is 0.25 across): the block's.
         assert_eq!(
             click(Dir::West, [0.03125, 0.5, 0.5], Some("minecraft:diamond")),
             FilterClick::Miss
