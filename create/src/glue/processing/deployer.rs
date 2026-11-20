@@ -234,7 +234,6 @@ pub fn deployer_on_belt(
                         out.item = name;
                         out.count = n;
                         out.progress = None;
-                        out.fan = Default::default();
                         out
                     })
                     .collect(),
@@ -243,7 +242,10 @@ pub fn deployer_on_belt(
             deployer_used(lv, &mut d, &r, above);
             with_world(|w| w.set_deployer(dim, above, d.clone()));
             Process::Convert {
-                held: item.left_after_one(),
+                held: item.left_after_one().map(|mut left| {
+                    left.fan.clear();
+                    left
+                }),
                 outputs,
             }
         }

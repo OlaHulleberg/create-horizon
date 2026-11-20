@@ -125,6 +125,7 @@ pub fn on_depot(
 ) -> OnBelt {
     let result = on_belt(s, item, recipes, held.locked);
     if matches!(result, OnBelt::Fill(_)) {
+        held.fan.clear();
         *held = held.centred();
     }
     held.locked = result != OnBelt::Pass;
@@ -248,6 +249,29 @@ mod tests {
             Some(crate::depot::Side::North),
             "otherwise as it was"
         );
+    }
+
+    /// `SpoutBlockEntity.whenItemHeld`, `TransportedItemStack.clearFanProcessingData`.
+    #[test]
+    fn a_fill_clears_the_stacks_fan_progress() {
+        use crate::fan::{Kind, Progress};
+        let mut s = Spout::default();
+        fill(&mut s, Fluid::Water, 1000);
+        let mut held = crate::depot::Held::new(0, false);
+        held.fan = Progress {
+            by: Some(Kind::Haunting),
+            time: 120,
+        };
+        let haunted = held.fan;
+        let filled = loop {
+            if let OnBelt::Fill(out) = on_depot(&mut s, &mut held, "minecraft:bucket", &[]) {
+                break out;
+            }
+            assert_eq!(held.fan, haunted);
+            tick(&mut s);
+        };
+        assert_eq!(filled, "minecraft:water_bucket");
+        assert_eq!(held.fan, Progress { by: None, time: 0 });
     }
 
     #[test]
