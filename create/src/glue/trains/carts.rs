@@ -52,7 +52,7 @@ use std::sync::{Arc, OnceLock};
 
 const CONTRAPTION: &str = "create:contraption";
 
-/// The overworld's saved contraptions, couplings and assembler modes.
+/// The overworld's ordinary couplings and assembler modes.
 static SAVED: AttachmentType<Compound> = AttachmentType {
     namespace: "create",
     name: "minecart_contraptions",
@@ -2630,8 +2630,7 @@ fn uuid_of(v: &[i32]) -> Option<u128> {
     })
 }
 
-/// The save: each contraption with its cart's UUID and level, each coupling from its leading
-/// cart, each assembler's mode that isn't the default.
+/// Save ordinary links from their leading cart and assembler modes that aren't the default.
 fn save(lv: &mut ServerLevel<'_>) {
     let (couplings, stations) = CARTS.with_borrow_mut(|c| {
         c.dirty = false;
@@ -2658,10 +2657,6 @@ fn save(lv: &mut ServerLevel<'_>) {
                 ("Main".into(), Tag::IntArray(uuid_ints(l.main))),
                 ("Connected".into(), Tag::IntArray(uuid_ints(l.connected))),
                 ("Length".into(), Tag::Double(f64::from(l.length).to_bits())),
-                (
-                    "Contraption".into(),
-                    Tag::IntArray(vec![i32::from(l.contraption)]),
-                ),
             ]))
         })
         .collect();
@@ -2683,19 +2678,20 @@ fn save(lv: &mut ServerLevel<'_>) {
         ("Assemblers".into(), Tag::List(stations)),
     ]);
     if let Err(e) = SAVED.set(&mut *lv.host, Holder::Level, data) {
-        crate::create_log!("[create] saving the minecart contraptions: {e:?}");
+        crate::create_log!("[create] saving ordinary cart couplings and assembler modes: {e:?}");
     }
 }
 
-/// The world opened: its contraptions, couplings and assembler modes back from the save; their
-/// carts are found by UUID as they come in.
+/// Restore ordinary couplings and assembler settings; their carts are found by UUID.
 fn load(lv: &mut ServerLevel<'_>) {
     CARTS.with_borrow_mut(|c| c.loaded = true);
     let data = match SAVED.get_existing(&mut *lv.host, Holder::Level) {
         Ok(Some(data)) => data,
         Ok(None) => return,
         Err(e) => {
-            crate::create_log!("[create] reading the minecart contraptions: {e:?}");
+            crate::create_log!(
+                "[create] reading ordinary cart couplings and assembler modes: {e:?}"
+            );
             return;
         }
     };
@@ -2713,19 +2709,17 @@ fn load(lv: &mut ServerLevel<'_>) {
     };
     let mut couplings = Couplings::default();
     for c in list("Couplings") {
-        let (Some(main), Some(connected)) = (
+        let (Some(main), Some(connected), Some(length)) = (
             uuid_of(&ints(get(&c, "Main"))),
             uuid_of(&ints(get(&c, "Connected"))),
+            double(get(&c, "Length")),
         ) else {
             continue;
         };
-        if ints(get(&c, "Contraption")).first() == Some(&1) {
-            continue; // Old cart-keyed payloads and their links are not migrated.
-        }
         let link = coupling::Link {
             main,
             connected,
-            length: double(get(&c, "Length")).unwrap_or(2.0) as f32,
+            length: length as f32,
             contraption: false,
         };
         couplings.carts.entry(main).or_default().leading = Some(link);

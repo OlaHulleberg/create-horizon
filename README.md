@@ -58,10 +58,6 @@ reaching into belts and tanks. The full list, with what would fix each one: **[A
 
 ## Install
 
-When updating from a build before minecart contraptions became saved passengers, disassemble or pack any
-assembled carts on the old build first. Carts assembled with earlier builds of this port are not carried over;
-packed contraption items are unchanged.
-
 > [!NOTE]
 > Create's textures, models and sounds are All Rights Reserved, so they are not in this repository. Your own
 > machine downloads Create's official jar from Modrinth, where the Create Team publishes it, and checks it
