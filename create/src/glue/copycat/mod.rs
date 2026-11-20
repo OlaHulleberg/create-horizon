@@ -14,10 +14,6 @@
 //! - The material's light and friction (`CopycatBlock.getLightEmission`, `getFriction`): the
 //!   `light_emission` and `friction` parts could answer per copycat, but no API reads a state's
 //!   light emission or friction (`API_GAPS.md`).
-//! - `getAcceptedBlockState`'s class tests (`StairBlock`, `IronBarsBlock`, `TrapDoorBlock`):
-//!   no API says which vanilla class a block is.
-//!   They are read from vanilla's tags (`minecraft:stairs`, `minecraft:trapdoors`) and, for bars,
-//!   a `_bars` id that is no pane; a block-class query would make them exact.
 //!
 //! A copycat's block model is not drawn (`render_shape` `ENTITYBLOCK_ANIMATED` in its
 //! declaration): its block entity draws the material cut to its box, or the copycat base when it
@@ -398,11 +394,10 @@ fn show(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     sound::set_server(lv.dim, pos, sound);
     let (text, special) = match material {
         Some(m) => {
-            let c = body::candidate(lv, m, pos);
-            let special = match Special::of(&c) {
-                Special::None => 0,
-                Special::Bars => 1,
-                Special::Trapdoor => 2,
+            let special = match body::candidate(lv, m, pos).as_ref().map(Special::of) {
+                None | Some(Special::None) => 0,
+                Some(Special::Bars) => 1,
+                Some(Special::Trapdoor) => 2,
             };
             (lv.host.block_state_string(m).unwrap_or_default(), special)
         }
