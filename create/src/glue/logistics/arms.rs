@@ -1641,34 +1641,117 @@ fn arms_to_nbt(dim: usize, chunk: [i32; 2], own: &mut Compound) {
     if !ejectors.is_empty() {
         let list = ejectors
             .iter()
-            .map(|(p, e)| {
-                let mut v = vec![
-                    p[0],
-                    p[1],
-                    p[2],
-                    e.launcher.h,
-                    e.launcher.v,
-                    i32::from(e.state.index()),
-                    e.lid.value.to_bits() as i32,
-                    i32::from(e.powered),
-                    i32::from(e.max_stack),
-                ];
-                for f in &e.flying {
-                    v.extend([f.time, i32::from(f.count)]);
-                }
-                let mut c = Compound::new();
-                c.insert("v".into(), Tag::IntArray(v));
-                let items = e
-                    .flying
-                    .iter()
-                    .map(|f| Tag::String(f.item.as_str().into()))
-                    .collect();
-                c.insert("flying".into(), Tag::List(items));
-                Tag::Compound(c)
-            })
+            .map(|(p, e)| Tag::Compound(ejector_to_tag(*p, e)))
             .collect();
         own.insert("ejectors".into(), Tag::List(list));
     }
+}
+
+/// `EjectorBlockEntity.write` for one ejector: its position, target, state, lid, powered flag
+/// and stack size, each stack in flight's tick and count, its item, and the scan's early target
+/// (`EarlyTarget`, `EarlyTargetPos`, `EarlyTargetTime`).
+fn ejector_to_tag(pos: [i32; 3], e: &ejector::Ejector) -> Compound {
+    let mut v = vec![
+        pos[0],
+        pos[1],
+        pos[2],
+        e.launcher.h,
+        e.launcher.v,
+        i32::from(e.state.index()),
+        e.lid.value.to_bits() as i32,
+        i32::from(e.powered),
+        i32::from(e.max_stack),
+    ];
+    for f in &e.flying {
+        v.extend([f.time, i32::from(f.count)]);
+    }
+    let mut c = Compound::new();
+    c.insert("v".into(), Tag::IntArray(v));
+    let items = e
+        .flying
+        .iter()
+        .map(|f| Tag::String(f.item.as_str().into()))
+        .collect();
+    c.insert("flying".into(), Tag::List(items));
+    // `EarlyTarget`, `EarlyTargetPos` and `EarlyTargetTime`.
+    if let Some(early) = e.early {
+        let at = early.at.iter().map(|v| Tag::Double(v.to_bits())).collect();
+        c.insert(
+            "early".into(),
+            Tag::Compound(Compound::from([
+                ("pos".into(), Tag::IntArray(early.block.to_vec())),
+                ("at".into(), Tag::List(at)),
+                ("time".into(), Tag::Float(early.time.to_bits())),
+            ])),
+        );
+    }
+    c
+}
+
+/// What [`ejector_to_tag`] wrote: the ejector's position and the ejector.
+fn ejector_from_tag(c: &Compound) -> Option<([i32; 3], ejector::Ejector)> {
+    let text = |t: Option<&Tag>| match t {
+        Some(Tag::String(s)) => s.to_string_lossy(),
+        _ => String::new(),
+    };
+    let Some(Tag::IntArray(v)) = c.get(&"v".into()) else {
+        return None;
+    };
+    if v.len() < 9 {
+        return None;
+    }
+    let pos = [v[0], v[1], v[2]];
+    let mut e = ejector::Ejector {
+        launcher: ejector::Launcher::new(v[3], v[4]),
+        ..Default::default()
+    };
+    e.launcher.clamp(ejector::MAX_DISTANCE);
+    e.state = ejector::State::from_index(v[5].clamp(0, 2) as u8);
+    let lid = f32::from_bits(v[6] as u32).clamp(0.0, 1.0);
+    e.lid.value = lid;
+    e.lid.previous = lid;
+    e.lid.target = lid;
+    e.powered = v[7] != 0;
+    e.max_stack = v[8].clamp(0, 64) as u8;
+    let items: Vec<String> = match c.get(&"flying".into()) {
+        Some(Tag::List(l)) => l.iter().map(|t| text(Some(t))).collect(),
+        _ => Vec::new(),
+    };
+    for (f, item) in v[9..].as_chunks::<2>().0.iter().zip(items) {
+        let id = e.next_id;
+        e.next_id += 1;
+        e.flying.push(ejector::Flying {
+            id,
+            time: f[0],
+            item,
+            count: f[1].clamp(1, 64) as u8,
+        });
+    }
+    if let Some(Tag::Compound(c)) = c.get(&"early".into()) {
+        let block = match c.get(&"pos".into()) {
+            Some(Tag::IntArray(v)) if v.len() == 3 => Some([v[0], v[1], v[2]]),
+            _ => None,
+        };
+        let at: Vec<f64> = match c.get(&"at".into()) {
+            Some(Tag::List(l)) => l
+                .iter()
+                .filter_map(|t| match t {
+                    Tag::Double(b) => Some(f64::from_bits(*b)),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        let time = match c.get(&"time".into()) {
+            Some(Tag::Float(b)) => Some(f32::from_bits(*b)),
+            _ => None,
+        };
+        let at: Option<[f64; 3]> = at[..].try_into().ok();
+        if let (Some(block), Some(time), Some(at)) = (block, time, at) {
+            e.early = Some(ejector::Early { at, block, time });
+        }
+    }
+    Some((pos, e))
 }
 
 /// What [`arm_to_tag`] wrote: the arm's position and the arm.
@@ -1722,10 +1805,6 @@ pub(super) fn arm_from_tag(c: &Compound) -> Option<([i32; 3], arm::Arm)> {
 
 /// What `arms_to_nbt` wrote: arms and ejectors waiting for their blocks.
 fn arms_from_nbt(dim: usize, data: &Compound) {
-    let text = |t: Option<&Tag>| match t {
-        Some(Tag::String(s)) => s.to_string_lossy(),
-        _ => String::new(),
-    };
     let mut arms = Vec::new();
     if let Some(Tag::List(list)) = data.get(&"arms".into()) {
         for t in list {
@@ -1737,40 +1816,7 @@ fn arms_from_nbt(dim: usize, data: &Compound) {
     if let Some(Tag::List(list)) = data.get(&"ejectors".into()) {
         for t in list {
             let Tag::Compound(c) = t else { continue };
-            let Some(Tag::IntArray(v)) = c.get(&"v".into()) else {
-                continue;
-            };
-            if v.len() < 9 {
-                continue;
-            }
-            let pos = [v[0], v[1], v[2]];
-            let mut e = ejector::Ejector {
-                launcher: ejector::Launcher::new(v[3], v[4]),
-                ..Default::default()
-            };
-            e.launcher.clamp(ejector::MAX_DISTANCE);
-            e.state = ejector::State::from_index(v[5].clamp(0, 2) as u8);
-            let lid = f32::from_bits(v[6] as u32).clamp(0.0, 1.0);
-            e.lid.value = lid;
-            e.lid.previous = lid;
-            e.lid.target = lid;
-            e.powered = v[7] != 0;
-            e.max_stack = v[8].clamp(0, 64) as u8;
-            let items: Vec<String> = match c.get(&"flying".into()) {
-                Some(Tag::List(l)) => l.iter().map(|t| text(Some(t))).collect(),
-                _ => Vec::new(),
-            };
-            for (f, item) in v[9..].as_chunks::<2>().0.iter().zip(items) {
-                let id = e.next_id;
-                e.next_id += 1;
-                e.flying.push(ejector::Flying {
-                    id,
-                    time: f[0],
-                    item,
-                    count: f[1].clamp(1, 64) as u8,
-                });
-            }
-            ejectors.push((pos, e));
+            ejectors.extend(ejector_from_tag(c));
         }
     }
     if arms.is_empty() && ejectors.is_empty() {
@@ -2245,5 +2291,57 @@ pub(super) fn turn_placed_ejectors(lv: &mut ServerLevel<'_>) {
                 super::super::server::update_all(),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod ejector_save_tests {
+    use super::*;
+
+    #[test]
+    fn an_ejectors_early_target_survives_a_reload() {
+        // `EjectorBlockEntity.write`: `State`, `Lid`, `LaunchedItems`, and the obstacle scan's
+        // `EarlyTarget`/`EarlyTargetPos`/`EarlyTargetTime` — e4's depot throw meets the casing
+        // at [1, 8, 0] and 9.304945, and must still be there after the chunk loads.
+        let mut e = ejector::Ejector {
+            launcher: ejector::Launcher::new(1, 0),
+            state: ejector::State::Charged,
+            max_stack: 4,
+            ..Default::default()
+        };
+        e.lid.value = 0.25;
+        e.lid.previous = 0.25;
+        e.lid.target = 0.25;
+        e.early = Some(ejector::Early {
+            at: [1.4971566682659168, 9.0625, 0.5000000000000001],
+            block: [1, 8, 0],
+            time: 9.304945,
+        });
+        e.flying.push(ejector::Flying {
+            id: e.next_id,
+            time: 3,
+            item: "minecraft:iron_ingot".into(),
+            count: 1,
+        });
+        let (pos, back) = ejector_from_tag(&ejector_to_tag([0, 8, 0], &e)).expect("saved");
+        assert_eq!(pos, [0, 8, 0]);
+        assert_eq!(back.early, e.early);
+        assert_eq!(back.state, e.state);
+        assert_eq!(back.max_stack, 4);
+        assert_eq!(back.lid.value, 0.25);
+        assert_eq!(back.flying.len(), 1);
+        assert_eq!(back.flying[0].time, 3);
+        assert_eq!(back.flying[0].item, "minecraft:iron_ingot");
+        // An ejector saved before the scan's fields existed reads with no early target.
+        let mut old = ejector_to_tag([0, 8, 0], &e);
+        let mut v = match old.get(&"v".into()) {
+            Some(Tag::IntArray(v)) => v.clone(),
+            _ => unreachable!(),
+        };
+        v.truncate(9);
+        old.insert("v".into(), Tag::IntArray(v));
+        old.insert("early".into(), Tag::End);
+        let (_, back) = ejector_from_tag(&old).expect("legacy save");
+        assert_eq!(back.early, None);
     }
 }
