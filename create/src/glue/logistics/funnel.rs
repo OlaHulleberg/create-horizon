@@ -541,11 +541,7 @@ pub(super) fn tick_funnel(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let dim = lv.dim;
     let now = lv.game_time().max(0) as u64;
     let schedule = |at: u64| {
-        with_world(|w| {
-            if let Some(due) = w.dims[dim].funnels.get_mut(&pos) {
-                *due = at;
-            }
-        });
+        with_world(|w| w.schedule_funnel(dim, pos, at, now));
     };
     let Some(f) = funnel_at(lv, pos) else {
         schedule(u64::MAX);

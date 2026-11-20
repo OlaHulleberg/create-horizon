@@ -158,10 +158,8 @@ impl Run {
         self.funnel_schedule(pos, at);
     }
     fn funnel_schedule(&mut self, pos: Pos, at: u64) {
-        let d = &mut self.w.dims[0];
-        if let Some(due) = d.funnels.get_mut(&pos) {
-            *due = at;
-        }
+        let now = u64::from(self.now);
+        self.w.schedule_funnel(0, pos, at, now);
     }
     /// `push_onto_belt` (`activateExtractingBeltFunnel`): one item of the inventory behind onto
     /// the belt below from the funnel's side while the belt takes items there.
@@ -309,10 +307,6 @@ impl Run {
         let Some(&due) = self.w.dims[0].funnels.get(&p) else {
             return 0;
         };
-        let now = u64::from(self.now);
-        if due == u64::MAX || due <= now + 1 {
-            return 0;
-        }
-        (due - now - 1) as i32
+        create_engine::funnel::cooldown(due, u64::from(self.now)) as i32
     }
 }

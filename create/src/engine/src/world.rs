@@ -470,6 +470,8 @@ pub struct Dimension {
     /// now, `u64::MAX` dormant until its state changes): only due funnels take a turn in the
     /// transport walk.
     pub funnels: HashMap<[i32; 3], u64>,
+    /// `TransferCooldown` read before the funnel's block loads, as a due tick.
+    pub(crate) funnel_saved: HashMap<[i32; 3], u64>,
     /// Funnels whose block below changed (`updateShape`): a horizontal funnel over a belt becomes
     /// a belt funnel, a belt funnel off its belt a funnel again, and a belt funnel's shape
     /// follows the belt.
@@ -1223,7 +1225,8 @@ impl CreateWorld {
                 | Block::BrassBeltFunnel
         ) {
             // Placed or changed (extracting, powered, shape): looked at again.
-            d.funnels.insert(pos, 0);
+            let due = d.funnel_saved.remove(&pos).unwrap_or(0);
+            d.funnels.insert(pos, due);
             // `FunnelItem.getPlacementState`: a funnel placed over a belt is its belt funnel.
             if matches!(block, Block::AndesiteFunnel | Block::BrassFunnel) {
                 d.funnel_shapes.push(pos);
@@ -2188,6 +2191,8 @@ impl CreateWorld {
             d.spouts.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.drains.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.funnels.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.funnel_saved
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.arms.column_unloaded(cx, cz);
             d.ejectors.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.chute_pulls.column_unloaded(cx, cz);
@@ -6203,6 +6208,45 @@ mod tests {
         assert_eq!(turns.next(&mut w), Some(TransportTick::Fluid([4, 8, 0])));
         assert_eq!(turns.next(&mut w), Some(TransportTick::Fluid([5, 8, 0])));
         assert_eq!(turns.next(&mut w), None);
+    }
+
+    #[test]
+    fn a_reloaded_funnel_goes_on_counting_down_its_saved_cooldown() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
+            "create:brass_belt_funnel",
+            vec![("facing", "south"), ("shape", "pushing")],
+        )];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let funnel = [3, 9, 1];
+        w.block_changed(0, funnel, 0, 10);
+        w.dims[0].unsaved.clear();
+        w.schedule_funnel(0, funnel, 33 + 8 + 1, 33);
+        assert_eq!(
+            w.dims[0].unsaved,
+            [(0, 0)],
+            "the cooldown goes into the column's save"
+        );
+        let saved = w.column_funnels(0, 0, 0, 33);
+        assert_eq!(saved, [(funnel, 8)]);
+        w.column_unloaded(0, 0, 0);
+        w.load_funnels(0, 33, saved.into_iter());
+        w.block_loaded(0, funnel, 10);
+        let due = w.dims[0].funnels[&funnel];
+        assert_eq!(crate::funnel::cooldown(due, 34), 7);
+        let turns = |w: &mut CreateWorld, now| {
+            let mut phase = w.transport_ticks(0, now);
+            std::iter::from_fn(|| phase.next(w)).collect::<Vec<_>>()
+        };
+        assert_eq!(turns(&mut w, 41), []);
+        assert_eq!(turns(&mut w, 42), [TransportTick::Funnel(funnel)]);
+        w.column_unloaded(0, 0, 0);
+        w.block_loaded(0, funnel, 10);
+        assert_eq!(w.dims[0].funnels[&funnel], 0);
     }
 
     #[test]
