@@ -38,11 +38,11 @@ use create_engine::equipment::{
     self as eq, AIR_KEY, CAPACITY, DOUBLE_RANGE, Gear, MAX_AIR_SUPPLY, SINGLE_RANGE, Tank,
 };
 use mod_api::{
-    AttributeModifier, AttributeOperation, BlockDropsEvent, BreakBlockEvent, Compound,
+    AttributeModifier, AttributeOperation, BlockDropsEvent, BlockPart, BreakBlockEvent, Compound,
     EntityPlaceEvent, EntityRef, EquipmentSlot, Flow, GameMode, Hand, HostSide, HostTransaction,
     Identifier, ItemKey, ItemPart, ItemPlace, ItemStack, LevelHost, LivingRef, ModifierLifetime,
-    OnBlockPlacedByEvent, PlayerRef, PlayerTickPostEvent, Registrar, RegistrationContext,
-    ServerHost, SoundSource, StackError, Tag,
+    PlayerRef, PlayerTickPostEvent, Registrar, RegistrationContext, ServerHost, SetPlacedByEvent,
+    SoundSource, StackError, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -220,7 +220,10 @@ impl Subsystem for Equipment {
             r.item_key("create:netherite_backtank"),
         ];
         for key in keys {
-            r.item_part(key, PlacedBacktank);
+            r.item_part(key, BacktankBar);
+        }
+        for block in [Block::CopperBacktank, Block::NetheriteBacktank] {
+            r.block_part(states::key(block), BacktankPlacement);
         }
         let _ = BACKTANK_ITEMS.set(keys);
         let _ = GRIP_ITEM.set(r.item_key("create:extendo_grip"));
@@ -568,49 +571,50 @@ impl Subsystem for Equipment {
     }
 }
 
-/// `BacktankBlock.setPlacedBy`: a placed backtank takes the stack's air and Capacity level. The
-/// item always shows its air as a bar (`BacktankItem.isBarVisible`, `getBarWidth`).
-struct PlacedBacktank;
+/// The item always shows its air as a bar (`BacktankItem.isBarVisible`, `getBarWidth`).
+struct BacktankBar;
 
 /// `BacktankItem.BAR_COLOR`.
 const BAR_COLOR: u32 = 0xEFEFEF;
 
 #[mod_api::sunrise_part]
-impl ItemPart for PlacedBacktank {
+impl ItemPart for BacktankBar {
     fn item_bar(&self, _host: &dyn mod_api::ClientHost, event: &mut mod_api::ItemBarEvent<'_>) {
         let max = eq::max_air(capacity(event.stack));
         let air = eq::air(stack_air(event.stack), capacity(event.stack));
         let width = (13.0 * (air as f32 / max as f32).clamp(0.0, 1.0)).round() as i32;
         *event.bar = Some((width, BAR_COLOR));
     }
+}
 
-    fn on_block_placed_by(&self, host: &mut dyn ServerHost, event: &mut OnBlockPlacedByEvent<'_>) {
-        if backtank_block(event.state).is_none() {
+/// `BacktankBlock.setPlacedBy`: a placed backtank takes the stack's air and Capacity level.
+struct BacktankPlacement;
+
+#[mod_api::sunrise_part]
+impl BlockPart for BacktankPlacement {
+    fn set_placed_by(&self, host: &mut dyn ServerHost, event: &mut SetPlacedByEvent<'_>) {
+        let Some(stack) = event.stack else {
             return;
-        }
+        };
         let Some(dim) = event
             .level
             .dimension()
             .id(&*host)
-            .and_then(|d| crate::glue::world::level_index(&d))
+            .and_then(|d| level_index(&d))
         else {
             return;
         };
-        backtank_placed_by(dim, event.pos, event.stack);
+        let pos = event.pos;
+        let (air, capacity) = (stack_air(stack), capacity(stack));
+        with_world(|w| {
+            if let Some(b) = w.dims[dim].backtanks.get_mut(&pos) {
+                b.air = air;
+                b.capacity = capacity;
+                w.backtank_changed(dim, pos);
+                w.dims[dim].analog_checks.push(pos);
+            }
+        });
     }
-}
-
-/// `BacktankBlock.setPlacedBy`, which also accepts a stack placed without a player.
-pub(crate) fn backtank_placed_by(dim: usize, pos: [i32; 3], stack: &ItemStack) {
-    let (air, capacity) = (stack_air(stack), capacity(stack));
-    with_world(|w| {
-        if let Some(b) = w.dims[dim].backtanks.get_mut(&pos) {
-            b.air = air;
-            b.capacity = capacity;
-            w.backtank_changed(dim, pos);
-            w.dims[dim].analog_checks.push(pos);
-        }
-    });
 }
 
 fn player_dim(host: &dyn ServerHost, player: PlayerRef) -> Option<usize> {

@@ -21,9 +21,9 @@ use create_engine::glue::{self, Glue};
 use create_engine::kinetics::Dir;
 use mod_api::{
     BlockHit, BlockPart, BlockShapeKind, Command, CommandArgumentValue, CommandSource, Compound,
-    Flow, Hand, HostBlockStates, HostTransaction, Identifier, InteractionResult, ItemKey, ItemPart,
-    ItemStack, OnBlockPlacedByEvent, PlayerAction, PlayerActionSetup, RegisterCommandsEvent,
-    Registrar, RunModCommandEvent, ServerHost, SoundSource, Tag, UseItemOnEvent,
+    Flow, Hand, HostBlockStates, HostTransaction, Identifier, InteractionResult, ItemKey,
+    ItemStack, PlayerAction, PlayerActionSetup, RegisterCommandsEvent, Registrar,
+    RunModCommandEvent, ServerHost, SetPlacedByEvent, SoundSource, Tag, UseItemOnEvent,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -129,9 +129,9 @@ pub(super) fn forget() {
 
 pub(super) fn register(r: &mut dyn Registrar) {
     r.block_part(key(Block::ContraptionControls), MountedPart);
-    r.block_part(key(Block::MechanicalRoller), MountedPart);
-    let roller = r.item_key("create:mechanical_roller");
-    r.item_part(roller, RollerItem);
+    let roller = key(Block::MechanicalRoller);
+    r.block_part(roller, MountedPart);
+    r.block_part(roller, RollerPlacement);
 }
 
 fn next_breaker() -> i32 {
@@ -3154,24 +3154,20 @@ pub(super) fn tick_mounted(lv: &mut ServerLevel<'_>) {
     }
 }
 
-/// A roller's item placed it (`setPlacedBy` → `searchForSharedValues`, at the level's tick).
-struct RollerItem;
+/// `RollerBlock.setPlacedBy`: search for a neighbour's shared values at the level's tick,
+/// including when a schematic places the roller without a player or block item.
+struct RollerPlacement;
 
 #[mod_api::sunrise_part]
-impl ItemPart for RollerItem {
-    fn on_block_placed_by(&self, host: &mut dyn ServerHost, event: &mut OnBlockPlacedByEvent<'_>) {
+impl BlockPart for RollerPlacement {
+    fn set_placed_by(&self, host: &mut dyn ServerHost, event: &mut SetPlacedByEvent<'_>) {
         let Some(dimension) = event.level.dimension().id(&*host) else {
             return;
         };
         if let Some(dim) = super::super::world::level_index(&dimension) {
-            roller_placed_by(dim, event.pos);
+            ROLLERS_PLACED.with_borrow_mut(|r| r.push((dim, event.pos)));
         }
     }
-}
-
-/// `RollerBlock.setPlacedBy`: search for a neighbour's shared values even without a player.
-pub(crate) fn roller_placed_by(dim: usize, pos: [i32; 3]) {
-    ROLLERS_PLACED.with_borrow_mut(|r| r.push((dim, pos)));
 }
 
 struct MountedPart;

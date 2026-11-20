@@ -180,7 +180,6 @@ impl Subsystem for Processing {
         {
             r.block_part(super::states::key(b), ToolboxPart);
             let item = r.item_key(&format!("create:{}", b.name()));
-            r.item_part(item, ToolboxItem);
             items.push(item);
         }
         let _ = toolbelt::TOOLBOX_ITEMS.set(items);
@@ -506,7 +505,7 @@ impl Subsystem for Processing {
     }
 }
 
-/// A toolbox exploding: its contents go with its drop.
+/// A toolbox restores its item contents when placed and keeps them in its drop when exploded.
 struct ToolboxPart;
 
 #[mod_api::sunrise_part]
@@ -521,25 +520,16 @@ impl BlockPart for ToolboxPart {
             toolbelt::before_removal(&mut lv, [event.pos.x, event.pos.y, event.pos.z]);
         }
     }
-}
 
-/// A toolbox placed from its item takes the contents the item keeps.
-struct ToolboxItem;
-
-#[mod_api::sunrise_part]
-impl mod_api::ItemPart for ToolboxItem {
-    fn on_block_placed_by(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut mod_api::OnBlockPlacedByEvent<'_>,
-    ) {
-        let Some(dimension) = event.level.dimension().id(&*host).map(|d| d.to_string()) else {
+    fn set_placed_by(&self, host: &mut dyn ServerHost, event: &mut mod_api::SetPlacedByEvent<'_>) {
+        let Some(stack) = event.stack else {
             return;
         };
-        let pos = event.pos;
-        let stack = event.stack.clone();
+        let Some(dimension) = event.level.dimension().id(&*host) else {
+            return;
+        };
         if let Some(mut lv) = ServerLevel::new(host, &dimension) {
-            toolbelt::placed(&mut lv, pos, &stack);
+            toolbelt::placed(&mut lv, event.pos, stack);
         }
     }
 }
