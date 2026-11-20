@@ -42,6 +42,21 @@ pub fn provide(
     };
     match block {
         Block::Depot | Block::WeightedEjector => Some(Box::new(DepotItems(at))),
+        Block::Belt => {
+            // `BeltBlockEntity.registerCapabilities`: none where the belt cannot transport
+            // (`canTransportObjects`: not sideways or vertical).
+            let transports = with_world(|w| {
+                let Some(c) = w.dims[dim].belt_of.get(&side.pos).copied() else {
+                    return false;
+                };
+                w.dims[dim]
+                    .belts
+                    .get(&c)
+                    .is_some_and(|b| b.segment.transports())
+            })
+            .unwrap_or(false);
+            transports.then(|| Box::new(BeltItems(at)) as Box<dyn ResourceHandler<ItemResource>>)
+        }
         Block::ItemVault => {
             let parts = with_world(|w| w.dims[dim].vaults.inventory(side.pos)).flatten()?;
             Some(Box::new(VaultItems { at, parts }))
@@ -218,6 +233,124 @@ impl ResourceHandler<ItemResource> for DepotItems {
     }
 }
 
+/// `ItemHandlerBeltSegment` (registered by `BeltBlockEntity.registerCapabilities`): the belt
+/// segment's own slot. In: onto the segment while `canInsertAt` allows, limited to one stack,
+/// from the next tick (`addItem`); out: `getStackAtOffset`, split in place, one it empties only
+/// marked `toRemove`. The stack lives in the engine, so an insert the host's transaction later
+/// aborts cannot be taken back (no caller of this mod does: `insert_room` answers belts from
+/// the engine, and the game's own moves commit).
+struct BeltItems(At);
+
+impl BeltItems {
+    /// `getStackAtOffset(offset)`: the engine's first item inside the segment at `pos`, with
+    /// the segment's offset in its belt.
+    fn stack_at(
+        &self,
+        host: &dyn mod_api::Host,
+    ) -> Option<([i32; 3], i32, create_engine::belt::Item)> {
+        let dim = dim_of(host, self.0.level)?;
+        with_world(|w| {
+            let d = &w.dims[dim];
+            let c = d.belt_of.get(&self.0.pos).copied()?;
+            let b = d.belts.get(&c)?;
+            let i = b.chain.iter().position(|p| *p == self.0.pos)? as i32;
+            b.items.stack_at(i).map(|s| (c, i, s.clone()))
+        })
+        .flatten()
+    }
+}
+
+impl ResourceHandler<ItemResource> for BeltItems {
+    fn size(&self, _host: &mut dyn ServerHost) -> usize {
+        1
+    }
+    fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<ItemResource> {
+        if index != 0 {
+            return None;
+        }
+        let (_, _, item) = self.stack_at(&*host)?;
+        let dimension = self.0.level.dimension().id(&*host)?;
+        let lv = super::super::server::ServerLevel::new(host, &dimension)?;
+        super::belt::belt_stack(&lv, &item).map(|s| ItemResource::of(&s))
+    }
+    fn amount(&self, host: &mut dyn ServerHost, index: usize) -> u32 {
+        if index != 0 {
+            return 0;
+        }
+        self.stack_at(&*host)
+            .map_or(0, |(_, _, s)| u32::from(s.count))
+    }
+    fn capacity(&self, host: &mut dyn ServerHost, _index: usize, resource: &ItemResource) -> u32 {
+        limit(&*host, resource)
+    }
+    fn insert(
+        &self,
+        host: &mut dyn ServerHost,
+        _tx: &Transaction,
+        index: usize,
+        resource: &ItemResource,
+        amount: u32,
+    ) -> u32 {
+        if index != 0 {
+            return 0;
+        }
+        let Some(stack) = resource.to_stack(amount.min(u32::from(u8::MAX))) else {
+            return 0;
+        };
+        let Some(dimension) = self.0.level.dimension().id(&*host) else {
+            return 0;
+        };
+        let Some(mut lv) = super::super::server::ServerLevel::new(host, &dimension) else {
+            return 0;
+        };
+        // `insertItem`: canInsertAt, the count limited to one stack, the rest refused.
+        let (id, progress) = super::belt::belt_name(&*lv.host, &stack);
+        let count = stack.count().min(u32::from(u8::MAX)) as u8;
+        match super::belt::put_on_from_above(&mut lv, self.0.pos, &id, count, progress, false) {
+            Some(left) => u32::from(count - left),
+            None => 0,
+        }
+    }
+    fn extract(
+        &self,
+        host: &mut dyn ServerHost,
+        _tx: &Transaction,
+        index: usize,
+        resource: &ItemResource,
+        amount: u32,
+    ) -> u32 {
+        if index != 0 {
+            return 0;
+        }
+        let Some((c, segment, item)) = self.stack_at(&*host) else {
+            return 0;
+        };
+        let Some(dimension) = self.0.level.dimension().id(&*host) else {
+            return 0;
+        };
+        let Some(lv) = super::super::server::ServerLevel::new(host, &dimension) else {
+            return 0;
+        };
+        if !super::belt::belt_stack(&lv, &item).is_some_and(|s| resource.matches(&s)) {
+            return 0;
+        }
+        let dim = lv.dim;
+        with_world(|w| {
+            let d = &mut w.dims[dim];
+            let b = d.belts.get_mut(&c)?;
+            let taken = b
+                .items
+                .extract_at(segment, amount.min(u32::from(u8::MAX)) as u8, false)?
+                .1;
+            if taken > 0 {
+                d.belt_changes.push(c);
+            }
+            Some(u32::from(taken))
+        })
+        .flatten()
+        .unwrap_or(0)
+    }
+}
 /// `ItemVaultBlockEntity`'s capability: the whole vault's stacks (`CombinedInvWrapper` of each
 /// block's `ItemStackHandler`, `vaultCapacity` stacks a block), in and out through any face.
 struct VaultItems {

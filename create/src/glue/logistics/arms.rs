@@ -453,9 +453,6 @@ struct ArmWorld<'a, 'l> {
     lv: &'a mut ServerLevel<'l>,
 }
 
-impl ArmWorld<'_, '_> {
-}
-
 impl arm::World for ArmWorld<'_, '_> {
     fn deposited(&mut self, arm: [i32; 3], musical: bool) {
         crate::glue::advancements::arm_deposited(self.lv, arm, musical);
@@ -531,7 +528,7 @@ impl arm::World for ArmWorld<'_, '_> {
                     let d = &mut w.dims[dim];
                     let b = d.belts.get_mut(&c)?;
                     let out = b.items.extract_at(index, amount, simulate);
-                    if !simulate && out.is_some_and(|(_, n)| n > 0) {
+                    if !simulate && out.as_ref().is_some_and(|(_, n)| *n > 0) {
                         d.belt_changes.push(c);
                     }
                     out
