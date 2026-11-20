@@ -1183,28 +1183,42 @@ fn stage_held(
             let Some(m) = data.tank else {
                 continue;
             };
-            // The tank's blocks where they go: still a tank as wide and tall (moved, or turned
-            // about the vertical) keeps its shape, its corner the controller; else each block
-            // is a tank of its own, the controller's holding what one block can.
+            // An intact tank keeps its shape and the new corner is its controller.
             let cells: Vec<[i32; 3]> = tank::blocks(*o, m.width, m.height)
                 .map(&place)
                 .filter(|&p| free(p))
                 .collect();
-            let corner = cells.iter().fold(cells[0], |c, p| {
+            let Some(&first) = cells.first() else {
+                continue;
+            };
+            let corner = cells.iter().fold(first, |c, p| {
                 [c[0].min(p[0]), c[1].min(p[1]), c[2].min(p[2])]
             });
-            let same = tank::blocks(corner, m.width, m.height).all(|q| cells.contains(&q));
-            let at = if same { corner } else { place(*o) };
-            for q in cells {
-                d.tanks.arriving.insert(q, None);
+            if tank::blocks(corner, m.width, m.height).all(|q| cells.contains(&q)) {
+                for q in cells {
+                    d.tanks.arriving.insert(q, None);
+                }
+                d.tanks.arriving.insert(corner, Some(m));
+            } else {
+                // `FluidTankMountedStorage.unmount` restores to a controller. Split its
+                // contents among the surviving parts (`ConnectivityHandler.splitMulti`),
+                // each taking up to one block's capacity in the original order.
+                let mut remaining = m.tank;
+                for q in cells {
+                    let (fluid, amount) = remaining
+                        .drain_amount(tank::CAPACITY)
+                        .map_or((None, 0), |(fluid, amount)| (Some(fluid), amount));
+                    d.tanks.arriving.insert(
+                        q,
+                        Some(tank::Multi {
+                            width: 1,
+                            height: 1,
+                            window: m.window,
+                            tank: tank::Tank { fluid, amount },
+                        }),
+                    );
+                }
             }
-            let mut m = m;
-            if !same {
-                m.width = 1;
-                m.height = 1;
-                m.tank.truncate(tank::CAPACITY);
-            }
-            d.tanks.arriving.insert(at, Some(m));
         }
     });
 }

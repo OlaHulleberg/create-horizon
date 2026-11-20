@@ -39,12 +39,12 @@ use create_engine::glue::Glue;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::mounted::{self, Mode, Mounted, RailShape};
 use mod_api::{
-    AttachmentCodec, AttachmentType, BlockPart, BlockState, BreakBlockEvent, ClientHost, Compound,
-    EntityInteractEvent, EntityJoinLevelEvent, EntityPart, EntityRef, EntitySpawn, EntityUuid,
-    Flow, GeneralEntityCategory, GeneralEntityTickEvent, GeneralSavePolicy, Holder, Host, HostSide,
-    InteractionResult, ItemPart, ItemStack, MinecartPassEvent, Registrar, RegistrationContext,
-    RemovalReason, RenderLevelStageEvent, ServerHost, SoundSource, SpawnBody, Tag, Text,
-    UseItemOnEvent, UseOnEvent,
+    AttachmentCodec, AttachmentHolder, AttachmentQueries, AttachmentType, BlockPart, BlockState,
+    BreakBlockEvent, ClientHost, Compound, EntityInteractEvent, EntityJoinLevelEvent, EntityPart,
+    EntityRef, EntitySpawn, EntityUuid, Flow, GeneralEntityCategory, GeneralEntityTickEvent,
+    GeneralSavePolicy, Holder, Host, HostSide, InteractionResult, ItemPart, ItemStack,
+    MinecartPassEvent, Registrar, RegistrationContext, RemovalReason, RenderLevelStageEvent,
+    ServerHost, SoundSource, SpawnBody, Tag, Text, UseItemOnEvent, UseOnEvent,
 };
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -55,7 +55,7 @@ const CONTRAPTION: &str = "create:contraption";
 /// The overworld's ordinary couplings and assembler modes.
 static SAVED: AttachmentType<Compound> = AttachmentType {
     namespace: "create",
-    name: "minecart_contraptions",
+    name: "cart_assembler_state",
     default: Compound::new,
     codec: Some(AttachmentCodec {
         encode: |data| Ok(data.clone()),
@@ -1493,21 +1493,7 @@ impl EntityPart for ContraptionRider {
             rider.remove(lv.host, RemovalReason::Discarded);
             return;
         };
-        if let Some(Tag::List(drops)) = get(&data.saved, "Drops")
-            && let Some(cart) = uuid_of(&ints(get(&data.saved, "Cart")))
-            && lv.host.entity_by_uuid(EntityUuid(cart)).is_some()
-        {
-            if lv.game_time() % 20 == 0 {
-                let drops = drops
-                    .iter()
-                    .filter_map(|tag| {
-                        let Tag::Compound(tag) = tag else { return None };
-                        let [x, y, z] = ints(get(tag, "Pos")).try_into().ok()?;
-                        Some(([x, y, z], ItemStack::from_nbt(&*lv.host, tag)?))
-                    })
-                    .collect();
-                finish_drops(&mut lv, rider, cart, drops);
-            }
+        if get(&data.saved, "Drops").is_some() {
             return;
         }
         let Some(on) = data.data(&*lv.host) else {
@@ -1515,21 +1501,19 @@ impl EntityPart for ContraptionRider {
             return;
         };
         let vehicle = rider.vehicle(&*lv.host);
-        if vehicle.is_none() && rider.is_passenger(&*lv.host) == Some(true) {
-            // The game retained an off-level link without a resident handle.
+        if vehicle.is_none() && rider.is_passenger(&*lv.host) != Some(false) {
+            // An off-level retained vehicle has no resident handle but is not a dismount.
             return;
         }
-        let cart = lv.host.entity_by_uuid(EntityUuid(on.cart));
-        let Some(cart) = cart.and_then(|entity| Cart::read(lv.host, entity)) else {
-            // Raw removal does not put the contraption back into the world.
-            rider.remove(lv.host, RemovalReason::Discarded);
+        let cart = vehicle.and_then(|entity| Cart::read(lv.host, entity));
+        let Some(cart) = cart.filter(|cart| cart.uuid == on.cart) else {
+            // `OrientedContraptionEntity.stopRiding` disassembles at the rider's own anchor.
+            // Only this entity owns that payload, regardless of the cart's current passengers.
+            if let Some(at) = rider.position(&*lv.host) {
+                put_back(&mut lv, rider, at, on.clone());
+            }
             return;
         };
-        if vehicle != Some(cart.entity) {
-            // Only detachment from its own live cart restores this rider's payload.
-            put_back(&mut lv, rider, cart.pos, on.clone());
-            return;
-        }
         CARTS.with_borrow_mut(|c| {
             let k = c.known.entry(cart.uuid).or_insert(Known {
                 dim: lv.dim,
@@ -1648,47 +1632,68 @@ fn put_back(lv: &mut ServerLevel<'_>, rider: EntityRef, at: [f64; 3], on: OnCart
         .retain(|(o, _)| placed.contains_key(&place(*o)));
     carried.glue = on.glue;
     actors::release_extras(lv, &mut carried, place);
-    finish_drops(lv, rider, on.cart, drops);
-}
-
-/// Without a confirmed item join the rejected stacks remain on this rider, never in a
-/// target container it did not place and never as a second copy of the restored structure.
-fn finish_drops(
-    lv: &mut ServerLevel<'_>,
-    rider: EntityRef,
-    cart: u128,
-    drops: Vec<([i32; 3], ItemStack)>,
-) {
-    let refused = drops
+    let drops = drops
         .into_iter()
         .filter_map(|(p, stack)| {
-            let [x, y, z] = p.map(|v| f64::from(v) + 0.5);
-            if matches!(
-                lv.level.spawn_item(lv.host, x, y, z, stack.clone(), 10),
-                Ok(Some(_))
-            ) {
-                return None;
-            }
             let mut tag = stack.to_nbt(&*lv.host)?;
             tag.insert("Pos".into(), Tag::IntArray(p.to_vec()));
             Some(Tag::Compound(tag))
         })
-        .collect::<Vec<_>>();
-    if refused.is_empty() {
-        rider.remove(lv.host, RemovalReason::Discarded);
+        .collect();
+    rider.stop_riding(lv.host);
+    store_drops(lv.host, rider, drops);
+}
+
+fn store_drops(host: &mut dyn ServerHost, rider: EntityRef, drops: Vec<Tag>) {
+    if drops.is_empty() {
+        rider.remove(host, RemovalReason::Discarded);
         return;
     }
     let attachment = RiderPayload {
-        saved: Compound::from([
-            ("Cart".into(), Tag::IntArray(uuid_ints(cart))),
-            ("Drops".into(), Tag::List(refused)),
-        ]),
+        saved: Compound::from([("Drops".into(), Tag::List(drops))]),
         live: OnceLock::from(None),
     };
-    if let Err(e) = RIDER_PAYLOAD.set(lv.host, Holder::Entity(rider.id()), Arc::new(attachment)) {
+    if let Err(e) = RIDER_PAYLOAD.set(host, Holder::Entity(rider.id()), Arc::new(attachment)) {
         crate::create_log!("[create] saving refused cart drops: {e:?}");
     }
-    rider.stop_riding(lv.host);
+}
+
+/// Deliver from the level tick, outside the general entity tick's journal. A handle
+/// returned inside that journal does not confirm that the item survived its join hook.
+fn deliver_drops(lv: &mut ServerLevel<'_>) {
+    let Ok(query) = lv.host.query(&RIDER_PAYLOAD) else {
+        return;
+    };
+    for row in query.iter().flatten() {
+        let AttachmentHolder::Entity(rider) = row.holder else {
+            continue;
+        };
+        let Some(Tag::List(drops)) = get(&row.value.saved, "Drops") else {
+            continue;
+        };
+        if rider.level(&*lv.host) != Some(lv.level) {
+            continue;
+        }
+        let refused = drops
+            .iter()
+            .filter_map(|tag| {
+                let Tag::Compound(fields) = tag else {
+                    return None;
+                };
+                let pos: [i32; 3] = ints(get(fields, "Pos")).try_into().ok()?;
+                let [x, y, z] = pos.map(|v| f64::from(v) + 0.5);
+                let stack = ItemStack::from_nbt(&*lv.host, fields)?;
+                (!matches!(
+                    lv.level.spawn_item(lv.host, x, y, z, stack, 10),
+                    Ok(Some(_))
+                ))
+                .then(|| tag.clone())
+            })
+            .collect::<Vec<_>>();
+        if refused.len() != drops.len() {
+            store_drops(lv.host, rider, refused);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2271,6 +2276,9 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
                 known.dim != lv.dim || c.couplings.carts.contains_key(id) || held.contains(id)
             });
         });
+    }
+    if lv.game_time() % 20 == 0 {
+        deliver_drops(lv);
     }
     tell_couplings(lv, &carts);
     tick_selected(lv);

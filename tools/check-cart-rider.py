@@ -4,10 +4,12 @@
 Pass the staged create app, the matching sunrise-ctl, prepared vanilla resources,
 and the pinned Create jar directory. The test creates a disposable world and game home.
 
---refusal-fixture expects a disposable build with two additional listeners. Cancel
-mounting create:contraption when the vehicle is in column x=14, z=10 (block coordinates),
-and cancel item_toss for create:minecart_contraption. Log the two '[cart check]' messages
-asserted below on stderr to prove that the tested interaction reached each listener.
+--refusal-fixture expects a disposable build that vetoes boarding at x=14, z=10
+and tossing a packed cart. Its fixture-swap command dismounts the exact Create rider
+and mounts a pig in the same server callback. The fixture-refuse-drops command vetoes
+item joins at the teardown location until restart; fixture-present queries the exact entity
+UUID through the Host; fixture-tank totals fluid in distinct tanks in three vertical cells.
+The test checks the veto log markers.
 """
 
 import argparse
@@ -64,16 +66,27 @@ def run(args, scratch):
 
     cart = "@e[type=minecraft:minecart,sort=nearest,limit=1]"
 
+    def rider_uuid(words):
+        values = words.removeprefix("[I;").removesuffix("]").split(",")
+        return UUID(bytes=b"".join((int(v) & 0xFFFFFFFF).to_bytes(4, "big") for v in values))
+
     def passenger(selector=cart):
         result = cmd(f"data get entity {selector} Passengers[0].id")
         assert result["chat"][0].endswith('"create:contraption"'), result
         cmd(f"data get entity {selector} Passengers[1].id", False)
-        return cmd(f"data get entity {selector} Passengers[0].UUID")["chat"][0].split(": ")[-1]
+        words = cmd(f"data get entity {selector} Passengers[0].UUID")["chat"][0].split(": ")[-1]
+        if args.refusal_fixture:
+            result = cmd(f"create_debug carts fixture-present {rider_uuid(words).int}")["chat"][0]
+            assert result == "rider present", result
+        return words
 
     def assert_gone(words):
-        values = words.removeprefix("[I;").removesuffix("]").split(",")
-        uuid = UUID(bytes=b"".join((int(v) & 0xFFFFFFFF).to_bytes(4, "big") for v in values))
-        cmd(f"data get entity {uuid} UUID", False)
+        uuid = rider_uuid(words)
+        if args.refusal_fixture:
+            result = cmd(f"create_debug carts fixture-present {uuid.int}")["chat"][0]
+            assert result == "rider absent", result
+        else:
+            cmd(f"data get entity {uuid} UUID", False)
 
     fd = launch()
     try:
@@ -127,9 +140,12 @@ def run(args, scratch):
             ctl("wait", "10")
             return passenger()
 
-        def click_cart(selector=cart):
+        def cart_pos(selector=cart):
             values = cmd(f"data get entity {selector} Pos")["chat"][0].split(": ")[-1]
-            x, y, z = (float(v.strip().removesuffix("d")) for v in values[1:-1].split(","))
+            return tuple(float(v.strip().removesuffix("d")) for v in values[1:-1].split(","))
+
+        def click_cart():
+            x, y, z = cart_pos()
             ctl("look-at", str(x), str(y + 0.35), str(z))
             ctl("wait", "3")
             ctl("mouse", "right", "click")
@@ -158,10 +174,18 @@ def run(args, scratch):
             assert count == 7, (other, count)
             cmd(f"kill {cart}")
             ctl("wait", "15")
-            cmd("execute if block 10 77 10 minecraft:air")
+            cmd("execute if block 10 77 10 minecraft:oak_planks")
             assert_gone(uuid)
+            cmd("setblock 10 77 10 minecraft:air")
 
         cmd("gamemode creative @s")
+        damage_uuid = place("hotbar.0", stack)
+        cmd(f"damage {cart} 100 minecraft:generic")
+        ctl("wait", "20")
+        cmd(f"execute if entity {cart}", False)
+        cmd("execute if block 10 77 10 minecraft:oak_planks")
+        assert_gone(damage_uuid)
+        cmd("setblock 10 77 10 minecraft:air")
         stored = ',Storage:[{Pos:[I;0,1,0],Size:20,Items:[{Slot:0,id:"minecraft:gold_ingot",count:7}]}]'
         vault_uuid = place("hotbar.0", pack("create:item_vault", stored))
         cmd("tp @s 10.5 77 7.5")
@@ -226,6 +250,13 @@ def run(args, scratch):
         cmd(f"data get entity {mate} Passengers[0].id", False)
         result = cmd("create_debug carts list")["chat"][0]
         assert "coupled true" in result, result
+        # Both carts remain on their assemblers; disturb the separation without asserting
+        # occupied drag or any pinned-engine trajectory.
+        x0, _, _ = cart_pos(main)
+        _, y, z = cart_pos(mate)
+        cmd(f"tp {mate} 12.85 {y} {z}")
+        ctl("wait", "15")
+        assert cart_pos(mate)[0] - cart_pos(main)[0] < 12.85 - x0
         cmd("setblock 8 75 9 minecraft:stone")
         ctl("wait", "40")
         for x in range(8, 13):
@@ -263,12 +294,80 @@ def run(args, scratch):
             cmd(f"execute if entity {cart}", False)
             assert_gone(uuid)
             assert cmd("clear @s create:minecart_contraption 0")["result"] == 1
+
+            cmd("gamemode creative @s")
+            uuid = place("hotbar.0", stack)
+            assert "swapped rider" in cmd("create_debug carts fixture-swap")["chat"][0]
+            ctl("wait", "20")
+            result = cmd(f"data get entity {cart} Passengers[0].id")["chat"][0]
+            assert result.endswith('"minecraft:pig"'), result
+            cmd(f"data get entity {cart} Passengers[1].id", False)
+            cmd("execute if block 10 77 10 minecraft:oak_planks")
+            assert_gone(uuid)
+            cmd("setblock 10 77 10 minecraft:air")
+            ctl("wait", "20")
+            cmd("execute if block 10 77 10 minecraft:air")
+            cmd("kill @e[type=minecraft:pig]")
+            cmd(f"kill {cart}")
+
+            tank_blocks = ",".join(f'{{Pos:[I;0,{y},0],State:"create:fluid_tank"}}' for y in range(1, 4))
+            tank_item = (
+                'create:minecart_contraption[minecraft:custom_data={"create:minecart_contraption_data":'
+                f'{{Blocks:[{tank_blocks}],InitialOrientation:"WEST",'
+                'Held:[{pos:[I;0,1,0],items:[],held:{block:"fluid_tank",tank:[I;1,3,1,0,22000]}}]}}]'
+            )
+            for obstructed, amount in [(79, 16000), (77, 0)]:
+                tank_uuid = place("hotbar.0", tank_item)
+                cmd("tp @s 10.5 77 7.5")
+                cmd(f"setblock 10 {obstructed} 10 minecraft:obsidian")
+                cmd("setblock 10 76 10 minecraft:activator_rail[shape=east_west,powered=true]")
+                cmd("setblock 10 75 10 minecraft:redstone_block")
+                ctl("wait", "35")
+                cmd(f"execute if block 10 {obstructed} 10 minecraft:obsidian")
+                result = cmd("create_debug carts fixture-tank 10 77 10")["chat"][0]
+                assert result == str(amount), (obstructed, result)
+                assert_gone(tank_uuid)
+                cmd(f"kill {cart}")
+                cmd("fill 10 77 10 10 79 10 minecraft:air")
+                cmd("setblock 10 75 10 minecraft:stone")
+
+            pending_uuid = place("hotbar.0", pack("create:item_vault", stored))
+            cmd("tp @s 10.5 77 7.5")
+            cmd("setblock 10 77 10 minecraft:obsidian")
+            assert "refusing teardown drops" in cmd("create_debug carts fixture-refuse-drops")["chat"][0]
+            cmd("setblock 10 76 10 minecraft:activator_rail[shape=east_west,powered=true]")
+            cmd("setblock 10 75 10 minecraft:redstone_block")
+            ctl("wait", "30")
+            cmd(f"data get entity {cart} Passengers[0].id", False)
+            cmd(f"kill {cart}")
+            ctl("wait", "25")
+            result = cmd(f"create_debug carts fixture-present {rider_uuid(pending_uuid).int}")["chat"][0]
+            assert result == "rider present", result
+            cmd("clear @s minecraft:gold_ingot 0", False)
+            cmd("clear @s create:item_vault 0", False)
+            drops = [e["item"]["item"] for e in ctl("entities")["entities"] if e.get("item")]
+            assert "minecraft:gold_ingot" not in drops and "create:item_vault" not in drops, drops
     finally:
         stop(fd)
     if args.refusal_fixture:
         log = (scratch / "control.log").read_text()
         assert "[cart check] mount deliberately refused" in log
         assert "[cart check] toss deliberately refused" in log
+        assert "[cart check] teardown item deliberately refused" in log
+        (scratch / "control-before-retry.log").write_text(log)
+        fd = launch()
+        try:
+            ctl("wait", "45")
+            cmd(f"execute if entity {cart}", False)
+            assert_gone(pending_uuid)
+            cmd("execute if block 10 77 10 minecraft:obsidian")
+            drops = [e["item"] for e in ctl("entities")["entities"] if e.get("item")]
+            for item, expected in [("minecraft:gold_ingot", 7), ("create:item_vault", 1)]:
+                count = sum(i["count"] for i in drops if i["item"] == item)
+                count += cmd(f"clear @s {item} 0", None)["result"]
+                assert count == expected, (item, count)
+        finally:
+            stop(fd)
 
 
 def main():
