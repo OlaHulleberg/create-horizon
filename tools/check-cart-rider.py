@@ -5,8 +5,8 @@ Pass the staged create app, the matching sunrise-ctl, prepared vanilla resources
 and the pinned Create jar directory. The test creates a disposable world and game home.
 
 --refusal-fixture expects a disposable build that vetoes boarding at x=14, z=10
-and tossing a packed cart. Its fixture-swap command dismounts the exact Create rider
-and mounts a pig in the same server callback. The fixture-refuse-drops command vetoes
+using tools/fixtures/cart-rider.patch. Its fixture-swap command dismounts the exact
+Create rider and mounts a pig in the same server callback. The fixture-refuse-drops command vetoes
 item joins at the teardown location until restart; fixture-present queries the exact entity
 UUID through the Host; fixture-tank totals fluid in distinct tanks in three vertical cells.
 The test checks the veto log markers.
@@ -144,11 +144,9 @@ def run(args, scratch):
             values = cmd(f"data get entity {selector} Pos")["chat"][0].split(": ")[-1]
             return tuple(float(v.strip().removesuffix("d")) for v in values[1:-1].split(","))
 
-        def click_cart():
-            x, y, z = cart_pos()
-            ctl("look-at", str(x), str(y + 0.35), str(z))
-            ctl("wait", "3")
-            ctl("mouse", "right", "click")
+        def wrench_cart(selector, handled=True):
+            feedback = cmd(f"create_debug carts fixture-wrench {uuid_arg(selector)}")["chat"][0]
+            assert feedback == ("wrench handled" if handled else "wrench unhandled"), feedback
             ctl("wait", "15")
 
         cmd("gamemode survival @s")
@@ -209,19 +207,6 @@ def run(args, scratch):
         cmd("setblock 10 77 10 minecraft:air")
         cmd("setblock 10 75 10 minecraft:stone")
 
-        pickup_uuid = place("hotbar.0", stack)
-        cmd("tp @s 10.5 76 8.2")
-        cmd("clear @s", None)
-        cmd("item replace entity @s hotbar.0 with create:wrench")
-        ctl("select", "1")
-        click_cart()
-        cmd(f"execute if entity {cart}", False)
-        assert_gone(pickup_uuid)
-        assert cmd("clear @s create:minecart_contraption 0")["result"] == 1
-        result = cmd('data get entity @s Inventory[{id:"create:minecart_contraption"}].components.'
-                     '"minecraft:custom_data"."create:minecart_contraption_data".Blocks[0].State')
-        assert result["chat"][0].endswith('"minecraft:oak_planks"'), result
-
         cmd("tp @s 10.5 76 7.5")
         cmd("setblock 9 77 9 minecraft:air", None)
         cmd("setblock 9 76 9 minecraft:rail[shape=east_west]")
@@ -257,11 +242,35 @@ def run(args, scratch):
         cmd(f"tp {mate} 12.85 {y} {z}")
         ctl("wait", "15")
         assert cart_pos(mate)[0] - cart_pos(main)[0] < 12.85 - x0
-        cmd("setblock 8 75 9 minecraft:stone")
-        ctl("wait", "40")
-        for x in range(8, 13):
-            cmd(f"execute if block {x} 77 9 minecraft:oak_planks")
-        assert_gone(coupled_uuid)
+        if args.refusal_fixture:
+            def uuid_arg(selector):
+                words = cmd(f"data get entity {selector} UUID")["chat"][0].split(": ")[-1]
+                return rider_uuid(words).int
+
+            # Remove both assemblers so the restored structure is not assembled again.
+            cmd("setblock 8 76 9 minecraft:rail[shape=east_west]")
+            cmd("setblock 12 76 9 minecraft:rail[shape=east_west]")
+            cmd('summon minecraft:minecart 12.5 76.1 11.5 {Tags:["third"]}')
+            third = "@e[tag=third,limit=1]"
+            feedback = cmd(f"create_debug carts fixture-couple {uuid_arg(mate)} {uuid_arg(third)}")["chat"][0]
+            assert feedback == "ordinary link added", feedback
+            cmd("tp @s 12.5 76 7.5")
+            cmd("gamemode survival @s")
+            cmd("clear @s", None)
+            cmd("item replace entity @s hotbar.0 with create:wrench")
+            ctl("select", "1")
+            wrench_cart(mate)
+            assert cmd("clear @s create:minecart_coupling 0")["result"] == 1
+            assert_gone(coupled_uuid)
+            blocks = ctl("blocks", "4", "76", "4", "16", "81", "15")["blocks"]
+            assert sum(block[-1] == "minecraft:oak_planks" for block in blocks) == 5, blocks
+            cmd("setblock 8 75 9 minecraft:stone")
+        else:
+            cmd("setblock 8 75 9 minecraft:stone")
+            ctl("wait", "40")
+            for x in range(8, 13):
+                cmd(f"execute if block {x} 77 9 minecraft:oak_planks")
+            assert_gone(coupled_uuid)
 
         if args.refusal_fixture:
             cmd("kill @e[type=minecraft:minecart]")
@@ -277,24 +286,6 @@ def run(args, scratch):
             cmd(f"execute if entity {cart}", False)
             assert cmd(f"clear @s {stack} 0")["result"] == 2
 
-            uuid = place("hotbar.0", stack)
-            cmd("tp @s 10.5 76 9.1")
-            cmd("clear @s", None)
-            cmd("item replace entity @s hotbar.0 with create:wrench")
-            for slot in [*(f"hotbar.{i}" for i in range(1, 9)), *(f"inventory.{i}" for i in range(27))]:
-                cmd(f"item replace entity @s {slot} with minecraft:cobblestone 64")
-            ctl("select", "1")
-            click_cart()
-            assert passenger() == uuid
-            cmd("clear @s create:minecart_contraption 0", False)
-            assert cmd("clear @s minecraft:cobblestone 0")["result"] == 35 * 64
-            cmd("item replace entity @s hotbar.1 with minecraft:air")
-            ctl("wait", "10")
-            click_cart()
-            cmd(f"execute if entity {cart}", False)
-            assert_gone(uuid)
-            assert cmd("clear @s create:minecart_contraption 0")["result"] == 1
-
             cmd("gamemode creative @s")
             uuid = place("hotbar.0", stack)
             assert "swapped rider" in cmd("create_debug carts fixture-swap")["chat"][0]
@@ -304,6 +295,9 @@ def run(args, scratch):
             cmd(f"data get entity {cart} Passengers[1].id", False)
             cmd("execute if block 10 77 10 minecraft:oak_planks")
             assert_gone(uuid)
+            cmd("clear @s minecraft:oak_planks 0", False)
+            drops = [e["item"]["item"] for e in ctl("entities")["entities"] if e.get("item")]
+            assert "minecraft:oak_planks" not in drops, drops
             cmd("setblock 10 77 10 minecraft:air")
             ctl("wait", "20")
             cmd("execute if block 10 77 10 minecraft:air")
@@ -352,7 +346,6 @@ def run(args, scratch):
     if args.refusal_fixture:
         log = (scratch / "control.log").read_text()
         assert "[cart check] mount deliberately refused" in log
-        assert "[cart check] toss deliberately refused" in log
         assert "[cart check] teardown item deliberately refused" in log
         (scratch / "control-before-retry.log").write_text(log)
         fd = launch()
@@ -366,6 +359,37 @@ def run(args, scratch):
                 count = sum(i["count"] for i in drops if i["item"] == item)
                 count += cmd(f"clear @s {item} 0", None)["result"]
                 assert count == expected, (item, count)
+            cmd("gamemode creative @s")
+            cmd("tp @s 8.5 76 7.5")
+            cmd("fill 6 77 9 14 79 12 minecraft:air", None)
+            cmd("setblock 8 76 9 minecraft:rail[shape=east_west]", None)
+            cmd("setblock 12 76 9 minecraft:rail[shape=east_west]", None)
+            cmd("setblock 8 76 11 minecraft:rail[shape=east_west]", None)
+            cmd("setblock 12 76 11 minecraft:rail[shape=east_west]", None)
+            for name, x, z in [("old_a", 8, 9), ("old_b", 12, 9), ("old_c", 8, 11), ("old_d", 12, 11)]:
+                cmd(f'summon minecraft:minecart {x + .5} 76.1 {z + .5} {{Tags:["{name}"]}}')
+            names = [f"@e[tag=old_{letter},limit=1]" for letter in "abcd"]
+            ids = [uuid_arg(selector) for selector in names]
+            feedback = cmd("create_debug carts fixture-legacy " + " ".join(map(str, ids)))["chat"][0]
+            assert feedback == "old save written", feedback
+        finally:
+            stop(fd)
+        fd = launch()
+        try:
+            ctl("wait", "15")
+            feedback = cmd("create_debug carts fixture-old-state " + " ".join(map(str, ids)))["chat"][0]
+            assert feedback == "ordinary=true obsolete=false mode=2 clean=true", feedback
+            cmd("gamemode survival @s")
+            cmd("clear @s", None)
+            cmd("item replace entity @s hotbar.0 with create:wrench")
+            ctl("select", "1")
+            cmd("tp @s 8.5 76 12.8")
+            wrench_cart(names[2], handled=False)
+            cmd("clear @s create:minecart_coupling 0", False)
+            cmd(f"data get entity {names[2]} Passengers[0].id", False)
+            cmd("tp @s 8.5 76 7.5")
+            wrench_cart(names[0])
+            assert cmd("clear @s create:minecart_coupling 0")["result"] == 1
         finally:
             stop(fd)
 
@@ -375,7 +399,7 @@ def main():
     for name in ("ctl", "game", "jars", "resources", "scratch"):
         parser.add_argument(f"--{name}", type=lambda s: Path(s).resolve(), required=True)
     parser.add_argument("--refusal-fixture", action="store_true",
-                        help="also test with a fixture mod vetoing Create riders at x=14 and packed cart tosses")
+                        help="also run the tests that require tools/fixtures/cart-rider.patch")
     args = parser.parse_args()
     args.scratch.mkdir(parents=True, exist_ok=True)
     print(f"Cart proof: {args.scratch}", flush=True)

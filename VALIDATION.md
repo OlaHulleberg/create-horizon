@@ -28,6 +28,21 @@ the first nightly smoke test used `2d81263`, and the registry smoke tests used `
 | `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (53 tests, including `committed_assets` with `CREATE_JAR` set to the pinned jar) |
 | `tools/create-data/` | `cargo run --locked -- registry --out ../../create --check` | Pass |
 
+## Saved minecart riders on `9425651`
+
+The stock package passed `tools/check-cart-rider.py`: the same rider UUID stayed aboard across chunk unload and reopen, a coupled cart moved back toward its original separation, and activator disassembly, lethal damage and `/kill` restored blocks. Main- and off-hand placement each spent one item. An obstructed vault did not overwrite the three diamonds in the stationary vault.
+
+Run the test on Linux with Xvfb, signed Nightly client and `sunrise-ctl`, a private prepared resource tree and the verified jar directory. From the repository root, with `GAME`, `CTL`, `RESOURCES` and `JARS` set to absolute paths:
+
+```sh
+(cd create && xvfb-run -a cargo sunrise-mod run --game "$GAME" --resources "$RESOURCES" --jars "$JARS" -- --frames 1)
+xvfb-run -a python3 tools/check-cart-rider.py --ctl "$CTL" \
+  --game create/target/sunrise-mod/run/app/sunrise-client --resources "$RESOURCES" \
+  --jars "$JARS" --scratch target/cart-smoke
+```
+
+In a **disposable checkout**, apply `git apply tools/fixtures/cart-rider.patch`, repeat the staging command, and append `--refusal-fixture` to the test. The fixture does not ship. It refuses a mount and item joins, swaps the exact rider for a pig in one callback, checks tank contents, and runs the actual server wrench handler once with both kinds of link. It also seeds a legacy level save: the ordinary link and nondefault assembler mode survive reopen, but the obsolete link pays no refund and the old payload does not create a rider. These tests do not assert exact occupied-cart rail physics or cross-chunk passenger saves with a loaded non-ticking root.
+
 ## Registry package smoke test on `ed3ac19`
 
 From a clean `git archive` of the registry data commit, with the signed release SDK and no `create-data prepare`

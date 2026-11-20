@@ -1,0 +1,207 @@
+--- a/create/src/glue/trains/carts.rs
++++ b/create/src/glue/trains/carts.rs
+@@ -723,6 +723,164 @@
+     };
+     let words: Vec<&str> = args.split_whitespace().collect();
+     let line = match words.as_slice() {
++        ["fixture-swap"] => (|| {
++            let mod_api::CommandSource::Player { player, .. } = event.source else {
++                return None;
++            };
++            let dimension = player.dimension(&*host)?.to_string();
++            let dim = level_index(&dimension)?;
++            let (_, rider) = indexed_riders(dim)
++                .into_iter()
++                .find(|(_, rider)| rider.vehicle(&*host).is_some())?;
++            let cart = rider.vehicle(&*host)?;
++            let at = cart.position(&*host)?;
++            let pig = host.summon(
++                &dimension,
++                "minecraft:pig",
++                at,
++                Compound::from([("NoAI".into(), Tag::Byte(1))]),
++            )?;
++            let ref_pig = host.entity(pig)?;
++            rider.stop_riding(host).then_some(())?;
++            ref_pig.start_riding(host, cart, false).ok()?;
++            Some("swapped rider")
++        })()
++        .unwrap_or("swap failed")
++        .to_owned(),
++        ["fixture-refuse-drops"] => {
++            crate::CART_FIXTURE_DROPS.store(true, std::sync::atomic::Ordering::Relaxed);
++            "refusing teardown drops".to_owned()
++        }
++        ["fixture-wrench", uuid] => (|| {
++            let mod_api::CommandSource::Player { player, .. } = event.source else {
++                return None;
++            };
++            let cart = host.entity_by_uuid(EntityUuid(uuid.parse().unwrap()))?;
++            let stack = crate::glue::items::held(&*host, *player, mod_api::Hand::Main)?;
++            interact_entity(
++                host,
++                &mut EntityInteractEvent {
++                    hand: mod_api::Hand::Main,
++                    entity: cart.id() as i32,
++                    kind: "minecraft:minecart",
++                    stack: Some(&stack),
++                },
++            )
++            .map(|_| "wrench handled")
++        })()
++        .unwrap_or("wrench unhandled")
++        .to_owned(),
++        ["fixture-present", uuid] => {
++            let uuid = EntityUuid(uuid.parse().unwrap());
++            if host.entity_by_uuid(uuid).is_some() {
++                "rider present"
++            } else {
++                "rider absent"
++            }
++            .to_owned()
++        }
++        ["fixture-couple", main, third] => {
++            let mut lv = ServerLevel::new(host, "minecraft:overworld").unwrap();
++            let added = edit_couplings(
++                &mut lv,
++                third.parse().unwrap(),
++                main.parse().unwrap(),
++                2.0,
++                false,
++            )
++            .is_ok();
++            if added {
++                "ordinary link added"
++            } else {
++                "ordinary link refused"
++            }
++            .to_owned()
++        }
++        ["fixture-legacy", a, b, c, d] => {
++            let link = |a: &str, b: &str, obsolete: i32| {
++                Tag::Compound(Compound::from([
++                    ("Main".into(), Tag::IntArray(uuid_ints(a.parse().unwrap()))),
++                    (
++                        "Connected".into(),
++                        Tag::IntArray(uuid_ints(b.parse().unwrap())),
++                    ),
++                    ("Length".into(), Tag::Double(4.0f64.to_bits())),
++                    ("Contraption".into(), Tag::IntArray(vec![obsolete])),
++                ]))
++            };
++            let data = Compound::from([
++                (
++                    "Couplings".into(),
++                    Tag::List(vec![link(a, b, 0), link(c, d, 1)]),
++                ),
++                (
++                    "Assemblers".into(),
++                    Tag::List(vec![Tag::Compound(Compound::from([
++                        (
++                            "Dimension".into(),
++                            Tag::String("minecraft:overworld".into()),
++                        ),
++                        ("Pos".into(), Tag::IntArray(vec![9, 76, 9])),
++                        (
++                            "Mode".into(),
++                            Tag::String(Mode::from_index(2).unwrap().name().into()),
++                        ),
++                    ]))]),
++                ),
++                (
++                    "Contraptions".into(),
++                    Tag::List(vec![Tag::Compound(Compound::from([
++                        ("Cart".into(), Tag::IntArray(uuid_ints(c.parse().unwrap()))),
++                        (
++                            "Blocks".into(),
++                            Tag::List(vec![Tag::Compound(Compound::from([
++                                ("Pos".into(), Tag::IntArray(vec![0, 1, 0])),
++                                ("State".into(), Tag::String("minecraft:oak_planks".into())),
++                            ]))]),
++                        ),
++                    ]))]),
++                ),
++            ]);
++            let lv = ServerLevel::new(host, "minecraft:overworld").unwrap();
++            SAVED.set(lv.host, Holder::Level, data).unwrap();
++            "old save written".to_owned()
++        }
++        ["fixture-old-state", a, b, c, d] => {
++            let [a, b, c, d] = [a, b, c, d].map(|id| id.parse().unwrap());
++            let (ordinary, obsolete) = CARTS.with_borrow(|state| {
++                let ordinary = state
++                    .couplings
++                    .get(a)
++                    .leading
++                    .is_some_and(|l| l.connected == b);
++                let obsolete =
++                    !state.couplings.get(c).is_empty() || !state.couplings.get(d).is_empty();
++                (ordinary, obsolete)
++            });
++            let lv = ServerLevel::new(host, "minecraft:overworld").unwrap();
++            let data = SAVED.get_existing(lv.host, Holder::Level).unwrap().unwrap();
++            let clean = get(&data, "Contraptions").is_none()
++                && matches!(get(&data, "Couplings"), Some(Tag::List(links)) if links.len() == 1);
++            format!(
++                "ordinary={ordinary} obsolete={obsolete} mode={} clean={clean}",
++                assembler_mode(0, [9, 76, 9])
++            )
++        }
++        ["fixture-tank", x, y, z] => {
++            let [x, y, z] = [x, y, z].map(|n| n.parse::<i32>().unwrap());
++            let amount = with_world(|w| {
++                let tanks = &w.dims[0].tanks;
++                let controllers: HashSet<_> = (y..y + 3)
++                    .filter_map(|y| Some(tanks.saved([x, y, z])?.part.controller))
++                    .collect();
++                controllers
++                    .into_iter()
++                    .filter_map(|p| Some(tanks.saved(p)?.multi?.tank.amount))
++                    .sum::<u32>()
++            })
++            .unwrap_or(0);
++            amount.to_string()
++        }
+         ["mode", x, y, z, m] => {
+             let p = [x, y, z].map(|v| v.parse::<i32>().unwrap_or(0));
+             let dim = match event.source {
+--- a/create/src/lib.rs
++++ b/create/src/lib.rs
+@@ -358,6 +358,16 @@
+     }
+
+     fn entity_mount(&self, host: &mut dyn ServerHost, event: &mut EntityMountEvent<'_>) -> Flow {
++        if event.mounting
++            && event.kind == "create:contraption"
++            && host
++                .entity(event.vehicle)
++                .and_then(|cart| cart.position(&*host))
++                .is_some_and(|p| p[0].floor() == 14.0 && p[2].floor() == 10.0)
++        {
++            eprintln!("[cart check] mount deliberately refused");
++            return Flow::Cancel;
++        }
+         until_cancel(|s| s.entity_mount(host, event))
+     }
+
+@@ -366,6 +376,13 @@
+         host: &mut dyn ServerHost,
+         event: &mut EntityJoinLevelEvent<'_>,
+     ) -> Flow {
++        if CART_FIXTURE_DROPS.load(std::sync::atomic::Ordering::Relaxed)
++            && event.kind == "minecraft:item"
++            && event.pos == [10.5, 77.5, 10.5]
++        {
++            eprintln!("[cart check] teardown item deliberately refused");
++            return Flow::Cancel;
++        }
+         until_cancel(|s| s.entity_join_level(host, event))
+     }
+
+@@ -720,3 +737,6 @@
+         }
+     }
+ }
++
++static CART_FIXTURE_DROPS: std::sync::atomic::AtomicBool =
++    std::sync::atomic::AtomicBool::new(false);

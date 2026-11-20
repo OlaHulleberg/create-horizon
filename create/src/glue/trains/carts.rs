@@ -42,20 +42,21 @@ use mod_api::{
     AttachmentCodec, AttachmentHolder, AttachmentQueries, AttachmentType, BlockPart, BlockState,
     BreakBlockEvent, ClientHost, Compound, EntityInteractEvent, EntityJoinLevelEvent, EntityPart,
     EntityRef, EntitySpawn, EntityUuid, Flow, GeneralEntityCategory, GeneralEntityTickEvent,
-    GeneralSavePolicy, Holder, Host, HostSide, InteractionResult, ItemPart, ItemStack,
-    MinecartPassEvent, Registrar, RegistrationContext, RemovalReason, RenderLevelStageEvent,
-    ServerHost, SoundSource, SpawnBody, Tag, Text, UseItemOnEvent, UseOnEvent,
+    GeneralSavePolicy, Holder, Host, HostSide, HostTransaction, InteractionResult, ItemPart,
+    ItemStack, MinecartPassEvent, Registrar, RegistrationContext, RemovalReason,
+    RenderLevelStageEvent, ServerHost, SoundSource, SpawnBody, Tag, Text, UseItemOnEvent,
+    UseOnEvent,
 };
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 const CONTRAPTION: &str = "create:contraption";
 
 /// The overworld's ordinary couplings and assembler modes.
-static SAVED: AttachmentType<Compound> = AttachmentType {
+const SAVED: AttachmentType<Compound> = AttachmentType {
     namespace: "create",
-    name: "cart_assembler_state",
+    name: "minecart_contraptions",
     default: Compound::new,
     codec: Some(AttachmentCodec {
         encode: |data| Ok(data.clone()),
@@ -65,57 +66,114 @@ static SAVED: AttachmentType<Compound> = AttachmentType {
     sync: false,
 };
 
-/// The rider owns the only saved copy of its payload. Resolve game keys once when the rider
-/// is first used after loading; the attachment codec itself has no Host.
-struct RiderPayload {
-    saved: Compound,
-    live: OnceLock<Option<OnCart>>,
-}
-
-static RIDER_PAYLOAD: AttachmentType<Arc<RiderPayload>> = AttachmentType {
+/// Blocks, storage and links are only encoded when their saved content changes. The SDK's
+/// hostless codec encodes eagerly on `set`; keep motion and live actor state in the small
+/// motion binding so moving a cart doesn't serialize its whole structure.
+static RIDER_PAYLOAD: AttachmentType<Compound> = AttachmentType {
     namespace: "create",
     name: "cart_rider",
-    default: || {
-        Arc::new(RiderPayload {
-            saved: Compound::new(),
-            live: OnceLock::new(),
-        })
-    },
+    ..SAVED
+};
+
+#[derive(Clone)]
+enum RiderMotion {
+    Saved(f32),
+    Live(Arc<OnCart>),
+}
+
+static RIDER_MOTION: AttachmentType<RiderMotion> = AttachmentType {
+    namespace: "create",
+    name: "cart_rider_motion",
+    default: || RiderMotion::Saved(0.0),
     codec: Some(AttachmentCodec {
-        encode: |data| Ok(data.saved.clone()),
-        decode: |saved| {
-            Ok(Arc::new(RiderPayload {
-                saved: saved.clone(),
-                live: OnceLock::new(),
-            }))
+        encode: |motion| {
+            let yaw = match motion {
+                RiderMotion::Saved(yaw) => *yaw,
+                RiderMotion::Live(on) => on.m.turn.yaw,
+            };
+            Ok(Compound::from([("Yaw".into(), Tag::Float(yaw.to_bits()))]))
+        },
+        decode: |saved| match get(saved, "Yaw") {
+            Some(Tag::Float(bits)) => Ok(RiderMotion::Saved(f32::from_bits(*bits))),
+            _ => Err(mod_api::AttachmentError::Decode),
         },
     }),
     copy_on_death: false,
     sync: false,
 };
 
-fn payload(host: &mut dyn ServerHost, rider: EntityRef) -> Option<Arc<RiderPayload>> {
-    RIDER_PAYLOAD
-        .get_existing(host, Holder::Entity(rider.id()))
-        .ok()
-        .flatten()
+#[derive(Clone, Debug, PartialEq)]
+struct PendingDrop {
+    pos: [i32; 3],
+    stack: Compound,
 }
 
-impl RiderPayload {
-    fn data(&self, host: &dyn Host) -> Option<&OnCart> {
-        self.live
-            .get_or_init(|| decode_payload(host, &self.saved))
-            .as_ref()
+static RIDER_DROPS: AttachmentType<Vec<PendingDrop>> = AttachmentType {
+    namespace: "create",
+    name: "cart_rider_drops",
+    default: Vec::new,
+    codec: Some(AttachmentCodec {
+        encode: |drops| {
+            let rows = drops
+                .iter()
+                .map(|drop| {
+                    let mut row = drop.stack.clone();
+                    row.insert("Pos".into(), Tag::IntArray(drop.pos.to_vec()));
+                    Tag::Compound(row)
+                })
+                .collect();
+            Ok(Compound::from([("Drops".into(), Tag::List(rows))]))
+        },
+        decode: |saved| {
+            let Some(Tag::List(rows)) = get(saved, "Drops") else {
+                return Err(mod_api::AttachmentError::Decode);
+            };
+            Ok(rows
+                .iter()
+                .filter_map(|row| {
+                    let Tag::Compound(row) = row else { return None };
+                    let mut stack = row.clone();
+                    let Some(Tag::IntArray(pos)) = stack.remove(&"Pos".into()) else {
+                        return None;
+                    };
+                    Some(PendingDrop {
+                        pos: pos.try_into().ok()?,
+                        stack,
+                    })
+                })
+                .collect())
+        },
+    }),
+    copy_on_death: false,
+    sync: false,
+};
+
+fn payload(host: &mut dyn ServerHost, rider: EntityRef) -> Option<Arc<OnCart>> {
+    let holder = Holder::Entity(rider.id());
+    let motion = RIDER_MOTION.get_existing(host, holder).ok().flatten();
+    if let Some(RiderMotion::Live(on)) = motion {
+        return Some(on);
     }
+    let saved = RIDER_PAYLOAD.get_existing(host, holder).ok().flatten()?;
+    let mut on = decode_payload(host, &saved, |name| super::car_of_text(host, name))?;
+    if let Some(RiderMotion::Saved(yaw)) = motion {
+        on.m.turn = mounted::Orientation::at(yaw);
+    }
+    let on = Arc::new(on);
+    if let Err(e) = RIDER_MOTION.set(host, holder, RiderMotion::Live(on.clone())) {
+        crate::create_log!("[create] caching cart rider motion: {e:?}");
+    }
+    Some(on)
 }
 
-fn save_rider(host: &mut dyn ServerHost, rider: EntityRef, on: OnCart) -> bool {
-    let saved = encode_payload(host, &on);
-    let payload = Arc::new(RiderPayload {
-        saved,
-        live: OnceLock::from(Some(on)),
+fn save_rider(host: &mut dyn ServerHost, rider: EntityRef, on: Arc<OnCart>) -> bool {
+    let holder = Holder::Entity(rider.id());
+    let saved = encode_payload(host, &on, |id| super::car_text(host, id));
+    let result = host.transaction(|host, _| {
+        RIDER_PAYLOAD.set(host, holder, saved)?;
+        RIDER_MOTION.set(host, holder, RiderMotion::Live(on))
     });
-    if let Err(e) = RIDER_PAYLOAD.set(host, Holder::Entity(rider.id()), payload) {
+    if let Err(e) = result {
         crate::create_log!("[create] saving cart rider: {e:?}");
         return false;
     }
@@ -303,8 +361,7 @@ pub(crate) fn take_cart_carried(
                 .flatten()
         })
     })?;
-    let data = payload(lv.host, rider)?;
-    let on = data.data(&*lv.host)?;
+    let on = payload(lv.host, rider)?;
     let place = move |o: [i32; 3]| [key[0] + o[0], key[1] + o[1], key[2] + o[2]];
     Some((rider, on.carried.clone(), Box::new(place)))
 }
@@ -315,10 +372,11 @@ pub(crate) fn put_cart_carried(
     rider: EntityRef,
     carried: create_engine::actors::Carried,
 ) {
-    if let Some(data) = payload(lv.host, rider)
-        && let Some(mut on) = data.data(&*lv.host).cloned()
-    {
-        on.carried = carried;
+    if let Some(mut on) = payload(lv.host, rider) {
+        if on.carried == carried {
+            return;
+        }
+        Arc::make_mut(&mut on).carried = carried;
         save_rider(lv.host, rider, on);
     }
 }
@@ -395,7 +453,16 @@ impl Subsystem for Carts {
         ) {
             crate::create_log!("[create] cart contraption type was refused: {e:?}");
         }
-        let _ = r.register_attachment_type("create:cart_rider", false);
+        for name in [
+            SAVED.name,
+            RIDER_PAYLOAD.name,
+            RIDER_MOTION.name,
+            RIDER_DROPS.name,
+        ] {
+            if let Err(e) = r.register_attachment_type(&format!("create:{name}"), false) {
+                crate::create_log!("[create] declaring {name}: {e:?}");
+            }
+        }
         r.entity_part(CONTRAPTION, ContraptionRider);
         let _ = END_ROD.set(r.particle_key("minecraft:end_rod"));
         let _ = DUST.set(r.particle_key("minecraft:dust"));
@@ -678,10 +745,9 @@ fn debug_command(host: &mut dyn ServerHost, event: &mut mod_api::RunModCommandEv
             .unwrap_or(0);
             let mut out = Vec::new();
             for (uuid, rider) in indexed_riders(dim) {
-                let Some(data) = payload(host, rider) else {
+                let Some(on) = payload(host, rider) else {
                     continue;
                 };
-                let Some(on) = data.data(host) else { continue };
                 let stored: u32 = on
                     .storage
                     .iter()
@@ -1168,17 +1234,17 @@ fn linked_rider(lv: &mut ServerLevel<'_>, cart: u128) -> Option<EntityRef> {
         .find_map(|(rider, _, link)| (link.main == cart || link.connected == cart).then_some(rider))
 }
 
-fn live_links(lv: &mut ServerLevel<'_>) -> Vec<(EntityRef, Arc<RiderPayload>, coupling::Link)> {
+fn live_links(lv: &mut ServerLevel<'_>) -> Vec<(EntityRef, Arc<OnCart>, coupling::Link)> {
     let mut links = Vec::new();
     for (uuid, rider) in indexed_riders(lv.dim) {
-        let Some(data) = payload(lv.host, rider) else {
+        let Some(on) = payload(lv.host, rider) else {
             continue;
         };
-        if let Some(link) = data.data(&*lv.host).and_then(|on| on.link)
+        if let Some(link) = on.link
             && let Some(cart) = lv.host.entity_by_uuid(EntityUuid(uuid))
             && rider.vehicle(&*lv.host) == Some(cart)
         {
-            links.push((rider, data, link));
+            links.push((rider, on, link));
         }
     }
     links
@@ -1202,14 +1268,12 @@ fn edit_couplings(
         lv.host.entity_by_uuid(EntityUuid(uuid)).is_some()
     })?;
     let link = merged.get(a).leading.ok_or(coupling::Refused::Silent)?;
-    for (rider, data, before) in links {
+    for (rider, mut on, before) in links {
         if let Some(after) = merged.get(before.main).connected
             && after.contraption
             && after.main == before.connected
-            && let Some(on) = data.data(&*lv.host)
         {
-            let mut on = on.clone();
-            on.link = Some(after);
+            Arc::make_mut(&mut on).link = Some(after);
             save_rider(lv.host, rider, on);
         }
     }
@@ -1393,7 +1457,7 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
         held,
         carried,
     };
-    if !save_rider(lv.host, rider, on.clone()) {
+    if !save_rider(lv.host, rider, Arc::new(on.clone())) {
         put_back(lv, rider, nc.pos, on);
         return;
     }
@@ -1420,12 +1484,10 @@ fn disassemble_at(lv: &mut ServerLevel<'_>, axis: Axis, backwards: bool, nc: &Ca
     let Some(rider) = rider_of(lv, nc) else {
         return;
     };
-    let Some(data) = payload(lv.host, rider) else {
+    let Some(on) = payload(lv.host, rider) else {
         return;
     };
-    let Some(mut on) = data.data(&*lv.host).cloned() else {
-        return;
-    };
+    let mut on = (*on).clone();
     if let Some(other) = on.paired_cart() {
         let Some(other) = lv
             .host
@@ -1489,14 +1551,10 @@ impl EntityPart for ContraptionRider {
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
             return;
         };
-        let Some(data) = payload(lv.host, rider) else {
-            rider.remove(lv.host, RemovalReason::Discarded);
-            return;
-        };
-        if get(&data.saved, "Drops").is_some() {
+        if RIDER_DROPS.has(lv.host, Holder::Entity(rider.id())) == Ok(true) {
             return;
         }
-        let Some(on) = data.data(&*lv.host) else {
+        let Some(on) = payload(lv.host, rider) else {
             rider.remove(lv.host, RemovalReason::Discarded);
             return;
         };
@@ -1510,7 +1568,7 @@ impl EntityPart for ContraptionRider {
             // `OrientedContraptionEntity.stopRiding` disassembles at the rider's own anchor.
             // Only this entity owns that payload, regardless of the cart's current passengers.
             if let Some(at) = rider.position(&*lv.host) {
-                put_back(&mut lv, rider, at, on.clone());
+                put_back(&mut lv, rider, at, (*on).clone());
             }
             return;
         };
@@ -1632,28 +1690,29 @@ fn put_back(lv: &mut ServerLevel<'_>, rider: EntityRef, at: [f64; 3], on: OnCart
         .retain(|(o, _)| placed.contains_key(&place(*o)));
     carried.glue = on.glue;
     actors::release_extras(lv, &mut carried, place);
-    let drops = drops
+    let drops: Vec<_> = drops
         .into_iter()
-        .filter_map(|(p, stack)| {
-            let mut tag = stack.to_nbt(&*lv.host)?;
-            tag.insert("Pos".into(), Tag::IntArray(p.to_vec()));
-            Some(Tag::Compound(tag))
+        .filter_map(|(pos, stack)| {
+            Some(PendingDrop {
+                pos,
+                stack: stack.to_nbt(&*lv.host)?,
+            })
         })
         .collect();
     rider.stop_riding(lv.host);
-    store_drops(lv.host, rider, drops);
-}
-
-fn store_drops(host: &mut dyn ServerHost, rider: EntityRef, drops: Vec<Tag>) {
     if drops.is_empty() {
-        rider.remove(host, RemovalReason::Discarded);
+        rider.remove(lv.host, RemovalReason::Discarded);
         return;
     }
-    let attachment = RiderPayload {
-        saved: Compound::from([("Drops".into(), Tag::List(drops))]),
-        live: OnceLock::from(None),
-    };
-    if let Err(e) = RIDER_PAYLOAD.set(host, Holder::Entity(rider.id()), Arc::new(attachment)) {
+    // A detached carrier keeps only its pending drops, never a second saved structure.
+    let holder = Holder::Entity(rider.id());
+    let result = lv.host.transaction(|host, _| {
+        RIDER_DROPS.set(host, holder, drops)?;
+        RIDER_PAYLOAD.remove(host, holder)?;
+        RIDER_MOTION.remove(host, holder)?;
+        Ok::<_, mod_api::AttachmentError>(())
+    });
+    if let Err(e) = result {
         crate::create_log!("[create] saving refused cart drops: {e:?}");
     }
 }
@@ -1661,54 +1720,61 @@ fn store_drops(host: &mut dyn ServerHost, rider: EntityRef, drops: Vec<Tag>) {
 /// Deliver from the level tick, outside the general entity tick's journal. A handle
 /// returned inside that journal does not confirm that the item survived its join hook.
 fn deliver_drops(lv: &mut ServerLevel<'_>) {
-    let Ok(query) = lv.host.query(&RIDER_PAYLOAD) else {
+    let Ok(query) = lv.host.query(&RIDER_DROPS) else {
         return;
     };
     for row in query.iter().flatten() {
         let AttachmentHolder::Entity(rider) = row.holder else {
             continue;
         };
-        let Some(Tag::List(drops)) = get(&row.value.saved, "Drops") else {
-            continue;
-        };
         if rider.level(&*lv.host) != Some(lv.level) {
             continue;
         }
-        let refused = drops
-            .iter()
-            .filter_map(|tag| {
-                let Tag::Compound(fields) = tag else {
-                    return None;
-                };
-                let pos: [i32; 3] = ints(get(fields, "Pos")).try_into().ok()?;
-                let [x, y, z] = pos.map(|v| f64::from(v) + 0.5);
-                let stack = ItemStack::from_nbt(&*lv.host, fields)?;
-                (!matches!(
-                    lv.level.spawn_item(lv.host, x, y, z, stack, 10),
-                    Ok(Some(_))
-                ))
-                .then(|| tag.clone())
-            })
-            .collect::<Vec<_>>();
-        if refused.len() != drops.len() {
-            store_drops(lv.host, rider, refused);
+        let drops = row.value;
+        let refused = unjoined_drops(drops, |drop| {
+            let [x, y, z] = drop.pos.map(|v| f64::from(v) + 0.5);
+            let Some(stack) = ItemStack::from_nbt(&*lv.host, &drop.stack) else {
+                return true; // Invalid saved item, nothing to deliver.
+            };
+            matches!(
+                lv.level.spawn_item(lv.host, x, y, z, stack, 10),
+                Ok(Some(_))
+            )
+        });
+        if refused.is_empty() {
+            rider.remove(lv.host, RemovalReason::Discarded);
+        } else if refused.len() != drops.len()
+            && let Err(e) = RIDER_DROPS.set(lv.host, Holder::Entity(rider.id()), refused)
+        {
+            crate::create_log!("[create] saving remaining cart drops: {e:?}");
         }
     }
+}
+
+/// Keep only stacks that did not actually join the level, in their saved order.
+fn unjoined_drops(
+    drops: &[PendingDrop],
+    mut joined: impl FnMut(&PendingDrop) -> bool,
+) -> Vec<PendingDrop> {
+    drops.iter().filter(|drop| !joined(drop)).cloned().collect()
 }
 
 // ---------------------------------------------------------------------------------------------
 // Contraptions on carts, their items and couplings
 
-/// The contraption's NBT, as its item and the save keep it (`Contraption.writeNBT` reduced to
-/// what is ported: the blocks, `RotationMode`, `InitialOrientation`, and the save's turn and
-/// `Coupling`).
-fn contraption_tag(host: &dyn Host, on: &OnCart, with_turn: bool) -> Compound {
+/// The saved rider's structure (`Contraption.writeNBT`) and its cart and optional link.
+/// Motion has its own small codec; packed item data is read separately and unchanged.
+fn encode_payload(
+    host: &dyn Host,
+    on: &OnCart,
+    state_name: impl Fn(u32) -> Option<String>,
+) -> Compound {
     let m = &on.m;
     let blocks = m
         .blocks
         .iter()
         .filter_map(|(o, s)| {
-            let text = super::car_text(host, *s)?;
+            let text = state_name(*s)?;
             Some(Tag::Compound(Compound::from([
                 ("Pos".into(), Tag::IntArray(o.to_vec())),
                 ("State".into(), Tag::String(text.as_str().into())),
@@ -1764,9 +1830,15 @@ fn contraption_tag(host: &dyn Host, on: &OnCart, with_turn: bool) -> Compound {
     }
     // Its contraption controls and the kinds they turned off (its glue is `Glue` above).
     crate::glue::contraptions::actors::extras_to_nbt(&mut c, &on.carried);
-    if with_turn {
-        c.insert("Yaw".into(), Tag::Double(f64::from(m.turn.yaw).to_bits()));
-        c.insert("Placed".into(), Tag::IntArray(vec![i32::from(m.placed)]));
+    c.insert("Placed".into(), Tag::IntArray(vec![i32::from(m.placed)]));
+    c.insert("Cart".into(), Tag::IntArray(uuid_ints(on.cart)));
+    if let Some(link) = on.link {
+        c.insert("Main".into(), Tag::IntArray(uuid_ints(link.main)));
+        c.insert("Connected".into(), Tag::IntArray(uuid_ints(link.connected)));
+        c.insert(
+            "Length".into(),
+            Tag::Double(f64::from(link.length).to_bits()),
+        );
     }
     c
 }
@@ -1797,7 +1869,11 @@ fn get<'a>(c: &'a Compound, key: &str) -> Option<&'a Tag> {
 }
 
 /// A contraption back from its NBT, in level `dim`; None without blocks.
-fn contraption_of(host: &dyn Host, c: &Compound) -> Option<OnCart> {
+fn contraption_of(
+    host: &dyn Host,
+    c: &Compound,
+    state_id: impl Fn(&str) -> Option<u32>,
+) -> Option<OnCart> {
     let Some(Tag::List(list)) = get(c, "Blocks") else {
         return None;
     };
@@ -1806,7 +1882,7 @@ fn contraption_of(host: &dyn Host, c: &Compound) -> Option<OnCart> {
         .filter_map(|t| {
             let Tag::Compound(b) = t else { return None };
             let p = ints(get(b, "Pos"));
-            let s = super::car_of_text(host, &text(get(b, "State"))?)?;
+            let s = state_id(&text(get(b, "State"))?)?;
             Some(([*p.first()?, *p.get(1)?, *p.get(2)?], s))
         })
         .collect();
@@ -1882,37 +1958,40 @@ fn contraption_of(host: &dyn Host, c: &Compound) -> Option<OnCart> {
     })
 }
 
-fn encode_payload(host: &dyn Host, on: &OnCart) -> Compound {
-    let mut tag = contraption_tag(host, on, true);
-    tag.insert("Cart".into(), Tag::IntArray(uuid_ints(on.cart)));
-    if let Some(link) = on.link {
-        tag.insert("Main".into(), Tag::IntArray(uuid_ints(link.main)));
-        tag.insert("Connected".into(), Tag::IntArray(uuid_ints(link.connected)));
-        tag.insert(
-            "Length".into(),
-            Tag::Double(f64::from(link.length).to_bits()),
-        );
-    }
-    tag
-}
-
-fn decode_payload(host: &dyn Host, tag: &Compound) -> Option<OnCart> {
-    let mut on = contraption_of(host, tag)?;
+fn decode_payload(
+    host: &dyn Host,
+    tag: &Compound,
+    state_id: impl Fn(&str) -> Option<u32>,
+) -> Option<OnCart> {
+    let mut on = contraption_of(host, tag, state_id)?;
     on.cart = uuid_of(&ints(get(tag, "Cart")))?;
-    if let Some(connected) = uuid_of(&ints(get(tag, "Connected"))) {
-        let main = uuid_of(&ints(get(tag, "Main")))?;
-        let length = double(get(tag, "Length"))? as f32;
-        if main == connected || (main != on.cart && connected != on.cart) {
-            return None;
-        }
-        on.link = Some(coupling::Link {
-            main,
-            connected,
-            length,
-            contraption: true,
-        });
+    if ["Main", "Connected", "Length"]
+        .iter()
+        .any(|key| get(tag, key).is_some())
+    {
+        on.link = Some(read_link(tag, Some(on.cart))?);
     }
     Some(on)
+}
+
+fn read_link(tag: &Compound, rider_cart: Option<u128>) -> Option<coupling::Link> {
+    let main = uuid_of(&ints(get(tag, "Main")))?;
+    let connected = uuid_of(&ints(get(tag, "Connected")))?;
+    let length = double(get(tag, "Length"))? as f32;
+    if main == connected || !length.is_finite() || length <= 0.0 {
+        return None;
+    }
+    if rider_cart.is_some_and(|cart| cart != main && cart != connected)
+        || rider_cart.is_none() && old_contraption_link(tag)
+    {
+        return None;
+    }
+    Some(coupling::Link {
+        main,
+        connected,
+        length,
+        contraption: rider_cart.is_some(),
+    })
 }
 
 /// `minecraft:custom_data` of a contraption item: `MINECRAFT_CONTRAPTION_DATA`.
@@ -1961,7 +2040,9 @@ impl ItemPart for ContraptionItem {
         let entity = lv.host.entity(id)?;
         let nc = Cart::read(lv.host, entity)?;
         let dim = lv.dim;
-        let on = item_contraption(event.stack).and_then(|c| contraption_of(&*lv.host, &c));
+        let on = item_contraption(event.stack).and_then(|c| {
+            contraption_of(&*lv.host, &c, |name| super::car_of_text(&*lv.host, name))
+        });
         let rider = if let Some(mut on) = on {
             let Some(rider) = board_contraption(&mut lv, &nc) else {
                 entity.discard(lv.host);
@@ -1970,7 +2051,7 @@ impl ItemPart for ContraptionItem {
             let m = on.m;
             on.m = Mounted::placed_at(m.blocks, m.mode, m.initial, mounted::y_rot(facing));
             on.cart = nc.uuid;
-            if !save_rider(lv.host, rider, on) {
+            if !save_rider(lv.host, rider, Arc::new(on)) {
                 rider.remove(lv.host, RemovalReason::Discarded);
                 entity.discard(lv.host);
                 return Some(InteractionResult::Fail);
@@ -2010,10 +2091,8 @@ impl ItemPart for ContraptionItem {
     }
 }
 
-/// A player's click on an entity (`PlayerInteractEvent.EntityInteract`): a coupling on a cart
-/// (`MinecartCouplingItem`), a wrench on a coupled cart (`onWrenchInteractOnMinecart`), else a
-/// wrench on a cart carrying a contraption picks it up
-/// (`wrenchCanBeUsedToPickUpMinecartContraptions`).
+/// A coupling on a cart (`MinecartCouplingItem`), or a wrench removing both links in
+/// `onWrenchInteractOnMinecart`. Packing a rider into an item needs a checked inventory give.
 fn interact_entity(
     host: &mut dyn ServerHost,
     event: &mut EntityInteractEvent<'_>,
@@ -2035,90 +2114,30 @@ fn interact_entity(
         click_coupling(&mut lv, player, &nc);
         return Some(InteractionResult::SuccessServer);
     }
-    // A wrench: couplings come off first.
-    let removed = CARTS.with_borrow_mut(|c| {
-        let r = c.couplings.decouple(nc.uuid);
-        c.dirty |= r.is_some();
-        r
+    let ordinary = CARTS.with_borrow_mut(|c| {
+        let removed = c.couplings.decouple(nc.uuid);
+        c.dirty |= removed.is_some();
+        removed
     });
-    if let Some(items) = removed {
-        status(lv.host, Some(player), coupling::REMOVED);
-        if player.is_creative(&*lv.host) != Some(true)
-            && items > 0
-            && let Some(stack) = item_stack(&*lv.host, "create:minecart_coupling", items)
-        {
-            let _ = player.give_stack(lv.host, stack);
-        }
-        return Some(InteractionResult::SuccessServer);
-    }
-    if let Some(rider) = linked_rider(&mut lv, nc.uuid) {
-        let data = payload(lv.host, rider)?;
-        let on = data.data(&*lv.host)?.clone();
-        let main = lv.host.entity_by_uuid(EntityUuid(on.cart))?;
-        let pos = main.position(&*lv.host)?;
-        put_back(&mut lv, rider, pos, on);
-        status(lv.host, Some(player), coupling::REMOVED);
-        return Some(InteractionResult::SuccessServer);
-    }
-    let rider = rider_of(&lv, &nc)?;
-    let data = payload(lv.host, rider)?;
-    let on = data.data(&*lv.host)?;
-    let item = cart::contraption_item(&nc.kind)?;
-    let mut out = item_stack(&*lv.host, item, 1)?;
-    let tag = contraption_tag(&*lv.host, on, false);
-    let custom = Compound::from([(mounted::DATA_KEY.into(), Tag::Compound(tag))]);
-    let components = Compound::from([("minecraft:custom_data".into(), Tag::Compound(custom))]);
-    if out.set_components(components).is_err() {
+    let contraption = if let Some(rider) = linked_rider(&mut lv, nc.uuid)
+        && let Some(on) = payload(lv.host, rider)
+        && let Some(at) = rider.position(&*lv.host)
+    {
+        put_back(&mut lv, rider, at, (*on).clone());
+        true
+    } else {
+        false
+    };
+    if ordinary.is_none() && !contraption {
         return None;
     }
-    // `Inventory.placeItemBackInInventory`. The payload is one item, so confirm a slot
-    // accepted it or the toss succeeded before discarding either entity. `give_stack`'s
-    // same-level overflow path cannot tell us whether a toss was vetoed.
-    let mut slots: [Option<ItemStack>; 36] = std::array::from_fn(|_| None);
-    if let Some(inventory) = player.inventory_slots(&*lv.host) {
-        for (slot, stack) in inventory {
-            if let Some(place) = slots.get_mut(slot as usize) {
-                *place = Some(stack);
-            }
-        }
-    } else {
-        return Some(InteractionResult::Fail);
+    status(lv.host, Some(player), coupling::REMOVED);
+    if let Some(items) = ordinary.filter(|&items| items > 0)
+        && player.is_creative(&*lv.host) != Some(true)
+        && let Some(stack) = item_stack(&*lv.host, "create:minecart_coupling", items)
+    {
+        let _ = player.give_stack(lv.host, stack);
     }
-    let limit = lv.host.max_stack_size(out.item()).unwrap_or(1);
-    let selected = player.selected_slot(&*lv.host);
-    let mut order = selected
-        .into_iter()
-        .chain((0..slots.len()).filter(|slot| Some(*slot) != selected));
-    let dest = order
-        .clone()
-        .find_map(|slot| {
-            let mut stack = slots[slot].as_ref()?.clone();
-            if stack.is_stackable_with(&out) && stack.count() < limit {
-                stack.set_count(stack.count() + 1).ok()?;
-                Some((slot, stack))
-            } else {
-                None
-            }
-        })
-        .or_else(|| {
-            order
-                .find(|&slot| slots[slot].is_none())
-                .map(|slot| (slot, out.clone()))
-        });
-    let delivered = dest.is_some_and(|(slot, stack)| {
-        player
-            .set_inventory_slot(lv.host, slot as u32, Some(stack))
-            .is_ok()
-    }) || player.drop_stack(lv.host, out, false) == Ok(None);
-    if !delivered {
-        return Some(InteractionResult::Fail);
-    }
-    if on.m.blocks.len() > 200 {
-        crate::glue::advancements::award(lv.host, player, "cart_pickup");
-    }
-    CARTS.with_borrow_mut(|c| c.known.remove(&nc.uuid));
-    rider.remove(lv.host, RemovalReason::Discarded);
-    nc.entity.discard(lv.host);
     Some(InteractionResult::SuccessServer)
 }
 
@@ -2268,7 +2287,6 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
         // Only a resident rider, its paired cart, or an ordinary coupling needs an index entry.
         let held: HashSet<u128> = visuals
             .iter()
-            .filter_map(|data| data.data(&*lv.host))
             .flat_map(|on| std::iter::once(on.cart).chain(on.paired_cart()))
             .collect();
         CARTS.with_borrow_mut(|c| {
@@ -2286,8 +2304,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
         lv,
         visuals
             .iter()
-            .filter_map(|data| {
-                let on = data.data(&*lv.host)?;
+            .filter_map(|on| {
                 let p = carts.get(&on.cart)?.pos;
                 Some((
                     on.cart,
@@ -2388,24 +2405,21 @@ fn follow(lv: &mut ServerLevel<'_>) -> HashMap<u128, Cart> {
 }
 
 /// Run orientation, actors and fuel only for the exact rider that the current cart carries.
-fn tick_mounted(lv: &mut ServerLevel<'_>, carts: &HashMap<u128, Cart>) -> Vec<Arc<RiderPayload>> {
+fn tick_mounted(lv: &mut ServerLevel<'_>, carts: &HashMap<u128, Cart>) -> Vec<Arc<OnCart>> {
     let mut live = Vec::new();
     for (uuid, _) in indexed_riders(lv.dim) {
         let Some(nc) = carts.get(&uuid) else { continue };
         let Some(rider) = rider_of(lv, nc) else {
             continue;
         };
-        let Some(data) = payload(lv.host, rider) else {
-            continue;
-        };
-        let Some(before) = data.data(&*lv.host) else {
+        let Some(before) = payload(lv.host, rider) else {
             continue;
         };
         let rail = rail_under(lv, nc.pos);
         if rail.is_some_and(|(_, activator, powered)| {
             activator && (powered || nc.kind != "minecraft:minecart")
         }) {
-            put_back(lv, rider, nc.pos, before.clone());
+            put_back(lv, rider, nc.pos, (*before).clone());
             continue;
         }
         let mut turn = before.m.turn;
@@ -2443,22 +2457,37 @@ fn tick_mounted(lv: &mut ServerLevel<'_>, carts: &HashMap<u128, Cart>) -> Vec<Ar
             && before.carried.actors.is_empty()
             && furnaces.clone().next().is_none()
         {
-            live.push(data);
+            live.push(before);
             continue;
         }
-        let mut on = before.clone();
+        let mut on = (*before).clone();
         on.m.turn = turn;
         for cart in furnaces {
             fuel_furnace(lv, cart, &mut on);
         }
         tick_cart_actors(lv, nc, &mut on);
-        if before != &on && save_rider(lv.host, rider, on) {
-            if let Some(data) = payload(lv.host, rider) {
-                live.push(data);
-            }
-        } else {
-            live.push(data);
+        if *before == on {
+            live.push(before);
+            continue;
         }
+        let content_changed = before.storage != on.storage
+            || before.carried.controls != on.carried.controls
+            || before.carried.disabled != on.carried.disabled;
+        let on = Arc::new(on);
+        let saved = if content_changed {
+            save_rider(lv.host, rider, on.clone())
+        } else {
+            let result = RIDER_MOTION.set(
+                lv.host,
+                Holder::Entity(rider.id()),
+                RiderMotion::Live(on.clone()),
+            );
+            if let Err(e) = &result {
+                crate::create_log!("[create] saving cart rider motion: {e:?}");
+            }
+            result.is_ok()
+        };
+        live.push(if saved { on } else { before });
     }
     live
 }
@@ -2517,11 +2546,7 @@ fn can_add_motion(nc: &Cart) -> bool {
 /// `CouplingPhysics.tick`: each coupling whose carts are both here runs the soft step on their
 /// motion, then the hard step pulls their positions back to the coupling's length; a cart whose
 /// partner isn't loaded holds still (`MinecartController.tick`'s internal stall).
-fn tick_couplings(
-    lv: &mut ServerLevel<'_>,
-    carts: &HashMap<u128, Cart>,
-    riders: &[Arc<RiderPayload>],
-) {
+fn tick_couplings(lv: &mut ServerLevel<'_>, carts: &HashMap<u128, Cart>, riders: &[Arc<OnCart>]) {
     let mut pairs = CARTS.with_borrow(|c| {
         c.couplings
             .carts
@@ -2529,7 +2554,7 @@ fn tick_couplings(
             .filter_map(|x| x.leading)
             .collect::<Vec<_>>()
     });
-    pairs.extend(riders.iter().filter_map(|data| data.data(&*lv.host)?.link));
+    pairs.extend(riders.iter().filter_map(|on| on.link));
     pairs.sort_by_key(|l| (l.main, l.connected));
     for link in pairs {
         let (a, b, length) = (link.main, link.connected, link.length);
@@ -2690,6 +2715,11 @@ fn save(lv: &mut ServerLevel<'_>) {
     }
 }
 
+/// Before riders stored their own links, a level link marked `[I;1]` spent no coupling item.
+fn old_contraption_link(tag: &Compound) -> bool {
+    matches!(get(tag, "Contraption"), Some(Tag::IntArray(bits)) if bits.first() == Some(&1))
+}
+
 /// Restore ordinary couplings and assembler settings; their carts are found by UUID.
 fn load(lv: &mut ServerLevel<'_>) {
     CARTS.with_borrow_mut(|c| c.loaded = true);
@@ -2715,23 +2745,14 @@ fn load(lv: &mut ServerLevel<'_>) {
             _ => Vec::new(),
         }
     };
+    let mut obsolete = get(&data, "Contraptions").is_some();
     let mut couplings = Couplings::default();
     for c in list("Couplings") {
-        let (Some(main), Some(connected), Some(length)) = (
-            uuid_of(&ints(get(&c, "Main"))),
-            uuid_of(&ints(get(&c, "Connected"))),
-            double(get(&c, "Length")),
-        ) else {
-            continue;
-        };
-        let link = coupling::Link {
-            main,
-            connected,
-            length: length as f32,
-            contraption: false,
-        };
-        couplings.carts.entry(main).or_default().leading = Some(link);
-        couplings.carts.entry(connected).or_default().connected = Some(link);
+        obsolete |= old_contraption_link(&c);
+        if let Some(link) = read_link(&c, None) {
+            couplings.carts.entry(link.main).or_default().leading = Some(link);
+            couplings.carts.entry(link.connected).or_default().connected = Some(link);
+        }
     }
     let mut stations = HashMap::new();
     for c in list("Assemblers") {
@@ -2753,12 +2774,130 @@ fn load(lv: &mut ServerLevel<'_>) {
     CARTS.with_borrow_mut(|c| {
         c.couplings = couplings;
         c.stations = stations;
+        c.dirty |= obsolete;
     });
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{uuid_ints, uuid_of};
+    use super::*;
+    use mod_api::{Identifier, prelude::ItemsHost, testing::FakeHost};
+
+    #[test]
+    fn rider_structure_keeps_the_blocks_storage_and_owned_link_without_motion() {
+        let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+        let mut host = FakeHost::new();
+        let id = Identifier::parse("minecraft:diamond").unwrap();
+        host.registries.resolve_items([id.clone()]).unwrap();
+        let stack = ItemStack::new(host.item_key(&id).unwrap(), 7).unwrap();
+        let mut mounted = Mounted::placed_at(vec![([0, 1, 0], 72)], Mode::Rotate, Dir::West, 47.5);
+        mounted.turn.pitch = 3.0;
+        let on = OnCart {
+            cart: 12,
+            m: mounted,
+            link: Some(coupling::Link {
+                main: 21,
+                connected: 12,
+                length: 7.0,
+                contraption: true,
+            }),
+            storage: vec![([0, 1, 0], vec![None, Some(stack.clone())])],
+            glue: vec![Glue::span([0, 1, 0], [1, 2, 3])],
+            held: Some(Tag::List(Vec::new())),
+            carried: Default::default(),
+        };
+        let body = encode_payload(&host, &on, |id| {
+            assert_eq!(id, 72);
+            Some("minecraft:oak_planks".to_owned())
+        });
+        assert_eq!(get(&body, "Cart"), Some(&Tag::IntArray(vec![0, 0, 0, 12])));
+        assert_eq!(get(&body, "Main"), Some(&Tag::IntArray(vec![0, 0, 0, 21])));
+        assert_eq!(
+            get(&body, "InitialOrientation"),
+            Some(&Tag::String("WEST".into()))
+        );
+        assert!(!body.contains_key(&"Yaw".into()));
+        let motion = RIDER_MOTION.codec.as_ref().unwrap();
+        let encoded = (motion.encode)(&RiderMotion::Live(Arc::new(on.clone()))).unwrap();
+        assert_eq!(
+            encoded,
+            Compound::from([("Yaw".into(), Tag::Float(47.5f32.to_bits()))])
+        );
+        assert!(matches!(
+            (motion.decode)(&encoded),
+            Ok(RiderMotion::Saved(47.5))
+        ));
+        let state = |name: &str| (name == "minecraft:oak_planks").then_some(63);
+        let decoded = decode_payload(&host, &body, state).unwrap();
+        assert_eq!(decoded.m.blocks, vec![([0, 1, 0], 63)]);
+        assert_eq!(decoded.m.initial, Dir::West);
+        assert!(decoded.m.placed);
+        assert_eq!(decoded.cart, 12);
+        assert_eq!(decoded.link, on.link);
+        assert_eq!(decoded.storage, vec![([0, 1, 0], vec![None, Some(stack)])]);
+        assert_eq!(decoded.glue, on.glue);
+        assert_eq!(decoded.held, on.held);
+        let mut wrong_rider = body.clone();
+        wrong_rider.insert("Cart".into(), Tag::IntArray(vec![0, 0, 0, 25]));
+        assert!(decode_payload(&host, &wrong_rider, state).is_none());
+        let mut incomplete = body;
+        incomplete.remove(&"Connected".into());
+        assert!(decode_payload(&host, &incomplete, state).is_none());
+    }
+
+    #[test]
+    fn only_ordinary_old_level_links_are_reloaded() {
+        let mut tag = Compound::from([
+            ("Main".into(), Tag::IntArray(vec![0, 0, 0, 21])),
+            ("Connected".into(), Tag::IntArray(vec![0, 0, 0, 12])),
+            ("Length".into(), Tag::Double(7.0f64.to_bits())),
+            ("Contraption".into(), Tag::IntArray(vec![0])),
+        ]);
+        let link = coupling::Link {
+            main: 21,
+            connected: 12,
+            length: 7.0,
+            contraption: false,
+        };
+        assert_eq!(read_link(&tag, None), Some(link));
+        tag.insert("Contraption".into(), Tag::IntArray(vec![1]));
+        assert!(read_link(&tag, None).is_none());
+        assert_eq!(
+            read_link(&tag, Some(12)),
+            Some(coupling::Link {
+                contraption: true,
+                ..link
+            })
+        );
+        assert!(read_link(&tag, Some(23)).is_none());
+        tag.insert("Length".into(), Tag::Double(f64::NAN.to_bits()));
+        assert!(read_link(&tag, Some(12)).is_none());
+    }
+
+    #[test]
+    fn a_partial_drop_delivery_keeps_only_the_refused_stack_on_reopen() {
+        let vault = PendingDrop {
+            pos: [3, 72, -3],
+            stack: Compound::from([
+                ("id".into(), Tag::String("create:item_vault".into())),
+                ("count".into(), Tag::Int(1)),
+            ]),
+        };
+        let gold = PendingDrop {
+            pos: [4, 72, -3],
+            stack: Compound::from([
+                ("id".into(), Tag::String("minecraft:gold_ingot".into())),
+                ("count".into(), Tag::Int(7)),
+            ]),
+        };
+        let left = unjoined_drops(&[vault, gold.clone()], |drop| drop.pos[0] == 3);
+        assert_eq!(left, vec![gold.clone()]);
+        let codec = RIDER_DROPS.codec.as_ref().unwrap();
+        let saved = (codec.encode)(&left).unwrap();
+        let reopened = (codec.decode)(&saved).unwrap();
+        assert_eq!(reopened, vec![gold]);
+        assert!(unjoined_drops(&reopened, |_| true).is_empty());
+    }
 
     #[test]
     fn uuids_keep_their_bits_as_four_ints() {

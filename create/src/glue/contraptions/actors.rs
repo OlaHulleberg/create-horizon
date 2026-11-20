@@ -224,21 +224,29 @@ fn put_slots(
     let Some(e) = lv.host.block_entity(lv.level, pos) else {
         return stored.into_iter().flatten().collect();
     };
-    let mut left = Vec::new();
-    let restored = lv.host.transaction(|host, tx| {
-        for (i, s) in stored.iter().enumerate() {
-            let Some(stack) = s else { continue };
-            if i >= size || e.set_item_slot(host, tx, i as u32, Some(stack.clone())) != Ok(true) {
-                left.push(stack.clone());
-            }
-        }
-        Ok::<(), ()>(())
-    });
-    if restored.is_ok() {
-        left
-    } else {
-        stored.into_iter().flatten().collect()
-    }
+    lv.host
+        .transaction(|host, tx| {
+            Ok::<_, ()>(rejected_slots(&stored, size, |i, stack| {
+                e.set_item_slot(host, tx, i as u32, Some(stack.clone())) == Ok(true)
+            }))
+        })
+        .unwrap_or_else(|_| stored.into_iter().flatten().collect())
+}
+
+/// Transfer stacks back to their exact slot; preserve those not accepted by the destination.
+fn rejected_slots<T: Clone>(
+    stored: &[Option<T>],
+    size: usize,
+    mut put: impl FnMut(usize, &T) -> bool,
+) -> Vec<T> {
+    stored
+        .iter()
+        .enumerate()
+        .filter_map(|(i, stack)| {
+            let stack = stack.as_ref()?;
+            (i >= size || !put(i, stack)).then(|| stack.clone())
+        })
+        .collect()
 }
 
 /// The `ITEMS` handler of the block at `pos`.
@@ -1172,52 +1180,20 @@ fn stage_held(
     with_world(|w| {
         let d = &mut w.dims[dim];
         for (o, data) in &list {
-            if !free(place(*o)) {
-                continue;
-            }
-            if let Some(dp) = &data.deployer {
+            let at = place(*o);
+            if let Some(dp) = &data.deployer
+                && free(at)
+            {
                 let mut dp = dp.clone();
                 dp.breaking = None;
-                d.deployer_saved_insert(place(*o), dp);
+                d.deployer_saved_insert(at, dp);
             }
-            let Some(m) = data.tank else {
-                continue;
-            };
-            // An intact tank keeps its shape and the new corner is its controller.
-            let cells: Vec<[i32; 3]> = tank::blocks(*o, m.width, m.height)
-                .map(&place)
-                .filter(|&p| free(p))
-                .collect();
-            let Some(&first) = cells.first() else {
-                continue;
-            };
-            let corner = cells.iter().fold(first, |c, p| {
-                [c[0].min(p[0]), c[1].min(p[1]), c[2].min(p[2])]
-            });
-            if tank::blocks(corner, m.width, m.height).all(|q| cells.contains(&q)) {
-                for q in cells {
-                    d.tanks.arriving.insert(q, None);
-                }
-                d.tanks.arriving.insert(corner, Some(m));
-            } else {
-                // `FluidTankMountedStorage.unmount` restores to a controller. Split its
-                // contents among the surviving parts (`ConnectivityHandler.splitMulti`),
-                // each taking up to one block's capacity in the original order.
-                let mut remaining = m.tank;
-                for q in cells {
-                    let (fluid, amount) = remaining
-                        .drain_amount(tank::CAPACITY)
-                        .map_or((None, 0), |(fluid, amount)| (Some(fluid), amount));
-                    d.tanks.arriving.insert(
-                        q,
-                        Some(tank::Multi {
-                            width: 1,
-                            height: 1,
-                            window: m.window,
-                            tank: tank::Tank { fluid, amount },
-                        }),
-                    );
-                }
+            if let Some(m) = data.tank {
+                let cells = tank::blocks(*o, m.width, m.height)
+                    .map(&place)
+                    .filter(|&p| free(p))
+                    .collect();
+                d.tanks.arriving.extend(tank::restore_mounted(m, at, cells));
             }
         }
     });
@@ -3708,4 +3684,29 @@ pub(super) fn run_command(host: &mut dyn ServerHost, event: &mut RunModCommandEv
     };
     let _ = host.commands().feedback(mod_api::Text::literal(line));
     Flow::Cancel
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_mounted_slot_write_returns_the_exact_stack() {
+        let mut calls = Vec::new();
+        let left = rejected_slots(
+            &[
+                Some(("iron", 4)),
+                None,
+                Some(("gold", 7)),
+                Some(("diamond", 2)),
+            ],
+            3,
+            |i, stack| {
+                calls.push((i, *stack));
+                i == 0
+            },
+        );
+        assert_eq!(calls, vec![(0, ("iron", 4)), (2, ("gold", 7))]);
+        assert_eq!(left, vec![("gold", 7), ("diamond", 2)]);
+    }
 }

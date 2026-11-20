@@ -34,7 +34,6 @@ impl Hooks for Create {
         let _ = r.register_attachment_type("create:column", false);
         let _ = r.register_attachment_type("create:logistics_networks", false);
         let _ = r.register_attachment_type("create:station_ports", false);
-        let _ = r.register_attachment_type("create:minecart_contraptions", false);
         let _ = r.register_attachment_type("create:haunting", false);
 
         for &block in create_engine::Block::ALL.iter() {

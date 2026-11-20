@@ -420,6 +420,52 @@ impl Multi {
     }
 }
 
+/// Tank members to stage when a contraption restores its blocks. `controller` is the
+/// original controller's transformed position; `cells` contains only the surviving members,
+/// still in original order. The restored corner owns an intact tank. With a missing member,
+/// `FluidTankMountedStorage.unmount` and `ConnectivityHandler.splitMultiAndInvalidate` leave
+/// up to one cell's capacity per survivor, controller first, and discard the excess. A
+/// blocked controller never receives its mounted storage (`Contraption.addBlocksToWorld`).
+pub fn restore_mounted(
+    tank: Multi,
+    controller: [i32; 3],
+    cells: Vec<[i32; 3]>,
+) -> Vec<([i32; 3], Option<Multi>)> {
+    if !cells.contains(&controller) {
+        return Vec::new();
+    }
+    let corner = cells.iter().fold(controller, |corner, pos| {
+        std::array::from_fn(|i| corner[i].min(pos[i]))
+    });
+    if blocks(corner, tank.width, tank.height).all(|pos| cells.contains(&pos)) {
+        return cells
+            .into_iter()
+            .map(|pos| (pos, (pos == corner).then_some(tank)))
+            .collect();
+    }
+    let mut remaining = tank.tank;
+    cells
+        .into_iter()
+        .map(|pos| {
+            let part =
+                remaining
+                    .drain_amount(CAPACITY)
+                    .map_or(Tank::default(), |(fluid, amount)| Tank {
+                        fluid: Some(fluid),
+                        amount,
+                    });
+            (
+                pos,
+                Some(Multi {
+                    tank: part,
+                    window: tank.window,
+                    ..Multi::default()
+                }),
+            )
+        })
+        .collect()
+}
+
 /// The block states of a tank block (`notifyMultiUpdated`, `setWindows`, `removeController`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockShape {
@@ -996,6 +1042,58 @@ pub fn tooltip(tank: Tank, capacity: u32) -> Vec<crate::gauge::Line> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mounted_tank_restores_only_what_fits_in_surviving_members() {
+        let bottom = [4, 6, 8];
+        let middle = [4, 7, 8];
+        let top = [4, 8, 8];
+        let full = Multi {
+            width: 1,
+            height: 3,
+            window: false,
+            tank: Tank {
+                fluid: Some(Fluid::Water),
+                amount: 22_000,
+            },
+        };
+        let cell = Multi {
+            width: 1,
+            height: 1,
+            window: false,
+            tank: Tank {
+                fluid: Some(Fluid::Water),
+                amount: 8_000,
+            },
+        };
+        assert_eq!(
+            restore_mounted(full, bottom, vec![bottom, middle, top]),
+            vec![(bottom, Some(full)), (middle, None), (top, None)]
+        );
+        assert_eq!(
+            restore_mounted(full, bottom, vec![bottom, middle]),
+            vec![(bottom, Some(cell)), (middle, Some(cell))]
+        );
+        assert!(restore_mounted(full, bottom, vec![middle, top]).is_empty());
+        let partly_filled = Multi {
+            tank: Tank {
+                amount: 9_000,
+                ..full.tank
+            },
+            ..full
+        };
+        let rest = Multi {
+            tank: Tank {
+                amount: 1_000,
+                ..cell.tank
+            },
+            ..cell
+        };
+        assert_eq!(
+            restore_mounted(partly_filled, bottom, vec![bottom, top]),
+            vec![(bottom, Some(cell)), (top, Some(rest))]
+        );
+    }
 
     fn tick_all(t: &mut Tanks) {
         let mut positions: Vec<_> = t.parts.keys().copied().collect();
