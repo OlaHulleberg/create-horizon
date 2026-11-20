@@ -44,8 +44,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 thread_local! {
-    /// An immutable snapshot for the server's read-only filter probes. The SDK builds it
-    /// through a mutable host; a probe may run inside another mod's capability query.
+    /// A snapshot for read-only filter probes, which may run in a capability query. Remove
+    /// it when the SDK can read the already-built catalog without a mutable Host.
     static ITEM_GROUPS: RefCell<Option<Arc<CreativeModeTabs>>> = const { RefCell::new(None) };
 }
 
