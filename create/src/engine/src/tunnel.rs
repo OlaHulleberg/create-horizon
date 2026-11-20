@@ -257,6 +257,69 @@ impl Brass {
     pub fn can_take(&self) -> bool {
         self.stack.is_none() && !self.synced
     }
+
+    /// `BrassTunnelBlockEntity.tick` (`:131-200`): advances the timer and decides the tick phase.
+    pub fn begin_tick(&mut self, belt_moving: bool) -> BrassPhase {
+        if self.progress > 0 {
+            self.progress -= 1;
+        }
+        if !belt_moving || (self.stack.is_none() && !self.synced) {
+            return BrassPhase::Idle;
+        }
+        if self.progress == -1 {
+            BrassPhase::Gather
+        } else if self.progress != 0 {
+            BrassPhase::Wait
+        } else {
+            BrassPhase::Distribute
+        }
+    }
+
+    /// `BrassTunnelBlockEntity.tick` (`:146-163`, `:517`): checks `syncedOutputActive` *before*
+    /// updating it from the group's stacks (`gatherValidOutputs`), returning `Some(new_synced)`
+    /// when the whole group should update `synced`, and `true` if gathering may proceed to check
+    /// targets (`validOutputs != null && !stackToDistribute.isEmpty()`).
+    pub fn gather_sync(&mut self, group_has_stack: &[bool]) -> (Option<bool>, bool) {
+        let was_synced = self.synced;
+        let mut sync_update = None;
+        if self.mode == Mode::Synchronize {
+            let all_full = group_has_stack.iter().all(|h| *h);
+            let all_empty = group_has_stack.iter().all(|h| !*h);
+            if all_full || all_empty {
+                let next_synced = !all_empty;
+                self.synced = next_synced;
+                sync_update = Some(next_synced);
+            }
+            if !was_synced {
+                return (sync_update, false);
+            }
+        }
+        (sync_update, self.stack.is_some())
+    }
+
+    /// `BrassTunnelBlockEntity.tick` (`:186-195`): schedules the next distribution once targets
+    /// were found.
+    pub fn schedule_distribution(&mut self) {
+        if self.new_item {
+            self.new_item = false;
+            self.progress = 2;
+        } else if self.mode != Mode::Synchronize || self.synced {
+            self.progress = BRASS_TIMER;
+        }
+    }
+}
+
+/// What a brass tunnel's tick (`BrassTunnelBlockEntity.tick`) needs next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrassPhase {
+    /// Belt stopped, or nothing held and not synced (`:133-136`).
+    Idle,
+    /// `distributionProgress == -1`: gather outputs and update `syncedOutputActive` (`:140-196`).
+    Gather,
+    /// Waiting for countdown (`distributionProgress > 0`).
+    Wait,
+    /// `distributionProgress == 0`: distribute held stack (`:198-218`).
+    Distribute,
 }
 
 /// `BrassTunnelBlockEntity.getAdjacent`: the adjacent position across `axis` (`left` is
@@ -659,5 +722,49 @@ mod tests {
         set_group_mode(b, Mode::Synchronize, &mut tunnels, &info, &mut changed);
         assert_eq!(tunnels[&a].mode, Mode::Synchronize);
         assert_eq!(tunnels[&b].mode, Mode::Synchronize);
+    }
+
+    #[test]
+    fn synchronizing_tunnel_gathers_outputs_one_tick_after_syncing() {
+        // Observed in t6-brass-sync-gather: a Synchronize brass tunnel receives 3 iron ingots at
+        // tick 40 (new_item=true, progress=-1, synced=false). In Java, gatherValidOutputs checks
+        // syncedOutputActive before syncSet sets it true, so progress stays -1 on tick 40, becomes
+        // 2 on tick 41, 1 on tick 42, and distributes on tick 43.
+        let mut b = Brass {
+            stack: Some(("minecraft:iron_ingot".into(), 3)),
+            new_item: true,
+            mode: Mode::Synchronize,
+            ..Default::default()
+        };
+
+        // Tick 40: syncs the group, but validOutputs was null so progress remains -1.
+        assert_eq!(b.begin_tick(true), BrassPhase::Gather);
+        let (sync_update, can_gather) = b.gather_sync(&[true]);
+        assert_eq!(sync_update, Some(true));
+        assert!(!can_gather);
+        assert_eq!((b.progress, b.synced, b.new_item), (-1, true, true));
+
+        // Tick 41: already synced, so it gathers outputs and sets progress = 2.
+        assert_eq!(b.begin_tick(true), BrassPhase::Gather);
+        let (_, can_gather) = b.gather_sync(&[true]);
+        assert!(can_gather);
+        b.schedule_distribution();
+        assert_eq!((b.progress, b.synced, b.new_item), (2, true, false));
+
+        // Tick 42: counts down to 1.
+        assert_eq!(b.begin_tick(true), BrassPhase::Wait);
+        assert_eq!(b.progress, 1);
+
+        // Tick 43: counts down to 0 and distributes.
+        assert_eq!(b.begin_tick(true), BrassPhase::Distribute);
+        b.stack = None;
+        b.progress = -1;
+
+        // Tick 44: all empty, clears synced.
+        assert_eq!(b.begin_tick(true), BrassPhase::Gather);
+        let (sync_update, can_gather) = b.gather_sync(&[false]);
+        assert_eq!(sync_update, Some(false));
+        assert!(!can_gather);
+        assert!(!b.synced);
     }
 }

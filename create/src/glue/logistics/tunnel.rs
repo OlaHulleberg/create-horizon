@@ -687,60 +687,65 @@ pub fn tick_brass(lv: &mut ServerLevel<'_>) {
             continue;
         };
         let below = [t[0], t[1] - 1, t[2]];
-        if b.progress > 0 {
-            b.progress -= 1;
-        }
         let rpm = belt_segment(lv, below)
             .and_then(|(c, ..)| with_world(|w| w.speed(dim, c)).flatten())
             .unwrap_or(0.0);
         let save = |b: &tunnel::Brass| {
             with_world(|w| {
                 let d = &mut w.dims[dim];
+                let changed = d.brass.get(&t).is_some_and(|x| x != b);
                 if let Some(x) = d.brass.get_mut(&t) {
                     *x = b.clone();
                 }
                 if b.stack.is_none() && !b.synced {
                     d.brass_running.retain(|p| *p != t);
                 }
+                if changed {
+                    w.mark_unsaved(dim, t);
+                }
             });
         };
-        if rpm == 0.0 || b.stack.is_none() && !b.synced {
+        let phase = b.begin_tick(rpm != 0.0);
+        if matches!(phase, tunnel::BrassPhase::Idle | tunnel::BrassPhase::Wait) {
             save(&b);
             continue;
         }
         let Some((axis, _)) = tunnel_state(lv, t) else {
             continue;
         };
-        if b.progress == -1 {
+        if phase == tunnel::BrassPhase::Gather {
             let group = brass_group(lv, t, axis);
-            if b.mode == tunnel::Mode::Synchronize {
-                // `syncedOutputActive`: all of the group full, or all empty.
-                let held: Vec<bool> = group
-                    .iter()
-                    .map(|p| {
-                        with_world(|w| w.dims[dim].brass.get(p).is_some_and(|x| x.stack.is_some()))
-                            .unwrap_or(false)
-                    })
-                    .collect();
-                let (all_full, all_empty) = (held.iter().all(|h| *h), held.iter().all(|h| !*h));
-                if all_full || all_empty {
-                    with_world(|w| {
-                        let d = &mut w.dims[dim];
-                        for p in &group {
-                            if let Some(x) = d.brass.get_mut(p) {
-                                x.synced = !all_empty;
-                                if x.synced && !d.brass_running.contains(p) {
-                                    d.brass_running.push(*p);
-                                }
+            let held: Vec<bool> = group
+                .iter()
+                .map(|p| {
+                    with_world(|w| w.dims[dim].brass.get(p).is_some_and(|x| x.stack.is_some()))
+                        .unwrap_or(false)
+                })
+                .collect();
+            let (sync_update, can_gather) = b.gather_sync(&held);
+            if let Some(synced) = sync_update {
+                with_world(|w| {
+                    let mut changed = Vec::new();
+                    let d = &mut w.dims[dim];
+                    for p in &group {
+                        if let Some(x) = d.brass.get_mut(p)
+                            && x.synced != synced
+                        {
+                            x.synced = synced;
+                            if synced && !d.brass_running.contains(p) {
+                                d.brass_running.push(*p);
                             }
+                            changed.push(*p);
                         }
-                    });
-                    b.synced = !all_empty;
-                }
-                if !b.synced {
-                    save(&b);
-                    continue;
-                }
+                    }
+                    for p in changed {
+                        w.mark_unsaved(dim, p);
+                    }
+                });
+            }
+            if !can_gather {
+                save(&b);
+                continue;
             }
             let Some((item, count)) = b.stack.clone() else {
                 save(&b);
@@ -760,16 +765,7 @@ pub fn tick_brass(lv: &mut ServerLevel<'_>) {
                 save(&b);
                 continue;
             }
-            if b.new_item {
-                b.new_item = false;
-                b.progress = 2;
-            } else {
-                b.progress = tunnel::BRASS_TIMER;
-                save(&b);
-                continue;
-            }
-        }
-        if b.progress != 0 {
+            b.schedule_distribution();
             save(&b);
             continue;
         }
