@@ -350,9 +350,9 @@ pub fn passenger_motion(
         [0.0, 0.0, along]
     };
     let diff_center = if axis == Axis::Z {
-        f64::from(pos[0]) + 0.5 - feet[0]
+        f64::from(pos[0] as f32 + 0.5) - feet[0]
     } else {
-        f64::from(pos[2]) + 0.5 - feet[2]
+        f64::from(pos[2] as f32 + 0.5) - feet[2]
     };
     if diff_center.abs() > 48.0 / 64.0 {
         return None;
@@ -398,7 +398,7 @@ pub fn passenger_motion(
     }
     if !steering {
         // `centering`: toward the middle across the belt.
-        let pull = diff_center * speed.abs().min(0.1) * 4.0;
+        let pull = diff_center * speed.abs().min(f64::from(0.1_f32)) * 4.0;
         if axis == Axis::Z {
             m[0] += pull;
         } else {
@@ -1642,9 +1642,28 @@ mod tests {
             slope: Slope::Horizontal,
             part: Part::Middle,
         };
-        // 48 RPM south: a tenth of a block a tick south, pulled a little toward the middle.
-        let m = passenger_motion(&seg, [0, 64, 0], [0.6, 64.8125, 0.5], 48.0, false).unwrap();
-        assert!((m[2] - 0.1).abs() < 1e-6 && m[0] < 0.0 && m[1] == 0.0);
+        let speed = f64::from(0.1_f32);
+        let feet = [0.75, 64.8125, 0.5];
+        assert_eq!(
+            passenger_motion(&seg, [0, 64, 0], feet, 48.0, false),
+            Some([-speed, 0.0, speed])
+        );
+        assert_eq!(
+            passenger_motion(&seg, [0, 64, 0], feet, 48.0, true),
+            Some([0.0, 0.0, speed])
+        );
+        // Java rounds the block coordinate plus half to f32 before subtraction.
+        let far_x = 16_777_216;
+        assert_eq!(
+            passenger_motion(
+                &seg,
+                [far_x, 64, 0],
+                [f64::from(far_x), feet[1], feet[2]],
+                48.0,
+                false
+            ),
+            Some([0.0, 0.0, speed])
+        );
         // Nothing for one inside the belt, or on a belt too slow.
         assert!(passenger_motion(&seg, [0, 64, 0], [0.5, 64.1, 0.5], 48.0, false).is_none());
         assert!(passenger_motion(&seg, [0, 64, 0], [0.5, 64.8, 0.5], 0.5, false).is_none());

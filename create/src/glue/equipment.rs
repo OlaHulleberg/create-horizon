@@ -103,6 +103,21 @@ thread_local! {
         const { std::cell::Cell::new((0.0, 0.0, false, false)) };
 }
 
+/// Share the final sampled movement input with the diving boots and belt travel.
+pub(crate) fn sample_movement(event: &mod_api::MovementInputEvent) {
+    INPUT.set((event.forward, event.strafe, event.jump, event.sneak));
+}
+
+/// The applied horizontal axes observed by the movement input hook this travel tick.
+pub(crate) fn player_steering() -> bool {
+    let (forward, strafe, _, _) = INPUT.get();
+    forward != 0.0 || strafe != 0.0
+}
+
+pub(crate) fn wears_diving_boots(host: &dyn mod_api::Host, stack: &ItemStack) -> bool {
+    matches!(gear_of(host, stack), Gear::Boots(_))
+}
+
 /// `DivingBootsItem.accelerateDescentUnderwater` for the local player, on its client (which
 /// moves it): in water, not swimming or flying, it sinks 0.05 a tick faster, jumps 0.5 off the
 /// ground, and walks 1.3 times as fast while slower than 0.145.
@@ -114,7 +129,7 @@ fn diving_boots(host: &mut dyn mod_api::ClientHost, player: PlayerRef) {
     let boots = h
         .living(player.entity())
         .and_then(|l| l.equipment(h, EquipmentSlot::Feet))
-        .is_some_and(|s| matches!(gear_of(h, &s), Gear::Boots(_)));
+        .is_some_and(|s| wears_diving_boots(h, &s));
     if !boots {
         return;
     }
@@ -400,15 +415,6 @@ impl Subsystem for Equipment {
                 entity.set_client_fire_immunity(host, false);
             }
         }
-    }
-
-    /// The local player's movement input, for the diving boots (`zza`, `xxa`, `jumping`).
-    fn movement_input(
-        &self,
-        _host: &dyn mod_api::ClientHost,
-        event: &mut mod_api::MovementInputEvent,
-    ) {
-        INPUT.set((event.forward, event.strafe, event.jump, event.sneak));
     }
 
     /// The end of a player's server tick (`EntityTickEvent`, `LivingBreatheEvent`): the extendo

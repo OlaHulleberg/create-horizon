@@ -1300,13 +1300,14 @@ pub fn transport_passengers(lv: &mut ServerLevel<'_>) {
     }
 }
 
-/// `BeltMovementHandler.transportEntity` for the window's own player, before walking. Make
-/// Create's collision-aware `move(SELF, ...)` calls in order, not a push scaled by friction.
-/// The uphill raw position adjustment after those calls has no local writer (`API_GAPS.md`).
-pub fn carry_local_player(host: &mut dyn mod_api::ClientHost, player: PlayerRef) {
-    if host.local_player() != Some(player) {
+/// Ground friction a walking entity's motion keeps each tick (a block's 0.6 times 0.91).
+const GROUND_FRICTION: f64 = 0.6 * 0.91;
+
+/// Keep the pre-existing sloped-belt push until the pin exposes footprint contact on slopes.
+pub fn carry_slopes(host: &mut dyn mod_api::ClientHost) {
+    let Some(player) = host.local_player() else {
         return;
-    }
+    };
     let e = player.entity();
     let (Some(feet), Some(level)) = (e.position(&*host), player.level(&*host)) else {
         return;
@@ -1319,15 +1320,7 @@ pub fn carry_local_player(host: &mut dyn mod_api::ClientHost, player: PlayerRef)
     // `updateEntityAfterFallOn`: the segment at its feet, else the one below them (a slope's
     // segment reaches above its block).
     let at = feet.map(|v| v.floor() as i32);
-    let segment = |p: [i32; 3]| {
-        level
-            .block_state(&*host, p)
-            .and_then(super::super::states::id)
-            .and_then(|id| {
-                super::super::client_table(&*host, |t| t.get(id).and_then(|(_, i)| i.belt))
-                    .flatten()
-            })
-    };
+    let segment = |p| client_segment(&*host, level, p);
     let below = [at[0], at[1] - 1, at[2]];
     // `entityInside` of the blocks its box is in (Create's `checkInsideBlocks` asks every block
     // the box reaches, whatever its shape): off the end of a belt, the segment still under the
@@ -1353,25 +1346,139 @@ pub fn carry_local_player(host: &mut dyn mod_api::ClientHost, player: PlayerRef)
     else {
         return;
     };
+    if seg.slope == belt::Slope::Horizontal {
+        return;
+    }
     let rpm = super::super::kinetics::shown_speeds(&*host, level, pos)[0];
     let Some(m) = belt::passenger_motion(&seg, pos, feet, rpm, false) else {
         return;
     };
-    let horizontal = [m[0], 0.0, m[2]];
-    let moves = if m[1] > 0.0 {
-        // Moving uphill: contact the slope before stepping along it.
-        [
-            Some([0.0, -m[1].max(f64::from(0.13_f32)), 0.0]),
-            Some(horizontal),
-        ]
-    } else {
-        // Moving downhill: step along the belt before following it down.
-        [Some(horizontal), (m[1] < 0.0).then_some([0.0, m[1], 0.0])]
+    let keep = 1.0 - GROUND_FRICTION;
+    // Up a slope the player steps up the belt's stairs as it is pushed along; down one it is
+    // pushed down at the belt's speed.
+    host.push_player([
+        (m[0] * keep) as f32,
+        if m[1] < 0.0 {
+            (m[1] * keep) as f32
+        } else {
+            0.0
+        },
+        (m[2] * keep) as f32,
+    ]);
+}
+
+fn client_segment(
+    host: &dyn mod_api::Host,
+    level: mod_api::LevelRef,
+    pos: [i32; 3],
+) -> Option<belt::Segment> {
+    let id = states::id(level.block_state(host, pos)?)?;
+    super::super::client_table(host, |table| table.get(id).and_then(|(_, info)| info.belt))
+        .flatten()
+}
+
+/// A belt face at the player's exact foot-centre contact. A client cannot read its
+/// supporting block or receive the contact sweep; do not register overhangs or proximity.
+fn belt_support(
+    host: &dyn mod_api::Host,
+    level: mod_api::LevelRef,
+    feet: [f64; 3],
+) -> Option<([i32; 3], belt::Segment)> {
+    let [x, y, z] = feet;
+    let hit = level.clip(
+        host,
+        [x, y + 1.0, z],
+        [x, y - 1.0, z],
+        mod_api::ClipBlock::Collider,
+        mod_api::ClipFluid::None,
+    )?;
+    if hit.miss
+        || hit.inside
+        || hit.world_border
+        || hit.face != BlockFace::Up
+        || hit.location[1] != y
+    {
+        return None;
+    }
+    let segment = client_segment(host, level, hit.block)?;
+    (segment.slope == belt::Slope::Horizontal).then_some((hit.block, segment))
+}
+
+/// `BeltMovementHandler.transportEntity` for the local player after its travel, before
+/// its ordinary position report. Only carry confirmed contacts for which the client has
+/// enough information. The old sloped path is unchanged; see `API_GAPS.md`.
+pub fn carry_local_player(host: &mut dyn mod_api::ClientHost, player: PlayerRef) {
+    if host.local_player() != Some(player) {
+        return;
+    }
+    let e = player.entity();
+    let (Some(feet), Some(level)) = (e.position(&*host), player.level(&*host)) else {
+        return;
     };
-    for delta in moves.into_iter().flatten() {
-        if !matches!(host.move_local_player_by(delta), Ok(Some(_))) {
+    if e.on_ground(&*host) != Some(true) || player.abilities(&*host).is_some_and(|a| a.flying) {
+        return;
+    }
+    let boots = host
+        .living(e)
+        .and_then(|living| living.equipment(&*host, mod_api::EquipmentSlot::Feet));
+    if boots
+        .as_ref()
+        .is_some_and(|s| super::super::equipment::wears_diving_boots(&*host, s))
+    {
+        return;
+    }
+    if e.is_shift_key_down(&*host) == Some(true)
+        && (!boots.is_some_and(|s| s.item().id(&*host) == "create:cardboard_boots")
+            || !super::super::advancements::hiding_in_cardboard(&*host, player))
+    {
+        return;
+    }
+    let Some((pos, seg)) = belt_support(&*host, level, feet) else {
+        return;
+    };
+    // A different belt in the passenger's feet cell owns the handoff.
+    let at = feet.map(|v| v.floor() as i32);
+    if at != pos
+        && level
+            .block_state(&*host, at)
+            .is_some_and(|state| state.block() == states::key(create_engine::Block::Belt))
+    {
+        return;
+    }
+    let rpm = super::super::kinetics::shown_speeds(&*host, level, pos)[0];
+    let Some(motion) = belt::passenger_motion(
+        &seg,
+        pos,
+        feet,
+        rpm,
+        super::super::equipment::player_steering(),
+    ) else {
+        return;
+    };
+    if belt::movement_speed(rpm).abs() < 0.5 {
+        let Some([lo, hi]) = e.bounding_box(&*host) else {
+            return;
+        };
+        let length = (motion[0] * motion[0] + motion[1] * motion[1] + motion[2] * motion[2]).sqrt();
+        let ahead = motion.map(|v| v / length * 0.5);
+        let from = std::array::from_fn(|i| lo[i] + ahead[i] + ahead[i].abs());
+        let to = std::array::from_fn(|i| hi[i] + ahead[i] - ahead[i].abs());
+        // With no client push-reaction query we cannot decide whether any non-passenger
+        // in the forward probe blocks. Do not infer a block or zero its velocity.
+        if level.entities_in(&*host, from, to).is_none_or(|entities| {
+            entities
+                .into_iter()
+                .any(|other| other != e && other.root_vehicle(&*host) != Some(e))
+        }) {
             return;
         }
     }
-    host.set_local_player_on_ground(true);
+    if !matches!(host.move_local_player_by(motion), Ok(Some(_))) {
+        return;
+    }
+    if e.position(&*host)
+        .is_some_and(|after| belt_support(&*host, level, after).is_some())
+    {
+        host.set_local_player_on_ground(true);
+    }
 }
