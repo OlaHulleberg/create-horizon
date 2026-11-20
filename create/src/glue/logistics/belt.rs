@@ -1300,17 +1300,13 @@ pub fn transport_passengers(lv: &mut ServerLevel<'_>) {
     }
 }
 
-/// Ground friction a walking entity's motion keeps each tick (a block's 0.6 times 0.91).
-const GROUND_FRICTION: f64 = 0.6 * 0.91;
-
-/// `BeltMovementHandler.transportEntity` for the window's own player, which its client moves:
-/// standing on a running belt (not sneaking, not flying), it is pushed so that it goes the belt's
-/// way at the belt's speed on top of its own walking (a steady push `m (1 - friction)` moves it
-/// `m` a tick more).
-pub fn carry_local_player(host: &mut dyn mod_api::ClientHost) {
-    let Some(player) = host.local_player() else {
+/// `BeltMovementHandler.transportEntity` for the window's own player, before walking. Make
+/// Create's collision-aware `move(SELF, ...)` calls in order, not a push scaled by friction.
+/// The uphill raw position adjustment after those calls has no local writer (`API_GAPS.md`).
+pub fn carry_local_player(host: &mut dyn mod_api::ClientHost, player: PlayerRef) {
+    if host.local_player() != Some(player) {
         return;
-    };
+    }
     let e = player.entity();
     let (Some(feet), Some(level)) = (e.position(&*host), player.level(&*host)) else {
         return;
@@ -1361,16 +1357,21 @@ pub fn carry_local_player(host: &mut dyn mod_api::ClientHost) {
     let Some(m) = belt::passenger_motion(&seg, pos, feet, rpm, false) else {
         return;
     };
-    let keep = 1.0 - GROUND_FRICTION;
-    // Up a slope the player steps up the belt's stairs as it is pushed along; down one it is
-    // pushed down at the belt's speed.
-    host.push_player([
-        (m[0] * keep) as f32,
-        if m[1] < 0.0 {
-            (m[1] * keep) as f32
-        } else {
-            0.0
-        },
-        (m[2] * keep) as f32,
-    ]);
+    let horizontal = [m[0], 0.0, m[2]];
+    let moves = if m[1] > 0.0 {
+        // Moving uphill: contact the slope before stepping along it.
+        [
+            Some([0.0, -m[1].max(f64::from(0.13_f32)), 0.0]),
+            Some(horizontal),
+        ]
+    } else {
+        // Moving downhill: step along the belt before following it down.
+        [Some(horizontal), (m[1] < 0.0).then_some([0.0, m[1], 0.0])]
+    };
+    for delta in moves.into_iter().flatten() {
+        if !matches!(host.move_local_player_by(delta), Ok(Some(_))) {
+            return;
+        }
+    }
+    host.set_local_player_on_ground(true);
 }
