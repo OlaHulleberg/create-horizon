@@ -1,7 +1,7 @@
 //! The item drain/spout fluid phase and player boundaries from glue/fluids/machines.rs.
 use super::*;
 use crate::transport::{Input, Outcome, Stack};
-use create_engine::{Block, belt, drain, kinetics::Dir, spout};
+use create_engine::{Block, belt, depot, drain, kinetics::Dir, spout};
 impl Run {
     pub(super) fn fluid_item_input(&mut self, p: Pos, input: &Input) -> Option<Outcome> {
         if self.w.block_at(0, p) != Some(Block::ItemDrain) {
@@ -109,8 +109,13 @@ impl Run {
             let result = held
                 .as_ref()
                 .map(|stack| spout::on_depot(&mut s, &mut h, &stack.item, &recipes));
-            if let Some(Some(h)) = self.w.dims[0].depots.get_mut(&depot) {
-                h.locked = !matches!(result, Some(spout::OnBelt::Pass));
+            // glue/fluids/machines.rs: the lock, and a filled stack back at the centre
+            // (`spout::on_depot`).
+            if let Some(Some(held)) = self.w.dims[0].depots.get_mut(&depot) {
+                *held = depot::Held {
+                    locked: !matches!(result, Some(spout::OnBelt::Pass)),
+                    ..h
+                };
             }
             let filled = match result {
                 Some(spout::OnBelt::Fill(out)) => Some(out),

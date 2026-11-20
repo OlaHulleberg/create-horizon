@@ -105,13 +105,14 @@ impl Run {
             item: result.into(),
             count: 1,
         };
-        let mut next = held;
+        // `results_on_depot`: what stays held is centred (`setCenteredHeldItem`).
+        let mut next = held.centred();
         if stack.count == 1 {
             next = depot::Held {
-                position: 0.5,
                 locked: true,
                 ..held
-            };
+            }
+            .centred();
             self.depot_stacks.insert(at, out);
         } else {
             if let Some(h) = self.depot_stacks.get_mut(&at) {

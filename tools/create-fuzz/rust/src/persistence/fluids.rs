@@ -359,9 +359,17 @@ pub fn load_column(w: &mut CreateWorld, data: &Compound) {
         let k = keys(own, "create_machines");
         let fluid = |c: &[i32]| Codes::fluid(&k, c[3]).map(|f| (f, c[4].max(0) as u32));
         let d = &mut w.dims[0];
-        let legacy = ints(own, "spouts").as_chunks::<{ spout::LEGACY_RECORD }>().0.iter();
-        let records = ints(own, "spout_records").as_chunks::<{ spout::RECORD }>().0;
-        for r in legacy.map(|r| r.as_slice()).chain(records.iter().map(|r| r.as_slice())) {
+        let legacy = ints(own, "spouts")
+            .as_chunks::<{ spout::LEGACY_RECORD }>()
+            .0
+            .iter();
+        let records = ints(own, "spout_records")
+            .as_chunks::<{ spout::RECORD }>()
+            .0;
+        for r in legacy
+            .map(|r| r.as_slice())
+            .chain(records.iter().map(|r| r.as_slice()))
+        {
             let (pos, s) = spout::read(r, &k);
             d.spouts.insert(pos, s);
         }
