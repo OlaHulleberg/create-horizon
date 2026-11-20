@@ -978,7 +978,7 @@ pub(crate) fn level_tick() {
 }
 
 /// `ToolboxBlock.setPlacedBy`: a toolbox placed from an item with contents takes them.
-pub(crate) fn placed(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &ItemStack) {
+pub(super) fn placed(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &ItemStack) {
     let Some(Tag::Compound(custom)) = stack
         .components()
         .and_then(|c| c.as_nbt().get(&"minecraft:custom_data".into()))

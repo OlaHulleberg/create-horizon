@@ -923,33 +923,14 @@ impl CannonWorld for World<'_, '_> {
         }
         let stack =
             stack.and_then(|(item, count)| packages::body::new_stack(&*self.lv.host, item, count));
-        match self
+        if let Err(error) = self
             .lv
             .level
             .set_placed_by(&mut *self.lv.host, pos, stack.as_ref())
         {
-            Ok(true) => {}
-            Ok(false) => return,
-            Err(error) => {
-                crate::create_log!(
-                    "[create] printed placement callback was refused at {pos:?}: {error:?}"
-                );
-                return;
-            }
-        }
-        // Direct placement does not run the original item's part. Reuse only Create block
-        // callbacks that also run without a player or a clicked face.
-        match (block_of(states::id_or_none(s)), stack.as_ref()) {
-            (Some(Block::CopperBacktank | Block::NetheriteBacktank), Some(stack)) => {
-                super::equipment::backtank_placed_by(self.lv.dim, pos, stack);
-            }
-            (Some(Block::RedstoneRequester), Some(stack)) => {
-                super::stock::requester_placed_by(self.lv, pos, stack);
-            }
-            (Some(block), Some(stack)) if create_engine::dye::is_toolbox(block) => {
-                super::processing::toolbelt::placed(self.lv, pos, stack);
-            }
-            _ => {}
+            crate::create_log!(
+                "[create] printed placement callback was refused at {pos:?}: {error:?}"
+            );
         }
     }
     fn fired(&mut self, _now: u64) {

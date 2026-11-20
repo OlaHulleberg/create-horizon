@@ -47,7 +47,7 @@ use mod_api::{
     AnalogOutputEvent, AttachmentCodec, AttachmentType, BlockPart, Command, CommandArgumentValue,
     Compound, Flow, HasAnalogOutputEvent, Holder, HostBlockStates, InteractionResult, ItemPart,
     ItemStack, LevelHost, OnBlockPlacedByEvent, PlayerRef, RegisterCommandsEvent, Registrar,
-    RegistrationContext, RunModCommandEvent, ServerHost, Tag, UseItemOnEvent,
+    RegistrationContext, RunModCommandEvent, ServerHost, SetPlacedByEvent, Tag, UseItemOnEvent,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -520,6 +520,7 @@ impl Subsystem for Stock {
             r.block_part(states::key(b), StockBlock);
         }
         r.block_part(states::key(Block::FactoryGauge), gauge::Collision);
+        r.block_part(states::key(Block::RedstoneRequester), RequesterPlacement);
         for item in [
             "create:stock_link",
             "create:stock_ticker",
@@ -1683,9 +1684,23 @@ fn programmed(host: &dyn mod_api::Host, stack: &ItemStack) -> Option<Requester<K
 }
 
 /// `RedstoneRequesterBlock.setPlacedBy`: restore the order from a programmed stack.
-pub(crate) fn requester_placed_by(lv: &ServerLevel<'_>, pos: [i32; 3], stack: &ItemStack) {
-    if let Some(r) = programmed(&*lv.host, stack) {
-        PROGRAMMED.with_borrow_mut(|p| p.push((lv.dim, pos, r)));
+struct RequesterPlacement;
+
+#[mod_api::sunrise_part]
+impl BlockPart for RequesterPlacement {
+    fn set_placed_by(&self, host: &mut dyn ServerHost, event: &mut SetPlacedByEvent<'_>) {
+        let Some(request) = event.stack.and_then(|stack| programmed(&*host, stack)) else {
+            return;
+        };
+        let Some(dim) = event
+            .level
+            .dimension()
+            .id(&*host)
+            .and_then(|d| level_index(&d))
+        else {
+            return;
+        };
+        PROGRAMMED.with_borrow_mut(|p| p.push((dim, event.pos, request)));
     }
 }
 
@@ -1750,7 +1765,6 @@ impl ItemPart for StockItem {
             return;
         };
         place_block(&mut lv, event.pos);
-        requester_placed_by(&lv, event.pos, event.stack);
         let Some(player) = event.placer else {
             return;
         };
