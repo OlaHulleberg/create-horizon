@@ -1190,7 +1190,7 @@ fn read_box(host: &dyn ClientHost, d: &mut &[u8]) -> Option<BoxView> {
     let item = stack(&block);
     let name = item
         .as_ref()
-        .map(|s| host.hover_name(s))
+        .map(|s| crate::glue::item_name(host, s))
         .unwrap_or_default();
     Some(BoxView {
         pos,
@@ -1522,7 +1522,7 @@ fn draw_menu(
                             draw.item_stack(kind, [at[0] + 3.0, at[1] + 3.0], 16.0);
                             if pick == Some(slot as i32) && !*empty {
                                 widget(draw, SLOT_HIGHLIGHT, [at[0] - 1.0, at[1] - 1.0]);
-                                tip = Some(Text::literal(host.hover_name(kind)));
+                                tip = Some(host.hover_name(kind).unwrap_or_default());
                             }
                         }
                         (None, _) => widget(draw, EMPTY_SLOT, at),
@@ -1558,10 +1558,14 @@ fn draw_menu(
                     .local_player()
                     .and_then(|p| host.living(p.entity()))
                     .and_then(|l| l.hand_item(host, mod_api::Hand::Main))
-                    .map(|s| host.hover_name(&s))
+                    .and_then(|s| host.hover_name(&s).ok())
                     .unwrap_or_default();
-                let line = tr(host, "create.toolbox.unequip").replace("%1$s", &held);
-                tip = Some(gold(Text::literal(line)));
+                tip = Some(gold(crate::glue::item_name_message(
+                    "create.toolbox.unequip",
+                    None,
+                    held,
+                    None,
+                )));
             }
         }
     }

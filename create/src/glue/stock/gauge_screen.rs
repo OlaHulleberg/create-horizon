@@ -850,6 +850,17 @@ fn render_config(
     let head = |k: &str, f: &str| styled(tr(host, k, f), HEADER, false);
     let gray = |k: &str, f: &str| styled(tr(host, k, f), "gray", false);
     let hint = |k: &str, f: &str| styled(tr(host, k, f), "dark_gray", true);
+    let item_header = |key, fallback, stack, count| {
+        let mut style = mod_api::text::TextStyle::default();
+        style.color = Some(HEADER.into());
+        crate::glue::item_name_message(
+            key,
+            Some(fallback),
+            host.hover_name(stack).unwrap_or_default(),
+            count,
+        )
+        .with_style(style)
+    };
     // Background.
     if c.restocker {
         draw.sprite(TEX, RECIPE, [x, y - 16.0, RECIPE[2], RECIPE[3]], None);
@@ -903,15 +914,13 @@ fn render_config(
                         ),
                     ],
                     Some(s) => {
-                        let name = format!("{} x{amount}", host.hover_name(s));
-                        let sending = tr(
-                            host,
-                            "create.gui.factory_panel.sending_item",
-                            "Sending %1$s",
-                        )
-                        .replace("%1$s", &name);
                         vec![
-                            styled(sending, HEADER, false),
+                            item_header(
+                                "create.gui.factory_panel.sending_item",
+                                "Sending %1$s",
+                                s,
+                                Some(*amount),
+                            ),
                             hint(
                                 "create.gui.factory_panel.scroll_to_change_amount",
                                 "Scroll to change amount",
@@ -955,14 +964,13 @@ fn render_config(
         let at = input_at(x, y, true, 0);
         draw.gui_draw_item_with(f, at, Some(""));
         if inside([at[0] - 2.0, at[1] - 2.0, 20.0, 20.0], mouse) {
-            let sending = tr(
-                host,
-                "create.gui.factory_panel.sending_item",
-                "Sending %1$s",
-            )
-            .replace("%1$s", &host.hover_name(f));
             tip = Some(vec![
-                styled(sending, HEADER, false),
+                item_header(
+                    "create.gui.factory_panel.sending_item",
+                    "Sending %1$s",
+                    f,
+                    None,
+                ),
                 gray(
                     "create.gui.factory_panel.sending_item_tip",
                     "whenever local stock level",
@@ -979,15 +987,13 @@ fn render_config(
         if let Some(f) = &c.panel.filter {
             draw.gui_draw_item_with(f, [r.output[0], r.output[1]], Some(&c.output.to_string()));
             if inside([r.output[0] - 1.0, r.output[1] - 1.0, 18.0, 18.0], mouse) {
-                let name = format!("{} x{}", host.hover_name(f), c.output);
-                let expecting = tr(
-                    host,
-                    "create.gui.factory_panel.expected_output",
-                    "Expecting %1$s",
-                )
-                .replace("%1$s", &name);
                 let mut lines = vec![
-                    styled(expecting, HEADER, false),
+                    item_header(
+                        "create.gui.factory_panel.expected_output",
+                        "Expecting %1$s",
+                        f,
+                        Some(c.output),
+                    ),
                     gray(
                         "create.gui.factory_panel.expected_output_tip",
                         "The amount of output returning",
@@ -1234,11 +1240,11 @@ fn render_config(
                 .panel
                 .filter
                 .as_ref()
-                .map(|f| host.hover_name(f))
+                .and_then(|f| host.hover_name(f).ok())
                 .unwrap_or_default();
             vec![
                 head("create.gui.factory_panel.promised_items", "Promised items"),
-                Text::literal(format!("{name} x{}", c.panel.promised)),
+                name.append(Text::literal(format!(" x{}", c.panel.promised))),
                 hint(
                     "create.gui.factory_panel.left_click_reset",
                     "Left-Click to reset",

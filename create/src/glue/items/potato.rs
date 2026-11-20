@@ -263,9 +263,8 @@ impl ItemPart for CannonPart {
             (Text::literal(format!(" {text}")), DARK_GREEN)
         };
         event.lines.push((Text::literal(""), u32::MAX));
-        event
-            .lines
-            .push((Text::literal(format!("{}:", host.hover_name(&stack))), GRAY));
+        let name = host.hover_name(&stack).unwrap_or_default();
+        event.lines.push((name.append(Text::literal(":")), GRAY));
         event
             .lines
             .push(line("attack_damage", t.damage.to_string()));

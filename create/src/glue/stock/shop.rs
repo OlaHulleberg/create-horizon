@@ -1448,10 +1448,10 @@ impl mod_api::ItemPart for ClothItem {
             .lines
             .push((line("create.table_cloth.shop_configured"), 0xFFAA00));
         for (k, n) in order_of(host, c.get(&"EncodedRequest".into())) {
-            let name = host.hover_name(&k.0);
+            let name = host.hover_name(&k.0).unwrap_or_default();
             event
                 .lines
-                .push((Text::literal(format!("{name} x{n}")), 0xAAAAAA));
+                .push((name.append(Text::literal(format!(" x{n}"))), 0xAAAAAA));
         }
         event
             .lines
@@ -1519,8 +1519,10 @@ impl mod_api::ItemPart for ShoppingListPart {
                     } else {
                         String::new()
                     };
-                    let line = format!("{head}{} x{n}", host.hover_name(s));
-                    event.lines.push((Text::literal(line), colour));
+                    let line = Text::literal(head)
+                        .append(host.hover_name(s).unwrap_or_default())
+                        .append(Text::literal(format!(" x{n}")));
+                    event.lines.push((line, colour));
                 } else {
                     if cost_side {
                         event.lines.push((
@@ -1529,8 +1531,10 @@ impl mod_api::ItemPart for ShoppingListPart {
                         ));
                     }
                     for (s, n) in entries {
-                        let line = format!("{} x{n}", host.hover_name(&s));
-                        event.lines.push((Text::literal(line), colour));
+                        let name = host.hover_name(&s).unwrap_or_default();
+                        event
+                            .lines
+                            .push((name.append(Text::literal(format!(" x{n}"))), colour));
                     }
                 }
             }

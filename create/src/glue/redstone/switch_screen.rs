@@ -765,7 +765,10 @@ fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext, mouse: [f32; 2], open
                 lines.push(view);
             }
             Some(key) => {
-                lines.push(Text::literal(host.hover_name(&mod_api::ItemStack::of(key))));
+                lines.push(
+                    host.hover_name(&mod_api::ItemStack::of(key))
+                        .unwrap_or_default(),
+                );
                 if s.kind == Kind::Unsupported {
                     lines.push(styled(
                         tr(host, "create.gui.threshold_switch.incompatible"),

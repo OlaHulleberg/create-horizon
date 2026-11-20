@@ -1,14 +1,14 @@
 # Validation
 
-Checked on 2026-11-19 (Linux x86_64, Rust 1.99.1, a fresh build directory), pinned to Sunrise
-`520fc4882de3abb8ecd8b98293f4d7263bc88181` in `create/sunrise-mod.toml`.
-`cargo sunrise-mod check` uses the official release tool and signed SDK from
-`sdk-520fc4882de3abb8ecd8b98293f4d7263bc88181`, with its built-in published keys.
+Checked on 2026-11-20 (Linux x86_64, Rust 1.99.1, a fresh build directory), pinned to Sunrise
+`94256510f74e6843754e0a93fd9e4da7e45b1056` in `create/sunrise-mod.toml`.
+`cargo sunrise-mod` uses the signature-verified release tool and SDK from
+`sdk-94256510f74e6843754e0a93fd9e4da7e45b1056`, with the published release key.
 No SDK mirror or trusted-key override is used. Mixins stays at
 `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`, as the release SDK specifies.
 
-`6373106` on `520fc48` passed the in-game smoke test below. The other in-game results are historical: the
-developer build was `b77574e`, the first nightly smoke test used `2d81263`, and the registry smoke tests used `ed3ac19`.
+The in-game results below are historical: `6373106` ran on `520fc48`, the developer build was `b77574e`,
+the first nightly smoke test used `2d81263`, and the registry smoke tests used `ed3ac19`.
 
 ## Checks
 
@@ -16,9 +16,11 @@ developer build was `b77574e`, the first nightly smoke test used `2d81263`, and 
 |---|---|---|
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 check` and `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
-| `create/` | `cargo +1.99.1 test` | Pass (100 glue tests) |
-| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (800 engine tests) |
-| `create/` | `cargo sunrise-mod check` | Pass (official 520fc48 SDK) |
+| `create/` | `cargo +1.99.1 test` | Pass (101 glue tests) |
+| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (820 engine tests) |
+| `create/` | `cargo sunrise-mod check` | Pass (official `94256510f7` SDK) |
+| `create/` | `cargo sunrise-mod build` | Pass (native library and `.smod` package) |
+| `create/` | `cargo sunrise-mod fits target/sunrise-mod/create.smod --build 94256510f74e6843754e0a93fd9e4da7e45b1056` | Pass (`made for`) |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/src/engine/` | `cargo +1.99.1 check` and `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 fmt --check` | Pass |

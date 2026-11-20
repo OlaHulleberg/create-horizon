@@ -19,7 +19,7 @@ use mod_api::{
     ClientHost, Compound, DrawContext, Flow, Host, HostSide, InteractionResult, ItemPart,
     ItemStack, PlayerRef, Registrar, ScreenCharTypedPreEvent, ScreenClosingEvent,
     ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseScrolledPreEvent,
-    ScreenRenderPostEvent, ServerHost, Tag, UseItemEvent,
+    ScreenRenderPostEvent, ServerHost, Tag, Text, UseItemEvent,
 };
 use std::cell::RefCell;
 
@@ -681,10 +681,12 @@ pub fn screen_render_post(host: &dyn ClientHost, event: &mut ScreenRenderPostEve
         let mut tips = Vec::new();
         draw_schedule(host, draw, o, mouse, &mut tips);
         if o.editing.is_some() {
-            tips.clear();
-            draw_editor(host, draw, o, mouse, &mut tips);
-        }
-        if !tips.is_empty() {
+            let mut editor_tips = Vec::new();
+            draw_editor(host, draw, o, mouse, &mut editor_tips);
+            if !editor_tips.is_empty() {
+                let _ = draw.gui_tooltip(&editor_tips, mouse);
+            }
+        } else if !tips.is_empty() {
             tooltip(draw, &tips, mouse);
         }
     });
@@ -1170,7 +1172,7 @@ fn title_lines(host: &dyn ClientHost, c: &Condition) -> Vec<String> {
                         &[],
                     )
                 } else {
-                    host.hover_name(&st)
+                    crate::glue::item_name(host, &st)
                 }
             },
         )
@@ -1232,7 +1234,7 @@ fn title_lines(host: &dyn ClientHost, c: &Condition) -> Vec<String> {
             let freq_name = |s: &Stack| {
                 ghost(host, s).map_or_else(
                     || tr(host, "block.minecraft.air", &[]),
-                    |st| host.hover_name(&st),
+                    |st| crate::glue::item_name(host, &st),
                 )
             };
             vec![
@@ -1722,7 +1724,7 @@ fn draw_slots(
     o: &Open,
     ed: &Editing,
     mouse: [f32; 2],
-    tips: &mut Vec<String>,
+    tips: &mut Vec<Text>,
 ) {
     let (left, top) = corner(o.size);
     sprite(
@@ -1748,7 +1750,7 @@ fn draw_slots(
             if o.cursor.is_none()
                 && let Some(s) = o.stack(slot)
             {
-                tips.push(host.hover_name(s));
+                tips.extend(host.hover_name(s).ok());
             }
         }
     }
@@ -1761,8 +1763,10 @@ fn draw_slots(
         if over_slot(p, mouse) {
             draw.fill([p[0], p[1], 16.0, 16.0], 0x80FF_FFFF);
             match (&ed.ghosts[i], &ed.field) {
-                (Some(s), _) if o.cursor.is_none() => tips.push(host.hover_name(s)),
-                (None, Field::Condition(c)) => tips.extend(slot_tip(host, c, i)),
+                (Some(s), _) if o.cursor.is_none() => tips.extend(host.hover_name(s).ok()),
+                (None, Field::Condition(c)) => {
+                    tips.extend(slot_tip(host, c, i).into_iter().map(Text::literal))
+                }
                 _ => {}
             }
         }
@@ -1827,7 +1831,7 @@ fn draw_editor(
     draw: &mut dyn DrawContext,
     o: &Open,
     mouse: [f32; 2],
-    tips: &mut Vec<String>,
+    tips: &mut Vec<Text>,
 ) {
     let Some(ed) = &o.editing else {
         return;
@@ -1854,7 +1858,10 @@ fn draw_editor(
     );
     draw.text(&name, [left + 59.0, top + 69.0], 0xFFFF_FFFF, true);
     if inside(at(TYPE_INPUT, left, top), mouse) {
-        tips.push(tr(host, &format!("create.schedule.{kind}_type"), &[]));
+        tips.push(Text::translate(
+            format!("create.schedule.{kind}_type"),
+            Vec::new(),
+        ));
     }
     // Its ghost slots, or its icon (`getSummary`, else `getSecondLineIcon`).
     let n = slots_of(&ed.field);
@@ -1885,9 +1892,9 @@ fn draw_editor(
             && over_slot([left + 54.0, top + 88.0], mouse)
         {
             let base = "create.schedule.instruction.address_filter_edit_box";
-            tips.push(tr(host, base, &[]));
+            tips.push(Text::translate(base, Vec::new()));
             for k in 1..=3 {
-                tips.push(tr(host, &format!("{base}_{k}"), &[]));
+                tips.push(Text::translate(format!("{base}_{k}"), Vec::new()));
             }
         }
     }
@@ -1954,11 +1961,11 @@ fn draw_editor(
                         }
                         _ => "create.schedule.instruction.filter_edit_box",
                     };
-                    tips.push(tr(host, base, &[]));
+                    tips.push(Text::translate(base, Vec::new()));
                     for n in 1..=3 {
                         let line = tr(host, &format!("{base}_{n}"), &[]);
                         if !line.starts_with("create.") {
-                            tips.push(line);
+                            tips.push(Text::literal(line));
                         }
                     }
                 }
@@ -1987,7 +1994,7 @@ fn draw_editor(
                         }
                         _ => "create.generic.duration",
                     };
-                    tips.push(tr(host, key, &[]));
+                    tips.push(Text::translate(key, Vec::new()));
                 }
             }
             Input::Digits => {
@@ -2027,12 +2034,12 @@ fn draw_editor(
                         _ => Some("create.generic.timeUnit"),
                     };
                     if let Some(key) = key {
-                        tips.push(tr(host, key, &[String::new()]).trim_end().to_owned());
+                        tips.push(Text::literal(tr(host, key, &[String::new()]).trim_end()));
                     }
                     // `forOptions`: each option, the chosen one marked.
                     for (i, opt) in options.iter().enumerate() {
                         let mark = if i == v { "-> " } else { "> " };
-                        tips.push(format!("{mark}{}", tr(host, opt, &[])));
+                        tips.push(Text::literal(format!("{mark}{}", tr(host, opt, &[]))));
                     }
                 }
             }

@@ -387,7 +387,7 @@ pub(super) fn screen_render_post(host: &dyn ClientHost, event: &mut ScreenRender
         let color = 0xFF3D_3C48;
         if text.is_empty() && !o.editing {
             text = block.map_or_else(String::new, |k| {
-                ItemStack::new(k, 1).map_or_else(String::new, |s| host.hover_name(&s))
+                ItemStack::new(k, 1).map_or_else(String::new, |s| crate::glue::item_name(host, &s))
             });
         }
         if o.editing && blink() {
@@ -512,7 +512,7 @@ pub(super) fn screen_render_post(host: &dyn ClientHost, event: &mut ScreenRender
                         })
                 });
             hovered.map(|s| {
-                let mut lines = vec![Text::literal(host.hover_name(&s))];
+                let mut lines = vec![host.hover_name(&s).unwrap_or_default()];
                 let to = body::address(&s);
                 if !to.is_empty() {
                     lines.push(Text::literal(format!("\u{2192} {to}")));

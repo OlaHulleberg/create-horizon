@@ -654,7 +654,7 @@ pub(super) fn server_message(host: &mut dyn ClientHost, channel: &str, data: &[u
         for _ in 0..r.u8().unwrap_or(0) {
             match r.u8() {
                 Some(1) => match r.stack(&*host) {
-                    Some((s, _)) => cat_names.push(host.hover_name(&s)),
+                    Some((s, _)) => cat_names.push(crate::glue::item_name(host, &s)),
                     None => break,
                 },
                 Some(_) => cat_names.push(String::new()),
@@ -930,7 +930,10 @@ fn matches(host: &dyn ClientHost, e: &Entry, search: &str) -> bool {
     if tags {
         return e.tags.iter().any(|t| t.contains(&value));
     }
-    host.hover_name(&e.stack).to_lowercase().contains(&value) || path.contains(&value)
+    crate::glue::item_name(host, &e.stack)
+        .to_lowercase()
+        .contains(&value)
+        || path.contains(&value)
 }
 
 /// `displayedItems` (indices into the stock, by category: the ticker's, then the unsorted) and
@@ -1586,7 +1589,7 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
     let tip: Option<Vec<Text>> = if let Some(s) = tip_stack {
         let lines = crate::glue::items::tooltip_lines(host, &s);
         Some(if lines.is_empty() {
-            vec![Text::literal(host.hover_name(&s))]
+            vec![host.hover_name(&s).unwrap_or_default()]
         } else {
             lines
         })

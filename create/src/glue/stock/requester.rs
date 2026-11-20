@@ -375,12 +375,14 @@ pub(super) fn screen_render_post(host: &dyn ClientHost, event: &mut ScreenRender
             .find(|&i| inside(slot_rect(x, y, i), mouse))
             .and_then(|i| o.slots[i].as_ref().map(|s| (i, s)))
             .map(|(i, s)| {
-                let name = format!("{} x{}", host.hover_name(s), o.amounts[i]);
-                let send = tr(host, "create.gui.factory_panel.send_item", "Send %1$s")
-                    .replace("%1$s", &name)
-                    .replace("%s", &name);
+                let send = crate::glue::item_name_message(
+                    "create.gui.factory_panel.send_item",
+                    Some("Send %1$s"),
+                    host.hover_name(s).unwrap_or_default(),
+                    Some(o.amounts[i]),
+                );
                 vec![
-                    Text::literal(send),
+                    send,
                     line(
                         "create.gui.factory_panel.scroll_to_change_amount",
                         "Scroll to change amount",
