@@ -178,7 +178,7 @@ pub(crate) fn tick_transport_pipe(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     if with_world(|w| w.dims[dim].fluid_transport.pipes.contains_key(&pos)) != Some(true) {
         return;
     }
-    with_world(|w| w.fluid_transport_base_tick(dim, pos));
+    with_world(|w| w.kinetic_base_ticks_through(dim, pos));
     let mut transport =
         with_world(|w| std::mem::take(&mut w.dims[dim].fluid_transport)).unwrap_or_default();
     if let Some((a, b)) = transport.tick_pipe(&mut TransportHost(lv), pos) {

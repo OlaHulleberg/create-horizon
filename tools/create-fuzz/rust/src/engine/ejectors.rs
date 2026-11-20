@@ -206,7 +206,7 @@ impl Run {
         };
         // `KineticBlockEntity.tick` first (`attachKinetics`), then `DepotBehaviour.tick`
         // inside `super.tick()`: the slide, then what its arrival asks.
-        self.w.ejector_base_tick(0, pos);
+        self.w.kinetic_base_ticks_through(0, pos);
         if self.w.tick_depot(0, pos, false) {
             // The glue's `process_held` (via `depot::tick_depot`).
             self.depot_process_held(pos);
