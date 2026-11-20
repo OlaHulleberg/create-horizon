@@ -692,7 +692,17 @@ fn read_source(lv: &mut ServerLevel<'_>, pos: [i32; 3], source: Source) -> Readi
                     break;
                 };
                 let stack = match b {
-                    Block::Depot | Block::WeightedEjector => super::redstone::slot_stack(lv, p, 0),
+                    Block::Depot | Block::WeightedEjector => {
+                        let held =
+                            with_world(|w| w.dims[dim].depots.get(&p).copied().flatten()).flatten();
+                        // The ejector uses the same DepotBehaviour. With no transport motion,
+                        // the held slot is at the centre.
+                        if held.is_none_or(|item| (0.5 - item.position).abs() < 0.25) {
+                            super::redstone::slot_stack(lv, p, 0)
+                        } else {
+                            None
+                        }
+                    }
                     // BeltBlockEntity.applyToAllItems(.25): the last item within a quarter of
                     // the segment's centre.
                     Block::Belt => with_world(|w| {
@@ -2848,14 +2858,25 @@ mod tests {
     #[test]
     fn an_item_list_counts_components_not_just_the_item_key() {
         let mut host = FakeHost::new();
-        let id = Identifier::parse("minecraft:iron_pickaxe").unwrap();
+        let id = Identifier::parse("minecraft:diamond").unwrap();
         host.registries.resolve_items([id.clone()]).unwrap();
-        let fresh = ItemStack::of(host.item_key(&id).unwrap());
-        let mut damaged = fresh.clone();
-        damaged.set_damage(10);
-        let entries = count_stacks(vec![(fresh.clone(), 1), (damaged.clone(), 1), (fresh, 2)]);
+        let plain = ItemStack::of(host.item_key(&id).unwrap());
+        let mut named = plain.clone();
+        named
+            .apply_components(&mod_api::Compound::from([(
+                "minecraft:custom_name".into(),
+                mod_api::Tag::String("Sample".into()),
+            )]))
+            .unwrap();
+        let mut two = plain.clone();
+        two.set_count(2).unwrap();
+        let entries = count_stacks(vec![
+            (plain.clone(), 1),
+            (named.clone(), 1),
+            (two.clone(), two.count()),
+        ]);
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].1, 3);
-        assert_eq!(entries[1], (damaged, 1));
+        assert_eq!(entries[0], (plain, 3));
+        assert_eq!(entries[1], (named, 1));
     }
 }
