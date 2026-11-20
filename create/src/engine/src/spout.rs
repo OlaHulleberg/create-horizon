@@ -114,7 +114,9 @@ pub fn on_belt(s: &mut Spout, item: &str, recipes: &[Filling], locked: bool) -> 
 }
 
 /// DepotBehaviour.tick dispatches on the previous lock, then applies HOLD to the
-/// transported stack, including the replacement produced by convertToAndLeaveHeld.
+/// transported stack, including the replacement produced by convertToAndLeaveHeld: a fill
+/// leaves the held stack at the depot's centre (`applyToAllItems` puts its held output back
+/// with `setCenteredHeldItem`).
 pub fn on_depot(
     s: &mut Spout,
     held: &mut crate::depot::Held,
@@ -122,6 +124,9 @@ pub fn on_depot(
     recipes: &[Filling],
 ) -> OnBelt {
     let result = on_belt(s, item, recipes, held.locked);
+    if matches!(result, OnBelt::Fill(_)) {
+        *held = held.centred();
+    }
     held.locked = result != OnBelt::Pass;
     result
 }
@@ -205,6 +210,44 @@ mod tests {
             OnBelt::Hold
         );
         assert!(held.locked);
+    }
+
+    /// `o2-spout-fill-recentres`: a glass bottle put on a depot from its edge stops sliding at
+    /// 0.4984 (within 1/16 of the centre); the honey spout fills it, and Java's honey bottle is
+    /// at 0.5.
+    #[test]
+    fn a_filled_stack_is_put_back_at_the_centre() {
+        let recipes = [Filling {
+            item: "minecraft:glass_bottle".into(),
+            fluid: Fluid::Honey,
+            amount: 250,
+            result: "minecraft:honey_bottle".into(),
+        }];
+        let mut s = Spout::default();
+        fill(&mut s, Fluid::Honey, 1000);
+        let mut held = crate::depot::Held::put_by_player(0, true, crate::depot::Side::North);
+        held.position = 0.498_414_37;
+        let mut filled = None;
+        for _ in 0..30 {
+            if let OnBelt::Fill(out) =
+                on_depot(&mut s, &mut held, "minecraft:glass_bottle", &recipes)
+            {
+                filled = Some(out);
+                break;
+            }
+            assert_eq!(
+                held.position, 0.498_414_37,
+                "held where it stopped until filled"
+            );
+            tick(&mut s);
+        }
+        assert_eq!(filled.as_deref(), Some("minecraft:honey_bottle"));
+        assert_eq!((held.position, held.locked), (0.5, true));
+        assert_eq!(
+            held.from,
+            Some(crate::depot::Side::North),
+            "otherwise as it was"
+        );
     }
 
     #[test]

@@ -556,14 +556,15 @@ pub fn sequenced_step_on_depot(
             // One held: it becomes the transitional item, centred; more: one goes to the first
             // free output, or drops above the depot.
             let angle = random_angle(lv, depot);
-            let mut next = held;
+            // `applyToAllItems`: what stays held is centred (`setCenteredHeldItem`).
+            let mut next = held.centred();
             let placed = if count == 1 {
                 next = depot::Held {
                     angle,
-                    position: 0.5,
                     locked: true,
                     ..held
-                };
+                }
+                .centred();
                 lv.set_slots(depot, &[(0, Some(stack.clone()))])
             } else {
                 let slots = lv.slots(depot, depot::SLOTS).unwrap_or_default();
@@ -595,8 +596,9 @@ pub fn sequenced_step_on_depot(
 
 /// A processing result on a depot's held stack (`handleProcessingOnItem`): one of the stack
 /// (all of it when it is one) becomes `results`: a single item is replaced by them (the first
-/// held, centred; the rest in the outputs); otherwise the rest stays held and the results go to
-/// the outputs. What finds no room drops above the depot. The held stack's motion after.
+/// held; the rest in the outputs); otherwise the rest stays held and the results go to the
+/// outputs. What stays held is centred (`applyToAllItems`, `setCenteredHeldItem`); what finds
+/// no room drops above the depot. The held stack's motion after.
 pub fn results_on_depot(
     lv: &mut ServerLevel<'_>,
     depot: [i32; 3],
@@ -612,7 +614,7 @@ pub fn results_on_depot(
     let dim = lv.dim;
     let single = count == 1;
     let angle = random_angle(lv, depot);
-    let mut next = held;
+    let mut next = held.centred();
     let Some(slots) = lv.slots(depot, depot::SLOTS) else {
         return held;
     };
@@ -623,10 +625,10 @@ pub fn results_on_depot(
             Some((first, n)) => {
                 next = depot::Held {
                     angle,
-                    position: 0.5,
                     locked: true,
                     ..held
-                };
+                }
+                .centred();
                 stacks::stack(host, first, u32::from(*n))
             }
             None => None,

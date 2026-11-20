@@ -134,7 +134,13 @@ pub(crate) fn spout_on_depot(lv: &mut ServerLevel<'_>, depot: [i32; 3]) {
                     10,
                 );
             }
-            with_world(|w| w.depot_changed(dim, depot));
+            // `applyToAllItems`: the held output back at the centre (`spout::on_depot`).
+            with_world(|w| {
+                if let Some(h) = w.dims[dim].depots.get_mut(&depot) {
+                    *h = Some(held_state);
+                }
+                w.depot_changed(dim, depot);
+            });
         }
         _ => {}
     }

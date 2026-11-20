@@ -114,6 +114,16 @@ impl Held {
         }
     }
 
+    /// `DepotBehaviour.setCenteredHeldItem`: what a processing result leaves held
+    /// (`applyToAllItems`: its held output, else its first output) is at the centre, its other
+    /// motion as it was (`TransportedItemStack.copy`).
+    pub fn centred(self) -> Held {
+        Held {
+            position: 0.5,
+            ..self
+        }
+    }
+
     /// `SharedDepotBlockMethods.onUse`: put down by a player facing `facing`, a quarter in.
     pub fn put_by_player(angle: i32, upright: bool, facing: Side) -> Held {
         Held {
