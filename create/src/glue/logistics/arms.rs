@@ -454,19 +454,6 @@ struct ArmWorld<'a, 'l> {
 }
 
 impl ArmWorld<'_, '_> {
-    /// The first item on belt segment `index` (`getStackAtOffset`: past the segment's start, not
-    /// past its end).
-    fn belt_item(&self, c: [i32; 3], index: i32) -> Option<usize> {
-        let dim = self.lv.dim;
-        with_world(|w| {
-            let b = w.dims[dim].belts.get(&c)?;
-            b.items
-                .items
-                .iter()
-                .position(|s| s.position > index as f32 && s.position <= index as f32 + 1.0)
-        })
-        .flatten()
-    }
 }
 
 impl arm::World for ArmWorld<'_, '_> {
@@ -537,23 +524,20 @@ impl arm::World for ArmWorld<'_, '_> {
             }
             Kind::Belt => {
                 let (c, index, _) = belt_segment(lv, pos)?;
-                let i = self.belt_item(c, index)?;
-                with_world(|w| {
+                // `ItemHandlerBeltSegment.extractItem` (the arm's `BeltPoint` reaches the belt
+                // through its capability): the stack splits in place, one it empties only
+                // marked `toRemove`.
+                let taken = with_world(|w| {
                     let d = &mut w.dims[dim];
                     let b = d.belts.get_mut(&c)?;
-                    let s = b.items.items.get_mut(i)?;
-                    let n = s.count.min(amount);
-                    let out = (s.item.clone(), n);
-                    if !simulate {
-                        s.count -= n;
-                        if s.count == 0 {
-                            b.items.items.remove(i);
-                        }
+                    let out = b.items.extract_at(index, amount, simulate);
+                    if !simulate && out.is_some_and(|(_, n)| n > 0) {
                         d.belt_changes.push(c);
                     }
-                    Some(out)
+                    out
                 })
-                .flatten()
+                .flatten()?;
+                Some(taken)
             }
             Kind::Chute => {
                 let s = chute_stack(lv, pos)?;

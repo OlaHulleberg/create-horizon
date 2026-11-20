@@ -1142,12 +1142,13 @@ pub(super) fn belts_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::b
                 .zip(ids)
                 .filter_map(|(n, id)| {
                     let Tag::String(id) = id else { return None };
-                    let mut item = create_engine::belt::Item::new(
-                        &id.to_string_lossy(),
-                        n[3].clamp(1, 255) as u8,
-                        n[2],
-                        false,
-                    );
+                    // `ItemStack`'s codec takes a count from 1; an empty stack (which the
+                    // funnel's remainder or a pickup leaves for a tick) is `minecraft:air`
+                    // with 0.
+                    let empty = id.to_string_lossy() == "minecraft:air";
+                    let count = n[3].clamp(i32::from(!empty), 255) as u8;
+                    let mut item =
+                        create_engine::belt::Item::new(&id.to_string_lossy(), count, n[2], false);
                     item.position = f32::from_bits(n[0] as u32);
                     item.side_offset = f32::from_bits(n[1] as u32);
                     item.locked = n[4] != 0;

@@ -288,6 +288,10 @@ pub fn use_wrench(
     kept.items = rest;
     let moved = moved.into_iter().map(|mut i| {
         i.position -= shift;
+        // `toRemove` belongs to the inventory that marked it: the new controller's
+        // `addItem` takes the stack unmarked, so it survives there while the belt is
+        // stopped (BeltSlicer.java:222-238 walks `getTransportedItems()`).
+        i.removing = false;
         i
     });
     let mut fresh = Inventory::fresh(Vec::new());
