@@ -786,6 +786,10 @@ pub fn tick_transport(lv: &mut ServerLevel<'_>) {
                 super::arms::tick_ejector(lv, p);
                 continue;
             }
+            create_engine::world::TransportTick::Press(p) => {
+                crate::glue::processing::tick_press(lv, p);
+                continue;
+            }
             create_engine::world::TransportTick::Belt(c) => c,
         };
         let Some((seg, length, mut belt_items)) = with_world(|w| {

@@ -30,6 +30,9 @@ fn entity_view(block: Block) -> Option<View> {
         | Block::BrassFunnel
         | Block::AndesiteBeltFunnel
         | Block::BrassBeltFunnel => Some(View::Transport),
+        // `PressingBehaviour.tick` moves a running press's head at its own turn: a press after
+        // the depot or belt that started it moves in that tick.
+        Block::MechanicalPress => Some(View::Transport),
         _ => None,
     }
 }
@@ -225,8 +228,9 @@ pub struct Dimension {
     pub depot_changes: Vec<[i32; 3]>,
     /// Mechanical presses and their cycle.
     pub presses: HashMap<[i32; 3], crate::press::Press>,
-    /// Depots that ask the press above them each tick (`DepotBehaviour.tick` after its stack
-    /// arrived), until the press has nothing to do with them.
+    /// Depots that ask the deployer above them each tick (`DepotBehaviour.tick` after its
+    /// stack arrived), until it has nothing to do with them. A press or spout is asked at the
+    /// depot's own turn.
     pub depot_work: Vec<[i32; 3]>,
     /// Presses whose cycle clients must see again (started, head down, done).
     pub press_changes: Vec<[i32; 3]>,
@@ -812,6 +816,8 @@ pub enum TransportTick {
     Brass([i32; 3]),
     /// `FunnelBlockEntity.tick`: one whose extraction cooldown has run out.
     Funnel([i32; 3]),
+    /// `PressingBehaviour.tick` of a running press ([`CreateWorld::tick_press`]).
+    Press([i32; 3]),
 }
 
 /// Resumable level transport walk; inventories are inspected at their turn.
@@ -844,6 +850,16 @@ impl TransportTicks {
                 }
                 Some(Block::Spout) => return Some(TransportTick::Spout(p)),
                 Some(Block::ItemDrain) => return Some(TransportTick::Drain(p)),
+                Some(Block::MechanicalPress) => {
+                    if world.dims[self.dim]
+                        .presses
+                        .get(&p)
+                        .is_some_and(|x| x.running)
+                    {
+                        return Some(TransportTick::Press(p));
+                    }
+                    continue;
+                }
                 Some(Block::MechanicalPump) => return Some(TransportTick::Pump(p)),
                 Some(
                     Block::FluidPipe
@@ -1033,8 +1049,6 @@ impl CreateWorld {
             d.presses.insert(pos, crate::press::Press::default());
             // A press placed over a basin looks at it (`basinChecker`).
             d.mixer_checks.push(pos);
-            // A press placed over a depot looks at what it holds.
-            d.depot_work.push([pos[0], pos[1] - 2, pos[2]]);
         }
         if latch_kind(block).is_some() {
             d.latch_checks.push(pos);
@@ -4949,8 +4963,9 @@ impl CreateWorld {
 
     /// Level block-entity registration order shared by DepotBehaviour.tick,
     /// BeltBlockEntity.tick, SpoutBlockEntity.tick, ItemDrainBlockEntity.tick,
-    /// PumpBlockEntity.tick, BrassTunnelBlockEntity.tick and FunnelBlockEntity.tick at game
-    /// tick `now`. Call next only after applying the previous entity's transfers.
+    /// PumpBlockEntity.tick, BrassTunnelBlockEntity.tick, FunnelBlockEntity.tick and a running
+    /// press's PressingBehaviour.tick at game tick `now`. Call next only after applying the
+    /// previous entity's transfers.
     pub fn transport_ticks(&mut self, dim: usize, now: u64) -> TransportTicks {
         TransportTicks {
             dim,
@@ -4967,6 +4982,25 @@ impl CreateWorld {
             dim,
             entities: self.dims[dim].block_entities.walk(View::Chute),
         }
+    }
+
+    /// `PressingBehaviour.tick` of the running press at `pos` on its turn, at its shaft's speed:
+    /// its mode and what the tick did (clients are told when the head is down or the cycle
+    /// ends). None without a press there.
+    pub fn tick_press(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+    ) -> Option<(crate::press::Mode, crate::press::Tick)> {
+        use crate::press::Tick;
+        let speed = self.speed(dim, pos).unwrap_or(0.0);
+        let d = &mut self.dims[dim];
+        let p = d.presses.get_mut(&pos)?;
+        let tick = p.tick(speed);
+        if tick != Tick::Moving {
+            d.press_changes.push(pos);
+        }
+        Some((p.mode, tick))
     }
 
     /// `SpoutBlockEntity.tick` on the spout's turn: its fill runs down. Java saves
@@ -5017,8 +5051,8 @@ impl CreateWorld {
         }
     }
 
-    /// The depot at `pos` asks the press above it from the next tick on (its stack arrived or
-    /// changed, the press finished or started turning).
+    /// The depot at `pos` asks the deployer above it from the next tick on (its stack arrived
+    /// or changed).
     pub fn wake_depot(&mut self, dim: usize, pos: [i32; 3]) {
         let d = &mut self.dims[dim];
         if d.depots.contains_key(&pos) && !d.depot_work.contains(&pos) {
@@ -6725,6 +6759,87 @@ mod tests {
         assert!(w.dims[0].drains.contains_key(&pos));
         w.block_changed(0, pos, drain, funnel);
         assert!(!w.dims[0].drains.contains_key(&pos));
+        states::clear_range();
+    }
+
+    /// `p1-press-depot-start-tick`: gold ingots land on a depot under a press turned at 64 rpm
+    /// (8 cycle ticks a tick). The depot starts the press in tick 31 and presses one ingot at
+    /// the head's lowest point in tick 46, whichever was placed first: Java's press moves at its
+    /// own turn (`PressingBehaviour.tick` in the level's block-entity order), so after tick 31 it
+    /// is at `Ticks` 8 when the depot ticks before it and at 0 when it ticks first (it then
+    /// reaches 120 in tick 46 before the depot asks).
+    #[test]
+    fn a_press_moves_at_its_turn_in_the_block_entity_order() {
+        use crate::press::{self, Step};
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:creative_motor", vec![("facing", "south")]),
+            ("create:mechanical_press", vec![("facing", "north")]),
+            ("create:depot", vec![("waterlogged", "false")]),
+        ];
+        states::set_range(2, names.len() as u32);
+        let (motor, press_state, depot_state) = (2, 3, 4);
+        let (depot, at, motor_at) = ([0, 8, 0], [0, 10, 0], [0, 10, -1]);
+        let world = |depot_first: bool| {
+            let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
+            let mut w = CreateWorld::new(table);
+            let blocks = if depot_first {
+                [(depot, depot_state), (at, press_state)]
+            } else {
+                [(at, press_state), (depot, depot_state)]
+            };
+            for (p, state) in blocks {
+                w.block_changed(0, p, 0, state);
+            }
+            w.block_changed(0, motor_at, 0, motor);
+            let settings = Settings {
+                motor_rpm: -64.0,
+                ..Settings::default()
+            };
+            w.set_settings(0, motor_at, motor, settings);
+            w.tick(0, &mut Vec::new());
+            assert_eq!(press::tick_speed(w.speed(0, at).unwrap()), 8);
+            w.depot_put(0, depot, Some(crate::depot::Held::new(0, false)));
+            w
+        };
+        // One level tick: the depot's turn (its arrived stack starts the press, or is pressed)
+        // and the running press's, in the walk's order. Whether the depot pressed.
+        let level_tick = |w: &mut CreateWorld| {
+            let mut pressed = false;
+            let mut turns = w.transport_ticks(0, 0);
+            while let Some(turn) = turns.next(w) {
+                match turn {
+                    TransportTick::Depot(p) if w.tick_depot(0, p, false) => {
+                        let speed = w.speed(0, at).unwrap();
+                        let p = w.dims[0].presses[&at];
+                        let held = w.dims[0].depots.get_mut(&depot).unwrap().as_mut().unwrap();
+                        match press::depot_step(held, &p, speed, true) {
+                            Step::Start => {
+                                let p = w.dims[0].presses.get_mut(&at).unwrap();
+                                p.start(press::Mode::Belt);
+                            }
+                            Step::Process => pressed = true,
+                            Step::Wait => {}
+                        }
+                    }
+                    TransportTick::Press(p) => {
+                        w.tick_press(0, p);
+                    }
+                    _ => {}
+                }
+            }
+            pressed
+        };
+        for (depot_first, ticks) in [(true, 8), (false, 0)] {
+            let mut w = world(depot_first);
+            assert!(!level_tick(&mut w), "tick 31: started");
+            assert_eq!(
+                w.dims[0].presses[&at].ticks, ticks,
+                "depot first: {depot_first}"
+            );
+            let pressed = (32..=50).find(|_| level_tick(&mut w));
+            assert_eq!(pressed, Some(46), "depot first: {depot_first}");
+        }
         states::clear_range();
     }
 
