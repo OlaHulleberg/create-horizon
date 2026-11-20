@@ -16,7 +16,7 @@ the first nightly smoke test used `2d81263`, and the registry smoke tests used `
 |---|---|---|
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 check` and `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
-| `create/` | `cargo +1.99.1 test` | Pass (99 glue tests) |
+| `create/` | `cargo +1.99.1 test` | Pass (101 glue tests) |
 | `create/` | `cargo +1.99.1 test -p create-engine` | Pass (820 engine tests) |
 | `create/` | `cargo sunrise-mod check` | Pass (official `94256510f7` SDK) |
 | `create/` | `cargo sunrise-mod build` | Pass (native library and `.smod` package) |

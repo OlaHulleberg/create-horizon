@@ -36,7 +36,8 @@ pub mod transmission;
 pub mod world;
 
 use create_engine::world::StateTable;
-use mod_api::{ClientHost, Host, ItemStack, ServerHost};
+use mod_api::text::TextContent;
+use mod_api::{ClientHost, Host, ItemStack, ServerHost, Text};
 use server::ServerLevel;
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -47,6 +48,23 @@ pub(crate) fn item_name(host: &dyn Host, stack: &ItemStack) -> String {
     host.hover_name(stack)
         .and_then(|name| host.text_string(&name))
         .unwrap_or_default()
+}
+
+/// Keep the name as a translation argument: its style and any literal percent signs are data.
+pub(crate) fn item_name_message(
+    key: &str,
+    fallback: Option<&str>,
+    mut name: Text,
+    count: Option<u32>,
+) -> Text {
+    if let Some(count) = count {
+        name = name.append(Text::literal(format!(" x{count}")));
+    }
+    Text::new(TextContent::Translatable {
+        key: key.to_owned(),
+        fallback: fallback.map(str::to_owned),
+        arguments: vec![name],
+    })
 }
 
 /// Every subsystem, in the order their level ticks run.
@@ -169,5 +187,42 @@ pub fn client_reset(_host: &mut dyn ClientHost) {
     models::forget();
     for s in SUBSYSTEMS {
         s.client_reset();
+    }
+}
+
+#[cfg(test)]
+mod item_name_tests {
+    use super::*;
+    use mod_api::text::TextStyle;
+
+    #[test]
+    fn item_name_message_keeps_the_style_and_count() {
+        let mut style = TextStyle::default();
+        style.color = Some("#9E57CE".into());
+        style.italic = Some(true);
+        let name = Text::literal("Cogwheel").with_style(style);
+        let message = item_name_message("create.send", Some("Send %1$s"), name.clone(), Some(4));
+        assert_eq!(
+            message.content,
+            TextContent::Translatable {
+                key: "create.send".into(),
+                fallback: Some("Send %1$s".into()),
+                arguments: vec![name.append(Text::literal(" x4"))],
+            }
+        );
+    }
+
+    #[test]
+    fn item_name_message_never_treats_an_items_percent_signs_as_placeholders() {
+        let name = Text::literal("Cog %s %1$s");
+        let message = item_name_message("create.send", Some("Send %s"), name.clone(), None);
+        assert_eq!(
+            message.content,
+            TextContent::Translatable {
+                key: "create.send".into(),
+                fallback: Some("Send %s".into()),
+                arguments: vec![name],
+            }
+        );
     }
 }

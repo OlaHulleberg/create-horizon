@@ -1558,10 +1558,14 @@ fn draw_menu(
                     .local_player()
                     .and_then(|p| host.living(p.entity()))
                     .and_then(|l| l.hand_item(host, mod_api::Hand::Main))
-                    .map(|s| crate::glue::item_name(host, &s))
+                    .and_then(|s| host.hover_name(&s).ok())
                     .unwrap_or_default();
-                let line = tr(host, "create.toolbox.unequip").replace("%1$s", &held);
-                tip = Some(gold(Text::literal(line)));
+                tip = Some(gold(crate::glue::item_name_message(
+                    "create.toolbox.unequip",
+                    None,
+                    held,
+                    None,
+                )));
             }
         }
     }
