@@ -403,18 +403,25 @@ fn rise(
 pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
     use create_engine::chute::{Fall, step};
     let dim = lv.dim;
-    let moving: Vec<([i32; 3], f32)> =
-        with_world(|w| w.dims[dim].chutes.iter().map(|(p, v)| (*p, *v)).collect())
-            .unwrap_or_default();
+    let Some(mut phase) = with_world(|w| w.chute_ticks(dim)) else {
+        return;
+    };
     // The chutes whose stack moved, and those next to them it may have moved into: their
     // windows show it again (`show_chute_item`).
     let mut shown: Vec<[i32; 3]> = Vec::new();
-    for (pos, _) in &moving {
-        shown.push(*pos);
+    // `Level.blockEntityTickers`: each chute ticks at its own turn, so a stack a chute hands
+    // down during its turn moves on in the same level tick when the chute below is registered
+    // after it, and waits a tick when it is registered before it.
+    while let Some(turn) = with_world(|w| phase.next(w)).flatten() {
+        let create_engine::world::TransportTick::Chute(pos) = turn else {
+            continue;
+        };
+        let Some(position) = with_world(|w| w.dims[dim].chutes.get(&pos).copied()).flatten() else {
+            continue;
+        };
+        shown.push(pos);
         shown.push([pos[0], pos[1] - 1, pos[2]]);
         shown.push([pos[0], pos[1] + 1, pos[2]]);
-    }
-    for (pos, position) in moving {
         let Some(stack) = chute_stack(lv, pos) else {
             with_world(|w| {
                 w.dims[dim].chutes.remove(&pos);
@@ -552,6 +559,19 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
                 w.dims[dim].chutes.remove(&pos);
                 w.dims[dim].chute_pulls.wake(pos);
             }
+        });
+    }
+    // Entries whose chute block is gone (removed while it held a stack) leave with their pass.
+    let stale: Vec<[i32; 3]> =
+        with_world(|w| w.dims[dim].chutes.keys().copied().collect::<Vec<_>>())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| chute_at(lv, *p).is_none())
+            .collect();
+    for pos in stale {
+        with_world(|w| {
+            w.dims[dim].chutes.remove(&pos);
+            w.dims[dim].chute_pulls.wake(pos);
         });
     }
     tick_chute_pulls(lv);

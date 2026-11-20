@@ -781,6 +781,10 @@ pub fn tick_transport(lv: &mut ServerLevel<'_>) {
                 crate::glue::fluids::pipes::tick_transport_pipe(lv, p);
                 continue;
             }
+            create_engine::world::TransportTick::Chute(_) => {
+                // Chutes walk the same order in their own pass (`chute::tick_chutes`).
+                continue;
+            }
             create_engine::world::TransportTick::Depot(p) => {
                 super::depot::tick_depot(lv, p);
                 continue;
