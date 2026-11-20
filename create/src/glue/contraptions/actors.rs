@@ -215,22 +215,29 @@ fn take_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3], size: usize) -> Option<St
 }
 
 /// The carried slots back in the vault or toolbox now at `pos`; what has no slot drops.
-fn put_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3], size: usize, stored: Stored) {
+fn put_slots(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    size: usize,
+    stored: Stored,
+) -> Vec<ItemStack> {
     let Some(e) = lv.host.block_entity(lv.level, pos) else {
-        return;
+        return stored.into_iter().flatten().collect();
     };
     let mut left = Vec::new();
-    let _ = lv.host.transaction(|host, tx| {
-        for (i, s) in stored.into_iter().enumerate() {
+    let restored = lv.host.transaction(|host, tx| {
+        for (i, s) in stored.iter().enumerate() {
             let Some(stack) = s else { continue };
             if i >= size || e.set_item_slot(host, tx, i as u32, Some(stack.clone())) != Ok(true) {
-                left.push(stack);
+                left.push(stack.clone());
             }
         }
         Ok::<(), ()>(())
     });
-    for stack in left {
-        lv.drop_stack(center(pos), [0.0; 3], stack, 10);
+    if restored.is_ok() {
+        left
+    } else {
+        stored.into_iter().flatten().collect()
     }
 }
 
@@ -282,25 +289,31 @@ fn take_storage(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Stored> {
 /// The carried items back in the storage block now at `pos` (`addBlocksToWorld`), each in its
 /// slot through the block's `ITEMS` handler; what does not go in drops there.
 fn put_storage(lv: &mut ServerLevel<'_>, pos: [i32; 3], stored: Stored) {
+    for stack in restore_storage(lv, pos, stored) {
+        lv.drop_stack(center(pos), [0.0; 3], stack, 10);
+    }
+}
+
+/// Restore storage only after its block has been placed. Return unaccepted stacks to the caller.
+pub(crate) fn restore_storage(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    stored: Stored,
+) -> Vec<ItemStack> {
     if let Some(size) = lv.block_name(pos).as_deref().and_then(slot_storage) {
-        put_slots(lv, pos, size, stored);
-        return;
+        return put_slots(lv, pos, size, stored);
     }
     let Some(items) = items_at(lv, pos) else {
-        for stack in stored.into_iter().flatten() {
-            lv.drop_stack(center(pos), [0.0; 3], stack, 10);
-        }
-        return;
+        return stored.into_iter().flatten().collect();
     };
-    let left: Vec<ItemStack> = lv
-        .host
+    lv.host
         .transaction(|host, tx| {
             let mut left = Vec::new();
-            for (i, s) in stored.into_iter().enumerate() {
+            for (i, s) in stored.iter().enumerate() {
                 let Some(stack) = s else {
                     continue;
                 };
-                let resource = mod_api::ItemResource::of(&stack);
+                let resource = mod_api::ItemResource::of(stack);
                 let n = stack.count();
                 let mut went = items.insert(host, tx, i, &resource, n);
                 if went < n {
@@ -314,10 +327,7 @@ fn put_storage(lv: &mut ServerLevel<'_>, pos: [i32; 3], stored: Stored) {
             }
             Ok::<Vec<ItemStack>, ()>(left)
         })
-        .unwrap_or_default();
-    for stack in left {
-        lv.drop_stack(center(pos), [0.0; 3], stack, 10);
-    }
+        .unwrap_or_else(|_| stored.into_iter().flatten().collect())
 }
 
 /// A chest slot's limit for a stack (`min(64, getMaxStackSize)`).
@@ -885,22 +895,6 @@ pub(crate) fn take_storage_at(
     take_storage(lv, pos)
 }
 
-/// A cart's carried items back in the storage block now at `pos`, dropped there when no storage
-/// block took its place.
-pub(crate) fn put_storage_at(
-    lv: &mut ServerLevel<'_>,
-    pos: [i32; 3],
-    stored: Vec<Option<ItemStack>>,
-) {
-    if is_storage(lv, pos) {
-        put_storage(lv, pos, stored);
-        return;
-    }
-    for stack in stored.into_iter().flatten() {
-        lv.drop_stack(center(pos), [0.0; 3], stack, 10);
-    }
-}
-
 /// `MountedStorageManager` as a contraption assembles: the items of its storage blocks
 /// (`blocks`, offsets from `origin`) leave them and ride with contraption `key`.
 pub(crate) fn carry_storage(
@@ -1024,16 +1018,29 @@ pub(crate) fn carry_held(
     tag
 }
 
-/// What [`carry_held`] kept, waiting for its blocks about to go back at `place(offset)`; then
-/// [`release_storage`] puts it in them.
-pub(crate) fn expect_held(
+/// Prepare placement-time state for free destinations only. Other saved state is applied only
+/// after the caller has confirmed placement, not to an already occupied position.
+pub(crate) fn expect_cart_held(
     lv: &mut ServerLevel<'_>,
     key: [i32; 3],
     tag: Option<&Tag>,
     place: impl Fn([i32; 3]) -> [i32; 3],
+    free: impl Fn([i32; 3]) -> bool,
 ) {
     storage_from_nbt(lv, key, tag);
-    expect_back(lv, key, place);
+    stage_held(lv, key, &place, &free);
+}
+
+/// World drops from carried non-storage block entities, returned to the cart teardown to check.
+pub(crate) fn release_cart_held(
+    lv: &mut ServerLevel<'_>,
+    key: [i32; 3],
+    place: impl Fn([i32; 3]) -> [i32; 3],
+    free: impl Fn([i32; 3]) -> bool,
+    placed: impl Fn([i32; 3]) -> bool,
+) -> Vec<([i32; 3], ItemStack)> {
+    restore_engine_data(lv, key, &place, &placed);
+    release_held_items(lv, key, place, free, placed)
 }
 
 /// Whether the block entity at `pos` is one of Create's (its state the engine's, its stacks
@@ -1123,26 +1130,51 @@ pub(crate) fn expect_back(
     key: [i32; 3],
     place: impl Fn([i32; 3]) -> [i32; 3],
 ) {
-    use create_engine::tank;
+    restore_engine_data(lv, key, &place, |_| true);
+    stage_held(lv, key, &place, |_| true);
+}
+
+fn restore_engine_data(
+    lv: &mut ServerLevel<'_>,
+    key: [i32; 3],
+    place: impl Fn([i32; 3]) -> [i32; 3],
+    placed: impl Fn([i32; 3]) -> bool,
+) {
     let dim = lv.dim;
-    let list = HELD.with_borrow(|m| m.get(&(dim, key)).cloned());
-    let Some(list) = list else {
+    let Some(list) = HELD.with_borrow(|m| m.get(&(dim, key)).cloned()) else {
         return;
     };
-    // What the subsystems keep for each block, waiting for it where it goes back.
     let turn = create_engine::contraption::Transform::from_place(&place);
     for (o, data) in &list {
-        if let (Some(engine), Some(b)) = (&data.engine, data.block) {
-            let p = place(*o);
+        let p = place(*o);
+        if placed(p)
+            && let (Some(engine), Some(b)) = (&data.engine, data.block)
+        {
             for s in super::super::SUBSYSTEMS {
                 s.carry_in(lv, p, b, engine, turn);
             }
             mark_pos_unsaved(dim, p);
         }
     }
+}
+
+fn stage_held(
+    lv: &mut ServerLevel<'_>,
+    key: [i32; 3],
+    place: impl Fn([i32; 3]) -> [i32; 3],
+    free: impl Fn([i32; 3]) -> bool,
+) {
+    use create_engine::tank;
+    let dim = lv.dim;
+    let Some(list) = HELD.with_borrow(|m| m.get(&(dim, key)).cloned()) else {
+        return;
+    };
     with_world(|w| {
         let d = &mut w.dims[dim];
         for (o, data) in &list {
+            if !free(place(*o)) {
+                continue;
+            }
             if let Some(dp) = &data.deployer {
                 let mut dp = dp.clone();
                 dp.breaking = None;
@@ -1154,7 +1186,10 @@ pub(crate) fn expect_back(
             // The tank's blocks where they go: still a tank as wide and tall (moved, or turned
             // about the vertical) keeps its shape, its corner the controller; else each block
             // is a tank of its own, the controller's holding what one block can.
-            let cells: Vec<[i32; 3]> = tank::blocks(*o, m.width, m.height).map(&place).collect();
+            let cells: Vec<[i32; 3]> = tank::blocks(*o, m.width, m.height)
+                .map(&place)
+                .filter(|&p| free(p))
+                .collect();
             let corner = cells.iter().fold(cells[0], |c, p| {
                 [c[0].min(p[0]), c[1].min(p[1]), c[2].min(p[2])]
             });
@@ -1178,38 +1213,64 @@ pub(crate) fn expect_back(
 /// slots into a Create block entity's slots, saved data loaded into another's; a deployer's
 /// stack, or slots with nowhere to go, drop there.
 fn release_held(lv: &mut ServerLevel<'_>, key: [i32; 3], place: impl Fn([i32; 3]) -> [i32; 3]) {
+    for (pos, stack) in release_held_items(lv, key, place, |_| true, |_| true) {
+        lv.drop_stack(center(pos), [0.0; 3], stack, 10);
+    }
+}
+
+fn release_held_items(
+    lv: &mut ServerLevel<'_>,
+    key: [i32; 3],
+    place: impl Fn([i32; 3]) -> [i32; 3],
+    staged: impl Fn([i32; 3]) -> bool,
+    placed: impl Fn([i32; 3]) -> bool,
+) -> Vec<([i32; 3], ItemStack)> {
     let dim = lv.dim;
+    let mut drops = Vec::new();
     let list = HELD
         .with_borrow_mut(|m| m.remove(&(dim, key)))
         .unwrap_or_default();
     for (o, data) in list {
         let p = place(o);
         // A deployer or tank that didn't go back leaves what waited for it.
-        let left = with_world(|w| {
-            let d = &mut w.dims[dim];
-            d.tanks.arriving.remove(&p);
-            d.deployer_saved_remove(p)
-        })
-        .flatten();
+        let left = if staged(p) {
+            with_world(|w| {
+                let d = &mut w.dims[dim];
+                d.tanks.arriving.remove(&p);
+                d.deployer_saved_remove(p)
+            })
+            .flatten()
+        } else {
+            data.deployer
+        };
         if let Some((item, n)) = left.and_then(|d| d.held)
-            && let Some(s) = stack_of(lv, &item)
+            && let Some(mut stack) = stack_of(lv, &item)
+            && stack.set_count(u32::from(n)).is_ok()
         {
-            let mut s = s;
-            let _ = s.set_count(u32::from(n));
-            lv.drop_stack(center(p), [0.0; 3], s, 10);
+            drops.push((p, stack));
         }
-        let entity = lv.host.block_entity(lv.level, p);
+        let entity = if placed(p) {
+            lv.host.block_entity(lv.level, p)
+        } else {
+            None
+        };
         if let Some(saved) = data.data {
-            if let Some(e) = entity
-                && !create_entity(lv, e)
-            {
-                let _ = e.replace_data(&mut *lv.host, saved);
+            let restored = entity
+                .filter(|e| !create_entity(lv, *e))
+                .is_some_and(|e| e.replace_data(&mut *lv.host, saved.clone()) == Ok(true));
+            if !restored && let Some(Tag::List(items)) = saved.get(&"Items".into()) {
+                drops.extend(items.iter().filter_map(|item| {
+                    let Tag::Compound(item) = item else {
+                        return None;
+                    };
+                    Some((p, ItemStack::from_nbt(lv.host, item)?))
+                }));
             }
             continue;
         }
         // The same Create block back (turned, maybe): its data and what the engine kept for it
         // (`loadWithComponents`, `transform`).
-        let back = data.block.is_some() && lv.create_block(p) == data.block;
+        let back = placed(p) && data.block.is_some() && lv.create_block(p) == data.block;
         if back && let (Some(own), Some(e)) = (&data.own, entity) {
             let _ = e.merge_data(&mut *lv.host, own.clone());
             // What a block entity reads from its own data as it loads (`read`).
@@ -1223,22 +1284,24 @@ fn release_held(lv: &mut ServerLevel<'_>, key: [i32; 3], place: impl Fn([i32; 3]
         let mut left = Vec::new();
         match entity.filter(|e| create_entity(lv, *e)) {
             Some(e) => {
-                let _ = lv.host.transaction(|host, tx| {
-                    for (i, s) in data.slots.into_iter().enumerate() {
+                let restored = lv.host.transaction(|host, tx| {
+                    for (i, s) in data.slots.iter().enumerate() {
                         let Some(stack) = s else { continue };
                         if e.set_item_slot(host, tx, i as u32, Some(stack.clone())) != Ok(true) {
-                            left.push(stack);
+                            left.push(stack.clone());
                         }
                     }
                     Ok::<(), ()>(())
                 });
+                if restored.is_err() {
+                    left = data.slots.into_iter().flatten().collect();
+                }
             }
             None => left.extend(data.slots.into_iter().flatten()),
         }
-        for stack in left {
-            lv.drop_stack(center(p), [0.0; 3], stack, 10);
-        }
+        drops.extend(left.into_iter().map(|stack| (p, stack)));
     }
+    drops
 }
 
 /// The items contraption `key` carried back into its storage blocks, each now at `place(offset)`
@@ -3397,7 +3460,7 @@ enum Holder {
     Gantry,
     Bearing,
     Lift,
-    Cart(u128),
+    Cart(mod_api::EntityRef),
 }
 
 /// Where a block of a moving contraption is in the world now, by its offset.
@@ -3426,8 +3489,8 @@ fn take_carried(lv: &mut ServerLevel<'_>, key: [i32; 3]) -> Option<(Holder, Carr
     if let Some((carried, place)) = super::lifts::take_lift(lv, key) {
         return Some((Holder::Lift, carried, place));
     }
-    let (uuid, carried, place) = crate::glue::trains::take_cart_carried(dim, key)?;
-    Some((Holder::Cart(uuid), carried, place))
+    let (rider, carried, place) = crate::glue::trains::take_cart_carried(lv, key)?;
+    Some((Holder::Cart(rider), carried, place))
 }
 
 /// What [`take_carried`] took goes back.
@@ -3452,7 +3515,7 @@ fn put_carried(lv: &mut ServerLevel<'_>, key: [i32; 3], holder: Holder, carried:
         }
         Holder::Bearing => super::bearings::put_turning(lv, key, carried),
         Holder::Lift => super::lifts::put_lift(lv, key, carried),
-        Holder::Cart(uuid) => crate::glue::trains::put_cart_carried(uuid, carried),
+        Holder::Cart(rider) => crate::glue::trains::put_cart_carried(lv, rider, carried),
     }
 }
 
