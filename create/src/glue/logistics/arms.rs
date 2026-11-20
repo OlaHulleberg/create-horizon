@@ -955,7 +955,7 @@ pub(super) fn depot_insert(
             let present: u32 = stacks.iter().map(|s| u32::from(s.2)).sum();
             // `getRemainingSpace`: the held stack's own max caps the limit, and an empty
             // depot holds but one (`ItemStack.EMPTY.getMaxStackSize()`).
-            let held_max = if held.is_some() { max } else { 1 };
+            let held_max = held.as_ref().map(|_| max);
             depot::merge_take(e.max_stack, held_max, present, count)
         }
     };
