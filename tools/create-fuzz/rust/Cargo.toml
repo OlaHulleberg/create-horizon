@@ -1,0 +1,13 @@
+[package]
+name = "create-fuzz"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+# The port's engine, from this repository.
+create-engine = { path = "../../../create/src/engine" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+flate2 = "1"

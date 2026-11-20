@@ -1,0 +1,113 @@
+{
+ "version": 3,
+ "seed": 0,
+ "day_time": 0,
+ "ticks": 100,
+ "checkpoints": [
+  4,
+  8,
+  20,
+  40,
+  75,
+  99
+ ],
+ "blocks": [
+  {
+   "pos": [
+    0,
+    5,
+    0
+   ],
+   "state": "create:water_wheel[facing=east]"
+  },
+  {
+   "pos": [
+    0,
+    5,
+    -2
+   ],
+   "state": "minecraft:stone"
+  },
+  {
+   "pos": [
+    1,
+    5,
+    -1
+   ],
+   "state": "minecraft:stone"
+  },
+  {
+   "pos": [
+    -1,
+    5,
+    -1
+   ],
+   "state": "minecraft:stone"
+  },
+  {
+   "pos": [
+    0,
+    4,
+    -1
+   ],
+   "state": "minecraft:stone"
+  },
+  {
+   "pos": [
+    1,
+    6,
+    -1
+   ],
+   "state": "minecraft:stone"
+  },
+  {
+   "pos": [
+    -1,
+    6,
+    -1
+   ],
+   "state": "minecraft:stone"
+  },
+  {
+   "pos": [
+    0,
+    6,
+    -2
+   ],
+   "state": "minecraft:stone"
+  },
+  {
+   "pos": [
+    0,
+    6,
+    0
+   ],
+   "state": "minecraft:stone"
+  },
+  {
+   "pos": [
+    0,
+    7,
+    -1
+   ],
+   "state": "minecraft:stone"
+  },
+  {
+   "pos": [
+    0,
+    5,
+    -1
+   ],
+   "state": "minecraft:water[level=8]"
+  },
+  {
+   "pos": [
+    0,
+    6,
+    -1
+   ],
+   "state": "minecraft:water[level=0]"
+  }
+ ],
+ "events": []
+}

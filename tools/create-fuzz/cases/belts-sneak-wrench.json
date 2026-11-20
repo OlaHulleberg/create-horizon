@@ -1,0 +1,92 @@
+{
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        4,
+        4
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    }
+  ],
+  "checkpoints": [
+    21,
+    31
+  ],
+  "events": [
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.1,
+          1.0,
+          0.5
+        ],
+        "item": "create:belt_connector",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 266.0
+      },
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "tick": 10
+    },
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.9,
+          1.0,
+          0.1
+        ],
+        "item": "create:belt_connector",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 339.0
+      },
+      "pos": [
+        0,
+        4,
+        4
+      ],
+      "tick": 20
+    },
+    {
+      "tick": 30,
+      "pos": [
+        0,
+        6,
+        2
+      ],
+      "action": {
+        "kind": "use",
+        "item": "create:wrench",
+        "face": "east",
+        "hit": [
+          0.5,
+          0.9,
+          0.1
+        ],
+        "yaw": 288.0,
+        "pitch": 0.0,
+        "sneaking": true
+      }
+    }
+  ],
+  "seed": 2,
+  "ticks": 35,
+  "version": 3
+}

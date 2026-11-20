@@ -1,0 +1,190 @@
+{
+  "version": 3,
+  "seed": 599,
+  "checkpoints": [
+    25,
+    27,
+    30,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    66,
+    67,
+    68,
+    69,
+    70,
+    71,
+    72,
+    73,
+    74,
+    75,
+    76,
+    77,
+    78,
+    79
+  ],
+  "ticks": 260,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        3
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": -32
+    },
+    {
+      "pos": [
+        0,
+        8,
+        -1
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        0,
+        9,
+        3
+      ],
+      "state": "create:depot[waterlogged=false]"
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 8,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 14,
+      "pos": [
+        0,
+        8,
+        3
+      ]
+    },
+    {
+      "tick": 24,
+      "pos": [
+        0,
+        9,
+        2
+      ],
+      "state": "create:andesite_belt_funnel[facing=north,powered=false,shape=extended,waterlogged=false]"
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:diamond",
+            "count": 4
+          }
+        }
+      },
+      "tick": 32,
+      "pos": [
+        0,
+        9,
+        3
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:iron_ingot",
+            "count": 3
+          }
+        }
+      },
+      "tick": 50,
+      "pos": [
+        0,
+        9,
+        3
+      ]
+    }
+  ]
+}

@@ -1,0 +1,181 @@
+{
+ "version": 3,
+ "seed": 0,
+ "day_time": 0,
+ "ticks": 140,
+ "checkpoints": [
+  25,
+  30,
+  60,
+  75,
+  100,
+  139
+ ],
+ "blocks": [
+  {
+   "pos": [
+    0,
+    5,
+    0
+   ],
+   "state": "create:fluid_tank[bottom=true,shape=window,top=true]"
+  },
+  {
+   "pos": [
+    1,
+    5,
+    0
+   ],
+   "state": "create:fluid_tank[bottom=true,shape=window,top=true]"
+  },
+  {
+   "pos": [
+    0,
+    5,
+    1
+   ],
+   "state": "create:fluid_tank[bottom=true,shape=window,top=true]"
+  },
+  {
+   "pos": [
+    1,
+    5,
+    1
+   ],
+   "state": "create:fluid_tank[bottom=true,shape=window,top=true]"
+  },
+  {
+   "pos": [
+    0,
+    6,
+    0
+   ],
+   "state": "create:fluid_tank[bottom=true,shape=window,top=true]"
+  },
+  {
+   "pos": [
+    1,
+    6,
+    0
+   ],
+   "state": "create:fluid_tank[bottom=true,shape=window,top=true]"
+  },
+  {
+   "pos": [
+    0,
+    6,
+    1
+   ],
+   "state": "create:fluid_tank[bottom=true,shape=window,top=true]"
+  },
+  {
+   "pos": [
+    1,
+    6,
+    1
+   ],
+   "state": "create:fluid_tank[bottom=true,shape=window,top=true]"
+  },
+  {
+   "pos": [
+    0,
+    4,
+    0
+   ],
+   "state": "create:blaze_burner[blaze=smouldering,facing=north]"
+  },
+  {
+   "pos": [
+    0,
+    5,
+    4
+   ],
+   "state": "create:shaft[axis=x,waterlogged=false]"
+  },
+  {
+   "pos": [
+    0,
+    5,
+    2
+   ],
+   "state": "create:steam_engine[face=wall,facing=south,waterlogged=false]"
+  }
+ ],
+ "events": [
+  {
+   "tick": 20,
+   "pos": [
+    0,
+    5,
+    0
+   ],
+   "action": {
+    "kind": "game_mode",
+    "creative": true
+   }
+  },
+  {
+   "tick": 21,
+   "pos": [
+    0,
+    4,
+    0
+   ],
+   "action": {
+    "kind": "use",
+    "item": "create:blaze_cake",
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "yaw": 0.0,
+    "pitch": 0.0,
+    "sneaking": false
+   }
+  },
+  {
+   "tick": 22,
+   "pos": [
+    1,
+    6,
+    1
+   ],
+   "action": {
+    "kind": "use",
+    "item": "minecraft:water_bucket",
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "yaw": 0.0,
+    "pitch": 0.0,
+    "sneaking": false
+   }
+  },
+  {
+   "tick": 70,
+   "pos": [
+    1,
+    6,
+    1
+   ],
+   "action": {
+    "kind": "use",
+    "item": "minecraft:water_bucket",
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "yaw": 0.0,
+    "pitch": 0.0,
+    "sneaking": false
+   }
+  }
+ ]
+}

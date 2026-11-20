@@ -1,0 +1,312 @@
+{
+  "version": 3,
+  "seed": 7,
+  "checkpoints": [
+    20,
+    24,
+    28,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    40,
+    44,
+    48,
+    52,
+    56,
+    60,
+    64,
+    68,
+    72,
+    76,
+    80,
+    84,
+    88,
+    92,
+    96,
+    100,
+    102,
+    103,
+    104,
+    105,
+    106,
+    107,
+    108,
+    109,
+    112,
+    116,
+    120,
+    124,
+    128,
+    132,
+    136,
+    140,
+    144,
+    148,
+    152,
+    156,
+    160,
+    164,
+    168,
+    172,
+    176,
+    180,
+    184,
+    188,
+    192,
+    196,
+    200,
+    203,
+    204,
+    205,
+    208,
+    209,
+    210,
+    211,
+    212,
+    213,
+    214,
+    215,
+    216,
+    220,
+    224,
+    228,
+    232,
+    236,
+    240,
+    244,
+    248,
+    249,
+    250,
+    251,
+    252,
+    253,
+    254,
+    255,
+    256,
+    260,
+    264,
+    268,
+    272,
+    276,
+    280,
+    284,
+    288,
+    292,
+    296,
+    300,
+    304,
+    308,
+    312,
+    316,
+    320,
+    324,
+    328,
+    332,
+    336,
+    340,
+    344,
+    348,
+    351,
+    352,
+    353,
+    356,
+    357,
+    358,
+    359,
+    360,
+    361,
+    362,
+    363,
+    364,
+    368,
+    372,
+    376,
+    380,
+    384,
+    388,
+    392,
+    396,
+    400,
+    404,
+    408,
+    412,
+    416,
+    420,
+    424,
+    428,
+    432,
+    436,
+    440,
+    444,
+    448,
+    452,
+    456,
+    460,
+    464,
+    468,
+    472,
+    476,
+    480,
+    484,
+    488
+  ],
+  "ticks": 490,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:depot[waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "state": "create:mechanical_press[facing=north]"
+    },
+    {
+      "pos": [
+        0,
+        10,
+        -1
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": -64
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:gold_ingot",
+            "count": 8
+          }
+        }
+      },
+      "tick": 30,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:gold_ingot",
+            "count": 10
+          }
+        }
+      },
+      "tick": 102,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 1,
+        "insert": null,
+        "extract": 64,
+        "simulate": false
+      },
+      "tick": 203,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:iron_ingot",
+            "count": 12
+          }
+        }
+      },
+      "tick": 208,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:diamond",
+            "count": 9
+          }
+        }
+      },
+      "tick": 248,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "use",
+          "stack": null,
+          "face": "up",
+          "yaw": 0.0,
+          "sneaking": false
+        }
+      },
+      "tick": 351,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:iron_ingot",
+            "count": 3
+          }
+        }
+      },
+      "tick": 356,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    }
+  ]
+}

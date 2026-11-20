@@ -1,0 +1,220 @@
+{
+  "blocks": [
+    {
+      "id": "create:depot",
+      "properties": {
+        "waterlogged": [
+          "false",
+          "true"
+        ]
+      },
+      "source": "DepotBlock.createBlockStateDefinition/getStateForPlacement"
+    },
+    {
+      "id": "create:andesite_belt_funnel",
+      "properties": {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "powered": [
+          "false",
+          "true"
+        ],
+        "shape": [
+          "retracted",
+          "extended",
+          "pushing",
+          "pulling"
+        ],
+        "waterlogged": [
+          "false",
+          "true"
+        ]
+      },
+      "source": "BeltFunnelBlock.createBlockStateDefinition/getStateForPlacement"
+    },
+    {
+      "id": "create:brass_belt_funnel",
+      "properties": {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "powered": [
+          "false",
+          "true"
+        ],
+        "shape": [
+          "retracted",
+          "extended",
+          "pushing",
+          "pulling"
+        ],
+        "waterlogged": [
+          "false",
+          "true"
+        ]
+      },
+      "source": "BeltFunnelBlock.createBlockStateDefinition/getStateForPlacement"
+    },
+    {
+      "id": "create:andesite_funnel",
+      "properties": {
+        "extracting": [
+          "false",
+          "true"
+        ],
+        "facing": [
+          "down",
+          "up",
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "powered": [
+          "false",
+          "true"
+        ],
+        "waterlogged": [
+          "false",
+          "true"
+        ]
+      },
+      "source": "FunnelBlock.createBlockStateDefinition/getStateForPlacement"
+    },
+    {
+      "id": "create:brass_funnel",
+      "properties": {
+        "extracting": [
+          "false",
+          "true"
+        ],
+        "facing": [
+          "down",
+          "up",
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "powered": [
+          "false",
+          "true"
+        ],
+        "waterlogged": [
+          "false",
+          "true"
+        ]
+      },
+      "source": "FunnelBlock.createBlockStateDefinition/getStateForPlacement"
+    },
+    {
+      "id": "create:chute",
+      "properties": {
+        "facing": [
+          "down",
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "shape": [
+          "normal",
+          "window",
+          "intersection"
+        ],
+        "waterlogged": [
+          "false",
+          "true"
+        ]
+      },
+      "source": "ChuteBlock.createBlockStateDefinition (no encased chutes)"
+    },
+    {
+      "id": "create:smart_chute",
+      "properties": {
+        "powered": [
+          "false",
+          "true"
+        ]
+      },
+      "source": "SmartChuteBlock.createBlockStateDefinition"
+    }
+  ],
+  "items": [
+    {
+      "id": "minecraft:iron_ingot",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:gold_ingot",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:diamond",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:ender_pearl",
+      "max_stack": 16
+    },
+    {
+      "id": "minecraft:bucket",
+      "max_stack": 16
+    },
+    {
+      "id": "minecraft:water_bucket",
+      "max_stack": 1
+    },
+    {
+      "id": "minecraft:lava_bucket",
+      "max_stack": 1
+    },
+    {
+      "id": "minecraft:milk_bucket",
+      "max_stack": 1
+    },
+    {
+      "id": "create:honey_bucket",
+      "max_stack": 1
+    },
+    {
+      "id": "create:chocolate_bucket",
+      "max_stack": 1
+    },
+    {
+      "id": "minecraft:glass_bottle",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:honey_bottle",
+      "max_stack": 16
+    },
+    {
+      "id": "create:builders_tea",
+      "max_stack": 16
+    },
+    {
+      "id": "minecraft:sweet_berries",
+      "max_stack": 64
+    },
+    {
+      "id": "create:chocolate_glazed_berries",
+      "max_stack": 64
+    },
+    {
+      "id": "create:iron_sheet",
+      "max_stack": 64
+    },
+    {
+      "id": "create:golden_sheet",
+      "max_stack": 64
+    }
+  ]
+}

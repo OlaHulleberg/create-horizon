@@ -1,0 +1,247 @@
+{
+  "version": 3,
+  "seed": 152,
+  "checkpoints": [
+    10,
+    30,
+    60,
+    73,
+    75,
+    77,
+    79,
+    101
+  ],
+  "ticks": 180,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        2,
+        7,
+        0
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        1,
+        7,
+        0
+      ],
+      "state": "minecraft:stone"
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:clutch",
+        "face": "up",
+        "hit": [
+          0.9,
+          1.0,
+          0.9
+        ],
+        "yaw": 126.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 3,
+      "pos": [
+        1,
+        7,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:shaft",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 202.0,
+        "pitch": 0.0,
+        "sneaking": true
+      },
+      "tick": 4,
+      "pos": [
+        2,
+        7,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 11
+      },
+      "tick": 8,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 2
+      },
+      "tick": 40,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:wrench",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.1
+        ],
+        "yaw": 5.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 70,
+      "pos": [
+        2,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:wooden_bracket",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.9
+        ],
+        "yaw": 149.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 72,
+      "pos": [
+        2,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:wrench",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 68.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 74,
+      "pos": [
+        2,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:brass_casing",
+        "face": "up",
+        "hit": [
+          0.9,
+          1.0,
+          0.1
+        ],
+        "yaw": 214.0,
+        "pitch": 0.0,
+        "sneaking": true
+      },
+      "tick": 76,
+      "pos": [
+        2,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:wrench",
+        "face": "up",
+        "hit": [
+          0.9,
+          1.0,
+          0.9
+        ],
+        "yaw": 16.0,
+        "pitch": 0.0,
+        "sneaking": true
+      },
+      "tick": 78,
+      "pos": [
+        2,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "remove"
+      },
+      "tick": 90,
+      "pos": [
+        1,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:wrench",
+        "face": "south",
+        "hit": [
+          0.9,
+          0.1,
+          1.0
+        ],
+        "yaw": 15.0,
+        "pitch": 0.0,
+        "sneaking": true
+      },
+      "tick": 100,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "version": 3,
+  "seed": 390001,
+  "ticks": 12,
+  "checkpoints": [
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        -1
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:adjustable_chain_gearshift[axis=z,axis_along_first=true,part=start,powered=false]"
+    },
+    {
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "state": "create:encased_chain_drive[axis=z,axis_along_first=true,part=end]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 5,
+      "pos": [
+        0,
+        9,
+        0
+      ],
+      "action": {
+        "kind": "signal",
+        "strength": 3
+      }
+    },
+    {
+      "tick": 7,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "reload"
+      }
+    }
+  ]
+}

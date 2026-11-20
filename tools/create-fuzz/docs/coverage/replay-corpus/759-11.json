@@ -1,0 +1,465 @@
+{
+  "version": 3,
+  "seed": 759,
+  "checkpoints": [
+    60,
+    65,
+    70,
+    75,
+    80,
+    85,
+    90,
+    95,
+    100,
+    102,
+    103,
+    104,
+    105,
+    106,
+    107,
+    108,
+    110,
+    115,
+    120,
+    125,
+    130,
+    135,
+    140,
+    145,
+    147,
+    148,
+    149,
+    150,
+    155,
+    160,
+    165,
+    169,
+    170,
+    171,
+    172,
+    175,
+    180,
+    185,
+    189,
+    190,
+    191,
+    192,
+    195,
+    200,
+    205,
+    209,
+    210,
+    211,
+    212,
+    215,
+    220,
+    225,
+    230,
+    232,
+    233,
+    234,
+    235,
+    240,
+    245,
+    250,
+    255,
+    260,
+    265,
+    267,
+    268,
+    269,
+    270,
+    275,
+    280,
+    285,
+    286,
+    287,
+    288,
+    290,
+    295,
+    300,
+    305,
+    310,
+    315,
+    320,
+    325,
+    330,
+    335,
+    340,
+    345,
+    350,
+    355,
+    360
+  ],
+  "ticks": 360,
+  "blocks": [
+    {
+      "pos": [
+        1,
+        6,
+        -1
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        2,
+        6,
+        -1
+      ],
+      "state": "create:cogwheel[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        5,
+        0
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        1,
+        5,
+        0
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        2,
+        5,
+        0
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        3,
+        5,
+        0
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        4,
+        5,
+        0
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        4,
+        3,
+        0
+      ],
+      "state": "minecraft:stone"
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:creative_fluid_tank",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 16,
+      "pos": [
+        0,
+        5,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:depot",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 17,
+      "pos": [
+        4,
+        3,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:fluid_pipe",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 20,
+      "pos": [
+        1,
+        5,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:mechanical_pump",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 24,
+      "pos": [
+        2,
+        5,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:fluid_pipe",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 28,
+      "pos": [
+        3,
+        5,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:spout",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 32,
+      "pos": [
+        4,
+        5,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "remove"
+      },
+      "tick": 40,
+      "pos": [
+        4,
+        5,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:chocolate_bucket",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 60,
+      "pos": [
+        0,
+        6,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:sweet_berries",
+            "count": 60
+          }
+        }
+      },
+      "tick": 102,
+      "pos": [
+        4,
+        4,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 1,
+        "insert": null,
+        "extract": 64,
+        "simulate": false
+      },
+      "tick": 147,
+      "pos": [
+        4,
+        4,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 0,
+        "insert": null,
+        "extract": 64,
+        "simulate": false
+      },
+      "tick": 169,
+      "pos": [
+        4,
+        4,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 0,
+        "insert": null,
+        "extract": 59,
+        "simulate": false
+      },
+      "tick": 189,
+      "pos": [
+        4,
+        4,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:sweet_berries",
+            "count": 55
+          }
+        }
+      },
+      "tick": 209,
+      "pos": [
+        4,
+        4,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 1,
+        "insert": null,
+        "extract": 64,
+        "simulate": true
+      },
+      "tick": 232,
+      "pos": [
+        4,
+        4,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 7,
+        "insert": null,
+        "extract": 64,
+        "simulate": false
+      },
+      "tick": 267,
+      "pos": [
+        4,
+        4,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 3,
+        "insert": null,
+        "extract": 64,
+        "simulate": false
+      },
+      "tick": 285,
+      "pos": [
+        4,
+        4,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "reload"
+      },
+      "tick": 103,
+      "pos": [
+        1,
+        6,
+        -1
+      ]
+    }
+  ]
+}

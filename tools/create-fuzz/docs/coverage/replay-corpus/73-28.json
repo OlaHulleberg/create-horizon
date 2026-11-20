@@ -1,0 +1,152 @@
+{
+  "version": 3,
+  "seed": 73,
+  "checkpoints": [
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52
+  ],
+  "ticks": 160,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        7,
+        0
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:hand_crank[facing=up,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        9,
+        0
+      ],
+      "state": "create:shaft[axis=y,waterlogged=false]"
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "use",
+        "item": "minecraft:air",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 138.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 20,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "minecraft:air",
+        "face": "up",
+        "hit": [
+          0.1,
+          1.0,
+          0.9
+        ],
+        "yaw": 24.0,
+        "pitch": 0.0,
+        "sneaking": true
+      },
+      "tick": 29,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "minecraft:air",
+        "face": "up",
+        "hit": [
+          0.9,
+          1.0,
+          0.1
+        ],
+        "yaw": 125.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 39,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "minecraft:air",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.9
+        ],
+        "yaw": 302.0,
+        "pitch": 0.0,
+        "sneaking": true
+      },
+      "tick": 50,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    }
+  ]
+}

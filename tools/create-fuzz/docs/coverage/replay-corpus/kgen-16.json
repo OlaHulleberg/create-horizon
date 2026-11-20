@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "seed": 16,
+  "ticks": 152,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "state": "create:light_gray_valve_handle[facing=east,waterlogged=false]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 72,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "minecraft:air"
+    }
+  ]
+}

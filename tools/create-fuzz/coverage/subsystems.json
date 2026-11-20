@@ -1,0 +1,14 @@
+{
+  "kinetics": [
+    "com/simibubi/create/content/kinetics/",
+    "com/simibubi/create/api/stress/"
+  ],
+  "belts": [
+    "com/simibubi/create/content/kinetics/belt/",
+    "com/simibubi/create/content/logistics/depot/",
+    "com/simibubi/create/content/logistics/funnel/",
+    "com/simibubi/create/content/logistics/tunnel/",
+    "com/simibubi/create/content/logistics/chute/",
+    "com/simibubi/create/content/logistics/box/"
+  ]
+}

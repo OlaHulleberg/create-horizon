@@ -1,0 +1,310 @@
+{
+  "version": 3,
+  "seed": 679,
+  "checkpoints": [
+    25,
+    27,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    66,
+    67,
+    68,
+    69,
+    70,
+    71,
+    72,
+    73,
+    74,
+    75,
+    76,
+    77,
+    78,
+    82,
+    83,
+    84,
+    85,
+    86,
+    87,
+    88,
+    89,
+    90,
+    91,
+    92,
+    93,
+    94,
+    95,
+    96,
+    97,
+    98,
+    99,
+    100,
+    101,
+    102,
+    103,
+    104,
+    105,
+    106,
+    107,
+    108,
+    109,
+    110,
+    111,
+    115,
+    116,
+    117,
+    118,
+    119,
+    120,
+    121,
+    122,
+    123,
+    124,
+    125,
+    126,
+    127,
+    128,
+    129,
+    130,
+    131,
+    132,
+    133,
+    134,
+    135,
+    136,
+    137,
+    138,
+    139,
+    140,
+    141,
+    142,
+    143,
+    144
+  ],
+  "ticks": 260,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        4
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        0,
+        7,
+        5
+      ],
+      "state": "create:depot[waterlogged=false]"
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 8,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 14,
+      "pos": [
+        0,
+        8,
+        4
+      ]
+    },
+    {
+      "tick": 24,
+      "pos": [
+        0,
+        8,
+        5
+      ],
+      "state": "create:brass_funnel[extracting=false,facing=up,powered=false,waterlogged=false]"
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "minecraft:gold_ingot",
+        "face": "north",
+        "hit": [
+          0.5000000000000001,
+          0.125,
+          0.03125
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 30,
+      "pos": [
+        0,
+        8,
+        5
+      ]
+    },
+    {
+      "tick": 32,
+      "pos": [
+        -1,
+        8,
+        5
+      ],
+      "state": "minecraft:redstone_block"
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:gold_ingot",
+            "count": 13
+          }
+        }
+      },
+      "tick": 49,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "tick": 56,
+      "pos": [
+        -1,
+        8,
+        5
+      ],
+      "state": "minecraft:air"
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:gold_ingot",
+            "count": 11
+          }
+        }
+      },
+      "tick": 82,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:gold_ingot",
+            "count": 47
+          }
+        }
+      },
+      "tick": 115,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "reload"
+      },
+      "tick": 83,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    }
+  ]
+}

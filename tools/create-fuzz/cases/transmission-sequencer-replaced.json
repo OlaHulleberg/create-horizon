@@ -1,0 +1,30 @@
+{
+  "blocks": [
+    {
+      "pos": [
+        1,
+        8,
+        -3
+      ],
+      "state": "create:sequenced_gearshift[axis=x,vertical=false,state=0]"
+    }
+  ],
+  "checkpoints": [
+    87
+  ],
+  "events": [
+    {
+      "motor": 32,
+      "pos": [
+        1,
+        8,
+        -3
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "tick": 98
+    }
+  ],
+  "seed": 187,
+  "ticks": 168,
+  "version": 1
+}

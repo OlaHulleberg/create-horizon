@@ -1,0 +1,510 @@
+{
+  "version": 3,
+  "seed": 146,
+  "checkpoints": [
+    29,
+    31,
+    51,
+    71,
+    91,
+    111,
+    180
+  ],
+  "ticks": 190,
+  "blocks": [
+    {
+      "pos": [
+        -6,
+        8,
+        -3
+      ],
+      "state": "create:clutch[axis=x]"
+    },
+    {
+      "pos": [
+        -5,
+        8,
+        -3
+      ],
+      "state": "create:shaft[axis=x]"
+    },
+    {
+      "pos": [
+        -7,
+        8,
+        -3
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": -32
+    },
+    {
+      "pos": [
+        0,
+        8,
+        -3
+      ],
+      "state": "create:clutch[axis=x]"
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        -3
+      ],
+      "state": "create:shaft[axis=x]"
+    },
+    {
+      "pos": [
+        1,
+        8,
+        -3
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": -32
+    },
+    {
+      "pos": [
+        6,
+        8,
+        -3
+      ],
+      "state": "create:clutch[axis=y]"
+    },
+    {
+      "pos": [
+        6,
+        9,
+        -3
+      ],
+      "state": "create:shaft[axis=y]"
+    },
+    {
+      "pos": [
+        6,
+        7,
+        -3
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": -32
+    },
+    {
+      "pos": [
+        -6,
+        8,
+        3
+      ],
+      "state": "create:clutch[axis=y]"
+    },
+    {
+      "pos": [
+        -6,
+        7,
+        3
+      ],
+      "state": "create:shaft[axis=y]"
+    },
+    {
+      "pos": [
+        -6,
+        9,
+        3
+      ],
+      "state": "create:creative_motor[facing=down]",
+      "motor": -32
+    },
+    {
+      "pos": [
+        0,
+        8,
+        3
+      ],
+      "state": "create:clutch[axis=z]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        4
+      ],
+      "state": "create:shaft[axis=z]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        2
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": -32
+    },
+    {
+      "pos": [
+        6,
+        8,
+        3
+      ],
+      "state": "create:clutch[axis=z]"
+    },
+    {
+      "pos": [
+        6,
+        8,
+        2
+      ],
+      "state": "create:shaft[axis=z]"
+    },
+    {
+      "pos": [
+        6,
+        8,
+        4
+      ],
+      "state": "create:creative_motor[facing=north]",
+      "motor": -32
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 30,
+      "pos": [
+        -6,
+        9,
+        -3
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 50,
+      "pos": [
+        -6,
+        9,
+        -3
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 70,
+      "pos": [
+        -6,
+        9,
+        -3
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 90,
+      "pos": [
+        -6,
+        9,
+        -3
+      ]
+    },
+    {
+      "tick": 110,
+      "pos": [
+        -7,
+        8,
+        -3
+      ],
+      "state": "minecraft:air"
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 30,
+      "pos": [
+        0,
+        9,
+        -3
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 50,
+      "pos": [
+        0,
+        9,
+        -3
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 70,
+      "pos": [
+        0,
+        9,
+        -3
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 90,
+      "pos": [
+        0,
+        9,
+        -3
+      ]
+    },
+    {
+      "tick": 110,
+      "pos": [
+        1,
+        8,
+        -3
+      ],
+      "state": "minecraft:air"
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 30,
+      "pos": [
+        7,
+        8,
+        -3
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 50,
+      "pos": [
+        7,
+        8,
+        -3
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 70,
+      "pos": [
+        7,
+        8,
+        -3
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 90,
+      "pos": [
+        7,
+        8,
+        -3
+      ]
+    },
+    {
+      "tick": 110,
+      "pos": [
+        6,
+        7,
+        -3
+      ],
+      "state": "minecraft:air"
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 30,
+      "pos": [
+        -5,
+        8,
+        3
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 50,
+      "pos": [
+        -5,
+        8,
+        3
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 70,
+      "pos": [
+        -5,
+        8,
+        3
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 90,
+      "pos": [
+        -5,
+        8,
+        3
+      ]
+    },
+    {
+      "tick": 110,
+      "pos": [
+        -6,
+        9,
+        3
+      ],
+      "state": "minecraft:air"
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 30,
+      "pos": [
+        0,
+        9,
+        3
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 50,
+      "pos": [
+        0,
+        9,
+        3
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 70,
+      "pos": [
+        0,
+        9,
+        3
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 90,
+      "pos": [
+        0,
+        9,
+        3
+      ]
+    },
+    {
+      "tick": 110,
+      "pos": [
+        0,
+        8,
+        2
+      ],
+      "state": "minecraft:air"
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 30,
+      "pos": [
+        6,
+        9,
+        3
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 50,
+      "pos": [
+        6,
+        9,
+        3
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 70,
+      "pos": [
+        6,
+        9,
+        3
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 90,
+      "pos": [
+        6,
+        9,
+        3
+      ]
+    },
+    {
+      "tick": 110,
+      "pos": [
+        6,
+        8,
+        4
+      ],
+      "state": "minecraft:air"
+    }
+  ]
+}

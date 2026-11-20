@@ -1,0 +1,233 @@
+{
+  "version": 3,
+  "seed": 99,
+  "checkpoints": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    19,
+    21,
+    22,
+    25,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    66,
+    67,
+    68,
+    69,
+    70,
+    71,
+    72,
+    73,
+    74,
+    75,
+    76,
+    77,
+    78,
+    79,
+    80,
+    81,
+    82,
+    83,
+    84,
+    85,
+    86,
+    87,
+    88,
+    89,
+    90,
+    91,
+    92
+  ],
+  "ticks": 300,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        2
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": -32
+    },
+    {
+      "pos": [
+        -1,
+        7,
+        -1
+      ],
+      "state": "create:smart_chute[powered=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        -1
+      ],
+      "state": "create:chute[facing=east,shape=intersection,waterlogged=false]"
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 8,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 14,
+      "pos": [
+        0,
+        8,
+        2
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "minecraft:iron_ingot",
+        "face": "west",
+        "hit": [
+          0.03125,
+          0.6875,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 30,
+      "pos": [
+        -1,
+        7,
+        -1
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:diamond",
+            "count": 10
+          }
+        }
+      },
+      "tick": 32,
+      "pos": [
+        0,
+        8,
+        2
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:iron_ingot",
+            "count": 29
+          }
+        }
+      },
+      "tick": 53,
+      "pos": [
+        0,
+        8,
+        2
+      ]
+    },
+    {
+      "action": {
+        "kind": "reload"
+      },
+      "tick": 2,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    }
+  ]
+}

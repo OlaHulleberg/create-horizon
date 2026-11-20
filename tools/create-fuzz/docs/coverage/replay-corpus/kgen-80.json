@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "seed": 80,
+  "ticks": 152,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "state": "create:hose_pulley[facing=south]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 72,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "minecraft:air"
+    }
+  ]
+}

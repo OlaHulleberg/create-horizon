@@ -1,0 +1,205 @@
+{
+  "blocks": [
+    {
+      "pos": [
+        0,
+        3,
+        0
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        0,
+        3,
+        1
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        1,
+        3,
+        0
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        1,
+        3,
+        1
+      ],
+      "state": "minecraft:stone"
+    }
+  ],
+  "checkpoints": [
+    30,
+    40,
+    41,
+    42,
+    43,
+    60,
+    61,
+    62,
+    63,
+    80,
+    81,
+    82,
+    83
+  ],
+  "events": [
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "item": "create:fluid_tank",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": true,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        3,
+        0
+      ],
+      "tick": 12
+    },
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "item": "create:fluid_tank",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": true,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        3,
+        1
+      ],
+      "tick": 13
+    },
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "item": "create:fluid_tank",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": true,
+        "yaw": 0.0
+      },
+      "pos": [
+        1,
+        3,
+        0
+      ],
+      "tick": 14
+    },
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "item": "create:fluid_tank",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": true,
+        "yaw": 0.0
+      },
+      "pos": [
+        1,
+        3,
+        1
+      ],
+      "tick": 15
+    },
+    {
+      "action": {
+        "face": "north",
+        "hit": [
+          0.5,
+          0.5,
+          0.0
+        ],
+        "item": "create:wrench",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        4,
+        0
+      ],
+      "tick": 55
+    },
+    {
+      "action": {
+        "kind": "remove"
+      },
+      "pos": [
+        0,
+        4,
+        0
+      ],
+      "tick": 70
+    },
+    {
+      "tick": 41,
+      "pos": [
+        0,
+        4,
+        0
+      ],
+      "action": {
+        "kind": "reload"
+      }
+    },
+    {
+      "tick": 61,
+      "pos": [
+        0,
+        4,
+        0
+      ],
+      "action": {
+        "kind": "reload"
+      }
+    },
+    {
+      "tick": 81,
+      "pos": [
+        0,
+        4,
+        0
+      ],
+      "action": {
+        "kind": "reload"
+      }
+    }
+  ],
+  "seed": 40,
+  "ticks": 140,
+  "version": 3
+}

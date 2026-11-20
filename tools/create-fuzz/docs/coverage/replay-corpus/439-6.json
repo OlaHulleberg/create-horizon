@@ -1,0 +1,510 @@
+{
+  "version": 3,
+  "seed": 439,
+  "checkpoints": [
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    60,
+    65,
+    70,
+    75,
+    80,
+    85,
+    90,
+    95,
+    100,
+    105,
+    108,
+    109,
+    110,
+    111,
+    112,
+    113,
+    115,
+    120,
+    125,
+    130,
+    135,
+    140,
+    145,
+    146,
+    147,
+    148,
+    150,
+    155,
+    160,
+    163,
+    164,
+    165,
+    166,
+    170,
+    175,
+    180,
+    185,
+    190,
+    192,
+    193,
+    194,
+    195,
+    200,
+    205,
+    210,
+    215,
+    219,
+    220,
+    221,
+    222,
+    225,
+    230,
+    235,
+    240,
+    241,
+    242,
+    243,
+    245,
+    250,
+    255,
+    260,
+    265,
+    270,
+    275,
+    280,
+    281,
+    282,
+    283,
+    285,
+    290,
+    295,
+    300,
+    305,
+    310,
+    315,
+    320,
+    325,
+    330,
+    333,
+    334,
+    335,
+    336,
+    340,
+    345,
+    350,
+    354,
+    355,
+    356,
+    357,
+    360,
+    365,
+    370,
+    375,
+    380,
+    385,
+    390,
+    395,
+    400,
+    405,
+    410,
+    415,
+    420,
+    424
+  ],
+  "ticks": 424,
+  "blocks": [
+    {
+      "pos": [
+        1,
+        6,
+        -1
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        2,
+        6,
+        -1
+      ],
+      "state": "create:cogwheel[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        5,
+        0
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        1,
+        5,
+        0
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        2,
+        5,
+        0
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        3,
+        5,
+        0
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        4,
+        5,
+        0
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        4,
+        3,
+        0
+      ],
+      "state": "minecraft:stone"
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:creative_fluid_tank",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 16,
+      "pos": [
+        0,
+        5,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:depot",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 17,
+      "pos": [
+        4,
+        3,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:fluid_pipe",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 20,
+      "pos": [
+        1,
+        5,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:mechanical_pump",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 24,
+      "pos": [
+        2,
+        5,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:fluid_pipe",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 28,
+      "pos": [
+        3,
+        5,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:spout",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 32,
+      "pos": [
+        4,
+        5,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "remove"
+      },
+      "tick": 40,
+      "pos": [
+        4,
+        5,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:honey_bucket",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 60,
+      "pos": [
+        0,
+        6,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:glass_bottle",
+            "count": 6
+          }
+        }
+      },
+      "tick": 108,
+      "pos": [
+        4,
+        4,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 2,
+        "insert": null,
+        "extract": 64,
+        "simulate": false
+      },
+      "tick": 145,
+      "pos": [
+        4,
+        4,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 2,
+        "insert": {
+          "item": "minecraft:honey_bottle",
+          "count": 4
+        },
+        "extract": null,
+        "simulate": false
+      },
+      "tick": 163,
+      "pos": [
+        4,
+        4,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 3,
+        "insert": null,
+        "extract": 13,
+        "simulate": true
+      },
+      "tick": 192,
+      "pos": [
+        4,
+        4,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:glass_bottle",
+            "count": 10
+          }
+        }
+      },
+      "tick": 219,
+      "pos": [
+        4,
+        4,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 0,
+        "insert": null,
+        "extract": 21,
+        "simulate": true
+      },
+      "tick": 240,
+      "pos": [
+        4,
+        4,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 1,
+        "insert": null,
+        "extract": 2,
+        "simulate": false
+      },
+      "tick": 280,
+      "pos": [
+        4,
+        4,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 0,
+        "insert": {
+          "item": "minecraft:glass_bottle",
+          "count": 2
+        },
+        "extract": null,
+        "simulate": false
+      },
+      "tick": 333,
+      "pos": [
+        4,
+        4,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:glass_bottle",
+            "count": 1
+          }
+        }
+      },
+      "tick": 354,
+      "pos": [
+        4,
+        4,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "reload"
+      },
+      "tick": 25,
+      "pos": [
+        1,
+        6,
+        -1
+      ]
+    }
+  ]
+}

@@ -1,0 +1,770 @@
+{
+  "version": 3,
+  "seed": 44,
+  "checkpoints": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    25,
+    125,
+    135,
+    150
+  ],
+  "ticks": 220,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        7,
+        0
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        0,
+        7,
+        1
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        0,
+        7,
+        2
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        0,
+        7,
+        3
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        0,
+        7,
+        4
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:adjustable_chain_gearshift",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": true
+      },
+      "tick": 10,
+      "pos": [
+        0,
+        7,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:encased_chain_drive",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": true
+      },
+      "tick": 12,
+      "pos": [
+        0,
+        7,
+        1
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:adjustable_chain_gearshift",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": true
+      },
+      "tick": 14,
+      "pos": [
+        0,
+        7,
+        2
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:encased_chain_drive",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": true
+      },
+      "tick": 16,
+      "pos": [
+        0,
+        7,
+        3
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:adjustable_chain_gearshift",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": true
+      },
+      "tick": 18,
+      "pos": [
+        0,
+        7,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 30,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 30,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 1
+      },
+      "tick": 34,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 14
+      },
+      "tick": 34,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 2
+      },
+      "tick": 38,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 13
+      },
+      "tick": 38,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 3
+      },
+      "tick": 42,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 12
+      },
+      "tick": 42,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 4
+      },
+      "tick": 46,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 11
+      },
+      "tick": 46,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 5
+      },
+      "tick": 50,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 10
+      },
+      "tick": 50,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 6
+      },
+      "tick": 54,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 9
+      },
+      "tick": 54,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 7
+      },
+      "tick": 58,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 8
+      },
+      "tick": 58,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 8
+      },
+      "tick": 62,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 7
+      },
+      "tick": 62,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 9
+      },
+      "tick": 66,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 6
+      },
+      "tick": 66,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 10
+      },
+      "tick": 70,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 5
+      },
+      "tick": 70,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 11
+      },
+      "tick": 74,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 4
+      },
+      "tick": 74,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 12
+      },
+      "tick": 78,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 3
+      },
+      "tick": 78,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 13
+      },
+      "tick": 82,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 2
+      },
+      "tick": 82,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 14
+      },
+      "tick": 86,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 1
+      },
+      "tick": 86,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 90,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 90,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 94,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 94,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 1
+      },
+      "tick": 98,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 14
+      },
+      "tick": 98,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 14
+      },
+      "tick": 102,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 1
+      },
+      "tick": 102,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 106,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 106,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 14
+      },
+      "tick": 110,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 1
+      },
+      "tick": 110,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 1
+      },
+      "tick": 114,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 14
+      },
+      "tick": 114,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 118,
+      "pos": [
+        0,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 118,
+      "pos": [
+        0,
+        9,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "remove"
+      },
+      "tick": 130,
+      "pos": [
+        0,
+        8,
+        2
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:encased_chain_drive",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 90.0,
+        "pitch": 0.0,
+        "sneaking": true
+      },
+      "tick": 140,
+      "pos": [
+        0,
+        7,
+        2
+      ]
+    },
+    {
+      "action": {
+        "kind": "reload"
+      },
+      "tick": 1,
+      "pos": [
+        0,
+        7,
+        0
+      ]
+    }
+  ]
+}

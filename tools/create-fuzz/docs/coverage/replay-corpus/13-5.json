@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "seed": 13,
+  "ticks": 74,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:large_cogwheel[axis=x]"
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 256
+    },
+    {
+      "pos": [
+        0,
+        9,
+        1
+      ],
+      "state": "create:cogwheel[axis=x]"
+    },
+    {
+      "pos": [
+        1,
+        9,
+        1
+      ],
+      "state": "create:weighted_ejector[facing=north,waterlogged=false]"
+    }
+  ]
+}

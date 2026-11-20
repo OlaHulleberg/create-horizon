@@ -1,0 +1,305 @@
+{
+  "version": 3,
+  "seed": 53,
+  "checkpoints": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    90
+  ],
+  "ticks": 181,
+  "blocks": [
+    {
+      "pos": [
+        -6,
+        8,
+        -3
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": -32
+    },
+    {
+      "pos": [
+        -5,
+        8,
+        -3
+      ],
+      "state": "create:andesite_encased_large_cogwheel[axis=y,bottom_shaft=false,top_shaft=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        -3
+      ],
+      "state": "create:andesite_encased_large_cogwheel[axis=y,bottom_shaft=false,top_shaft=false]"
+    },
+    {
+      "pos": [
+        1,
+        8,
+        -3
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        5,
+        7,
+        -3
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": -32
+    },
+    {
+      "pos": [
+        5,
+        8,
+        -3
+      ],
+      "state": "create:andesite_encased_large_cogwheel[axis=y,bottom_shaft=false,top_shaft=false]"
+    },
+    {
+      "pos": [
+        -5,
+        8,
+        2
+      ],
+      "state": "create:andesite_encased_large_cogwheel[axis=y,bottom_shaft=false,top_shaft=false]"
+    },
+    {
+      "pos": [
+        -5,
+        9,
+        2
+      ],
+      "state": "create:creative_motor[facing=down]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        0,
+        8,
+        1
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": -32
+    },
+    {
+      "pos": [
+        0,
+        8,
+        2
+      ],
+      "state": "create:andesite_encased_large_cogwheel[axis=y,bottom_shaft=false,top_shaft=false]"
+    },
+    {
+      "pos": [
+        5,
+        8,
+        2
+      ],
+      "state": "create:andesite_encased_large_cogwheel[axis=y,bottom_shaft=false,top_shaft=false]"
+    },
+    {
+      "pos": [
+        5,
+        8,
+        3
+      ],
+      "state": "create:creative_motor[facing=north]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        -5,
+        2,
+        5
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": -128
+    },
+    {
+      "pos": [
+        -5,
+        3,
+        5
+      ],
+      "state": "create:large_cogwheel[axis=y]"
+    },
+    {
+      "pos": [
+        -6,
+        3,
+        5
+      ],
+      "state": "create:andesite_encased_large_cogwheel[axis=y,bottom_shaft=false,top_shaft=false]"
+    },
+    {
+      "pos": [
+        1,
+        2,
+        6
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": -128
+    },
+    {
+      "pos": [
+        1,
+        3,
+        6
+      ],
+      "state": "create:cogwheel[axis=y]"
+    },
+    {
+      "pos": [
+        0,
+        3,
+        5
+      ],
+      "state": "create:andesite_encased_large_cogwheel[axis=y,bottom_shaft=false,top_shaft=false]"
+    },
+    {
+      "pos": [
+        6,
+        4,
+        5
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": -128
+    },
+    {
+      "pos": [
+        7,
+        4,
+        5
+      ],
+      "state": "create:large_cogwheel[axis=x]"
+    },
+    {
+      "pos": [
+        6,
+        3,
+        5
+      ],
+      "state": "create:andesite_encased_large_cogwheel[axis=y,bottom_shaft=false,top_shaft=false]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 91,
+      "pos": [
+        -6,
+        8,
+        -3
+      ],
+      "state": "minecraft:air"
+    },
+    {
+      "tick": 101,
+      "pos": [
+        -6,
+        8,
+        -3
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    },
+    {
+      "tick": 101,
+      "pos": [
+        1,
+        8,
+        -3
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": -32
+    },
+    {
+      "tick": 101,
+      "pos": [
+        5,
+        7,
+        -3
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": 32
+    },
+    {
+      "tick": 101,
+      "pos": [
+        -5,
+        9,
+        2
+      ],
+      "state": "create:creative_motor[facing=down]",
+      "motor": -32
+    },
+    {
+      "tick": 101,
+      "pos": [
+        0,
+        8,
+        1
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 32
+    },
+    {
+      "tick": 101,
+      "pos": [
+        5,
+        8,
+        3
+      ],
+      "state": "create:creative_motor[facing=north]",
+      "motor": -32
+    },
+    {
+      "tick": 101,
+      "pos": [
+        -5,
+        2,
+        5
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": 128
+    },
+    {
+      "tick": 101,
+      "pos": [
+        1,
+        2,
+        6
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": 128
+    },
+    {
+      "tick": 101,
+      "pos": [
+        6,
+        4,
+        5
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 128
+    },
+    {
+      "action": {
+        "kind": "reload"
+      },
+      "tick": 1,
+      "pos": [
+        -6,
+        8,
+        -3
+      ]
+    }
+  ]
+}

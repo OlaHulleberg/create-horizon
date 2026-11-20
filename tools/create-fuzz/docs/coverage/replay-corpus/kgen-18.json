@@ -1,0 +1,318 @@
+{
+  "version": 3,
+  "seed": 18,
+  "checkpoints": [
+    29,
+    31,
+    51,
+    71,
+    91,
+    111,
+    180
+  ],
+  "ticks": 190,
+  "blocks": [
+    {
+      "pos": [
+        -6,
+        8,
+        -3
+      ],
+      "state": "create:gearbox[axis=y]"
+    },
+    {
+      "pos": [
+        -5,
+        8,
+        -3
+      ],
+      "state": "create:shaft[axis=x]"
+    },
+    {
+      "pos": [
+        -6,
+        8,
+        -4
+      ],
+      "state": "create:shaft[axis=z]"
+    },
+    {
+      "pos": [
+        -6,
+        8,
+        -2
+      ],
+      "state": "create:shaft[axis=z]"
+    },
+    {
+      "pos": [
+        -7,
+        8,
+        -3
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        0,
+        8,
+        -3
+      ],
+      "state": "create:gearbox[axis=y]"
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        -3
+      ],
+      "state": "create:shaft[axis=x]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        -4
+      ],
+      "state": "create:shaft[axis=z]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        -2
+      ],
+      "state": "create:shaft[axis=z]"
+    },
+    {
+      "pos": [
+        1,
+        8,
+        -3
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        6,
+        8,
+        -3
+      ],
+      "state": "create:gearbox[axis=z]"
+    },
+    {
+      "pos": [
+        5,
+        8,
+        -3
+      ],
+      "state": "create:shaft[axis=x]"
+    },
+    {
+      "pos": [
+        7,
+        8,
+        -3
+      ],
+      "state": "create:shaft[axis=x]"
+    },
+    {
+      "pos": [
+        6,
+        9,
+        -3
+      ],
+      "state": "create:shaft[axis=y]"
+    },
+    {
+      "pos": [
+        6,
+        7,
+        -3
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        -6,
+        8,
+        3
+      ],
+      "state": "create:gearbox[axis=z]"
+    },
+    {
+      "pos": [
+        -7,
+        8,
+        3
+      ],
+      "state": "create:shaft[axis=x]"
+    },
+    {
+      "pos": [
+        -5,
+        8,
+        3
+      ],
+      "state": "create:shaft[axis=x]"
+    },
+    {
+      "pos": [
+        -6,
+        7,
+        3
+      ],
+      "state": "create:shaft[axis=y]"
+    },
+    {
+      "pos": [
+        -6,
+        9,
+        3
+      ],
+      "state": "create:creative_motor[facing=down]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        0,
+        8,
+        3
+      ],
+      "state": "create:gearbox[axis=x]"
+    },
+    {
+      "pos": [
+        0,
+        7,
+        3
+      ],
+      "state": "create:shaft[axis=y]"
+    },
+    {
+      "pos": [
+        0,
+        9,
+        3
+      ],
+      "state": "create:shaft[axis=y]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        4
+      ],
+      "state": "create:shaft[axis=z]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        2
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        6,
+        8,
+        3
+      ],
+      "state": "create:gearbox[axis=x]"
+    },
+    {
+      "pos": [
+        6,
+        7,
+        3
+      ],
+      "state": "create:shaft[axis=y]"
+    },
+    {
+      "pos": [
+        6,
+        9,
+        3
+      ],
+      "state": "create:shaft[axis=y]"
+    },
+    {
+      "pos": [
+        6,
+        8,
+        2
+      ],
+      "state": "create:shaft[axis=z]"
+    },
+    {
+      "pos": [
+        6,
+        8,
+        4
+      ],
+      "state": "create:creative_motor[facing=north]",
+      "motor": 32
+    }
+  ],
+  "events": [
+    {
+      "tick": 110,
+      "pos": [
+        -7,
+        8,
+        -3
+      ],
+      "state": "minecraft:air"
+    },
+    {
+      "tick": 110,
+      "pos": [
+        1,
+        8,
+        -3
+      ],
+      "state": "minecraft:air"
+    },
+    {
+      "tick": 110,
+      "pos": [
+        6,
+        7,
+        -3
+      ],
+      "state": "minecraft:air"
+    },
+    {
+      "tick": 110,
+      "pos": [
+        -6,
+        9,
+        3
+      ],
+      "state": "minecraft:air"
+    },
+    {
+      "tick": 110,
+      "pos": [
+        0,
+        8,
+        2
+      ],
+      "state": "minecraft:air"
+    },
+    {
+      "tick": 110,
+      "pos": [
+        6,
+        8,
+        4
+      ],
+      "state": "minecraft:air"
+    }
+  ]
+}

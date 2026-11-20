@@ -1,0 +1,1082 @@
+{
+  "version": 3,
+  "seed": 2,
+  "checkpoints": [
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    66,
+    67,
+    68,
+    69,
+    70,
+    71,
+    72,
+    73,
+    74,
+    75,
+    76,
+    77,
+    78,
+    79,
+    80,
+    81,
+    82,
+    83,
+    84,
+    85,
+    86,
+    87,
+    88,
+    89,
+    90,
+    91,
+    92,
+    93,
+    94,
+    95,
+    96,
+    97,
+    98,
+    99,
+    100,
+    101,
+    102,
+    103,
+    104
+  ],
+  "ticks": 180,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "state": "create:gearshift[axis=x,powered=false]"
+    },
+    {
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 20,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 21,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 22,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 23,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 24,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 25,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 26,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 27,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 28,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 29,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 30,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 31,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 32,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 33,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 34,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 35,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 36,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 37,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 38,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 39,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 40,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 41,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 42,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 43,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 44,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 45,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 46,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 47,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 48,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 49,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 50,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 51,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 52,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 53,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 54,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 55,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 56,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 57,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 58,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 59,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 60,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 61,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 62,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 63,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 64,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 65,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 66,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 67,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 68,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 69,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 70,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 71,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 72,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 73,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 74,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 75,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 76,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 77,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 78,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 79,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 80,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 81,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 82,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 83,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 84,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 85,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 86,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 87,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 88,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 89,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 90,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 91,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 92,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 93,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 94,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 95,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 96,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 97,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      },
+      "tick": 98,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      },
+      "tick": 99,
+      "pos": [
+        1,
+        9,
+        0
+      ]
+    }
+  ]
+}

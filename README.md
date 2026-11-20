@@ -183,6 +183,7 @@ create/                 The native mod: what the launcher builds
   src/engine/           create-engine: Create's rules as plain Rust, no game types
   data/, assets/        Generated block, item and fluid declarations
 tools/create-data/      compile: tables; registry: MIT overlays and asset references; prepare: local assets
+tools/create-fuzz/      Differential fuzzer: the engine against Create's Java (development only)
 docs/                   Architecture and README media
 ```
 
@@ -191,6 +192,7 @@ docs/                   Architecture and README media
 - [docs/architecture.md](docs/architecture.md): how the mod is put together, and how to add to it.
 - [API_GAPS.md](API_GAPS.md): what the mod SDK can't do yet, and what the mod leaves out because of it.
 - [VALIDATION.md](VALIDATION.md): what was checked, on which build, and what was not.
+- [tools/create-fuzz](tools/create-fuzz/README.md): how the engine is compared with Create's Java.
 
 ## Licences
 
