@@ -527,7 +527,7 @@ pub(crate) fn diving(host: &mut dyn ServerHost, player: PlayerRef, breathes: boo
 }
 
 /// `CardboardArmorHandler.testForStealth`: crouching, not flying, in four pieces of cardboard.
-fn hiding_in_cardboard(host: &dyn ServerHost, player: PlayerRef) -> bool {
+pub(crate) fn hiding_in_cardboard(host: &dyn mod_api::Host, player: PlayerRef) -> bool {
     use mod_api::EquipmentSlot as S;
     if player.entity().is_crouching(host) != Some(true)
         || player.abilities(host).is_some_and(|a| a.flying)
