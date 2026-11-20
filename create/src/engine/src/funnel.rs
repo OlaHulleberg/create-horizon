@@ -174,44 +174,6 @@ pub fn segments(
     })
 }
 
-/// Funnels by the game tick they look again at (`extractionCooldown` run out), so a tick with no
-/// funnel due costs one look at the earliest. An entry whose time is no longer the funnel's (it
-/// was woken, rescheduled or removed meanwhile) is stale and skipped.
-#[derive(Clone, Debug, Default)]
-pub struct Timers {
-    heap: std::collections::BinaryHeap<std::cmp::Reverse<(u64, [i32; 3])>>,
-}
-
-impl Timers {
-    /// `pos` is due at `tick`.
-    pub fn at(&mut self, tick: u64, pos: [i32; 3]) {
-        self.heap.push(std::cmp::Reverse((tick, pos)));
-    }
-
-    /// The funnels due by `now` whose time `current` still says is theirs, each once.
-    pub fn due(
-        &mut self,
-        now: u64,
-        mut current: impl FnMut([i32; 3], u64) -> bool,
-    ) -> Vec<[i32; 3]> {
-        let mut out = Vec::new();
-        while let Some(std::cmp::Reverse((t, p))) = self.heap.peek().copied() {
-            if t > now {
-                break;
-            }
-            self.heap.pop();
-            if current(p, t) && !out.contains(&p) {
-                out.push(p);
-            }
-        }
-        out
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.heap.is_empty()
-    }
-}
-
 /// The inventory a funnel facing `facing` works on: the block behind it.
 pub fn behind(pos: [i32; 3], facing: Dir) -> [i32; 3] {
     let o = facing.offset();
@@ -393,19 +355,5 @@ mod tests {
         assert_eq!(segments(1.2, 2.6, true, 4).collect::<Vec<_>>(), [1, 2]);
         assert_eq!(segments(2.7, 1.9, false, 4).collect::<Vec<_>>(), [2, 1]);
         assert_eq!(segments(3.9, 4.0, true, 4).collect::<Vec<_>>(), [3, 4]);
-    }
-
-    #[test]
-    fn timers_give_due_funnels_once() {
-        let mut t = Timers::default();
-        t.at(5, [0, 0, 0]);
-        t.at(3, [1, 0, 0]);
-        t.at(3, [1, 0, 0]);
-        t.at(9, [2, 0, 0]);
-        assert!(t.due(2, |_, _| true).is_empty());
-        assert_eq!(t.due(5, |_, _| true), [[1, 0, 0], [0, 0, 0]]);
-        // Stale: the funnel moved its time on.
-        assert!(t.due(10, |_, tick| tick == 11).is_empty());
-        assert!(t.is_empty());
     }
 }

@@ -22,6 +22,13 @@ fn entity_view(block: Block) -> Option<View> {
         | Block::SmartFluidPipe => Some(View::Transport),
         Block::Chute | Block::SmartChute => Some(View::Chute),
         Block::FluidValve | Block::FluidTank | Block::CreativeFluidTank => Some(View::Transport),
+        // `BrassTunnelBlockEntity.tick` and `FunnelBlockEntity.tick` hand stacks to the belts and
+        // depots around them at their own turn.
+        Block::BrassTunnel
+        | Block::AndesiteFunnel
+        | Block::BrassFunnel
+        | Block::AndesiteBeltFunnel
+        | Block::BrassBeltFunnel => Some(View::Transport),
         _ => None,
     }
 }
@@ -360,10 +367,8 @@ pub struct Dimension {
     /// `assembleNextTick`) or that were right-clicked.
     pub bearing_checks: Vec<[i32; 3]>,
     pub tunnel_fresh: Vec<[i32; 3]>,
-    /// Brass tunnels and what they hold to hand out, and those holding a stack (the only ones
-    /// that tick).
+    /// Brass tunnels and what they hold to hand out.
     pub brass: HashMap<[i32; 3], crate::tunnel::Brass>,
-    pub brass_running: Vec<[i32; 3]>,
     /// The loaded basins, whose spout output looks for somewhere to go (`lazyTick`).
     pub basins: HashSet<[i32; 3]>,
     /// Basins' fluid tanks (`BasinBlockEntity`'s inputs and outputs).
@@ -444,10 +449,9 @@ pub struct Dimension {
     /// Item drains, their held stack and tank; those holding items tick.
     pub drains: HashMap<[i32; 3], crate::drain::Drain>,
     /// Funnels and belt funnels and the game tick each looks again at (`extractionCooldown`; 0
-    /// now, `u64::MAX` dormant until its state changes), and those times in order: only due
-    /// funnels do anything.
+    /// now, `u64::MAX` dormant until its state changes): only due funnels take a turn in the
+    /// transport walk.
     pub funnels: HashMap<[i32; 3], u64>,
-    pub funnel_timers: crate::funnel::Timers,
     /// Funnels whose block below changed (`updateShape`): a horizontal funnel over a belt becomes
     /// a belt funnel, a belt funnel off its belt a funnel again, and a belt funnel's shape
     /// follows the belt.
@@ -791,11 +795,17 @@ pub enum TransportTick {
     Pipe([i32; 3]),
     Depot([i32; 3]),
     Belt([i32; 3]),
+    /// `BrassTunnelBlockEntity.tick`: one holding a stack, synchronized with its group or still
+    /// counting `distributionProgress` down.
+    Brass([i32; 3]),
+    /// `FunnelBlockEntity.tick`: one whose extraction cooldown has run out.
+    Funnel([i32; 3]),
 }
 
 /// Resumable level transport walk; inventories are inspected at their turn.
 pub struct TransportTicks {
     dim: usize,
+    now: u64,
     entities: Walk,
 }
 impl TransportTicks {
@@ -833,6 +843,16 @@ impl TransportTicks {
             }
             if world.block_at(self.dim, p) == Some(Block::Depot) {
                 return Some(TransportTick::Depot(p));
+            }
+            let d = &world.dims[self.dim];
+            if d.brass
+                .get(&p)
+                .is_some_and(|b| b.is_running() || b.progress > 0)
+            {
+                return Some(TransportTick::Brass(p));
+            }
+            if d.funnels.get(&p).is_some_and(|due| *due <= self.now) {
+                return Some(TransportTick::Funnel(p));
             }
             if world.block_at(self.dim, p) == Some(Block::Belt) {
                 world.initialize_belt(self.dim, p);
@@ -1052,9 +1072,6 @@ impl CreateWorld {
                 .remove(&pos)
                 .map(crate::tunnel::Brass::from_saved)
                 .unwrap_or_default();
-            if b.is_running() {
-                d.brass_running.push(pos);
-            }
             d.brass.insert(pos, b);
         }
         match block {
@@ -1169,7 +1186,6 @@ impl CreateWorld {
         ) {
             // Placed or changed (extracting, powered, shape): looked at again.
             d.funnels.insert(pos, 0);
-            d.funnel_timers.at(0, pos);
             // `FunnelItem.getPlacementState`: a funnel placed over a belt is its belt funnel.
             if matches!(block, Block::AndesiteFunnel | Block::BrassFunnel) {
                 d.funnel_shapes.push(pos);
@@ -1901,9 +1917,7 @@ impl CreateWorld {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
             // What it held drops with its block entity's slot (`BrassTunnelBlockEntity.destroy`).
-            if d.brass.remove(&pos).is_some() {
-                d.brass_running.retain(|p| *p != pos);
-            }
+            d.brass.remove(&pos);
             if d.crafter_inputs.contains_key(&pos) {
                 match self.table.get(old).and_then(|(_, i)| i.facing) {
                     Some(f) => crate::crafter_input::remove(&mut d.crafter_inputs, pos, f),
@@ -2240,8 +2254,6 @@ impl CreateWorld {
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.scroll_options
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.brass_running
-                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.running_crushers
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crusher_saved
@@ -4918,11 +4930,13 @@ impl CreateWorld {
     }
 
     /// Level block-entity registration order shared by DepotBehaviour.tick,
-    /// BeltBlockEntity.tick, SpoutBlockEntity.tick, ItemDrainBlockEntity.tick and
-    /// PumpBlockEntity.tick. Call next only after applying the previous entity's transfers.
-    pub fn transport_ticks(&mut self, dim: usize) -> TransportTicks {
+    /// BeltBlockEntity.tick, SpoutBlockEntity.tick, ItemDrainBlockEntity.tick,
+    /// PumpBlockEntity.tick, BrassTunnelBlockEntity.tick and FunnelBlockEntity.tick at game
+    /// tick `now`. Call next only after applying the previous entity's transfers.
+    pub fn transport_ticks(&mut self, dim: usize, now: u64) -> TransportTicks {
         TransportTicks {
             dim,
+            now,
             entities: self.dims[dim].block_entities.walk(View::Transport),
         }
     }
@@ -5526,7 +5540,7 @@ mod tests {
         // One removed leaves the walk; the transport walk never holds them.
         w.apply_block_change(0, [0, 8, 5], 10, 0, false);
         assert_eq!(order(w.chute_ticks(0), &w), vec![[0, 9, 5], [0, 8, 6]]);
-        let mut phase = w.transport_ticks(0);
+        let mut phase = w.transport_ticks(0, 0);
         assert!(phase.next(&mut w).is_none());
         states::clear_range();
     }
@@ -5813,7 +5827,7 @@ mod tests {
         }
         w.take_belt(0, c);
         w.settle_belts(0);
-        assert_eq!(w.transport_ticks(0).next(&mut w), None);
+        assert_eq!(w.transport_ticks(0, 0).next(&mut w), None);
         assert!(
             w.column_belts(0, 0, 0)
                 .iter()
@@ -5857,7 +5871,7 @@ mod tests {
             );
             d.processing = 20;
             d.fluid = Some((crate::tank::Fluid::Water, 1000));
-            let mut turns = w.transport_ticks(0);
+            let mut turns = w.transport_ticks(0, 0);
             while let Some(turn) = turns.next(&mut w) {
                 let d = w.dims[0].drains.get_mut(&drain).unwrap();
                 match turn {
@@ -5906,7 +5920,7 @@ mod tests {
                 crate::tank::Fluid::Water,
                 1000,
             );
-            let mut turns = w.transport_ticks(0);
+            let mut turns = w.transport_ticks(0, 0);
             while let Some(turn) = turns.next(&mut w) {
                 match turn {
                     TransportTick::Spout(p) => {
@@ -5951,7 +5965,7 @@ mod tests {
         for n in 0..6 {
             w.block_changed(0, [n, 8, 0], 0, 10 + n as u32);
         }
-        let mut turns = w.transport_ticks(0);
+        let mut turns = w.transport_ticks(0, 0);
         assert_eq!(turns.next(&mut w), Some(TransportTick::Spout([0, 8, 0])));
         assert_eq!(turns.next(&mut w), Some(TransportTick::Drain([1, 8, 0])));
         assert_eq!(turns.next(&mut w), Some(TransportTick::Pump([2, 8, 0])));
@@ -5959,6 +5973,77 @@ mod tests {
         assert_eq!(turns.next(&mut w), Some(TransportTick::Fluid([4, 8, 0])));
         assert_eq!(turns.next(&mut w), Some(TransportTick::Fluid([5, 8, 0])));
         assert_eq!(turns.next(&mut w), None);
+    }
+
+    #[test]
+    fn brass_tunnels_and_funnels_take_their_turn_in_the_transport_walk() {
+        // Java issues #145 and #154: `BrassTunnelBlockEntity.tick` and `FunnelBlockEntity.tick`
+        // run on the level's block-entity ticker in registration order with
+        // `DepotBehaviour.tick` and `BeltBlockEntity.tick`. In t5-brass-phase-order the depot
+        // placed before the tunnel holds the stack it is handed at 0.0 that tick (the tunnel
+        // hands out after the depot's turn); in f5-funnel-push-phase-order the item a belt
+        // funnel pushes onto the belt placed before it is pending that tick. Only a tunnel with
+        // something to do (a stack, synchronized, or `distributionProgress` counting down) and
+        // a funnel whose cooldown has run out take a turn.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:depot", vec![]),
+            (
+                "create:brass_tunnel",
+                vec![("axis", "z"), ("shape", "straight")],
+            ),
+            (
+                "create:andesite_belt_funnel",
+                vec![("facing", "north"), ("shape", "pushing")],
+            ),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (depot, tunnel, funnel, last) = ([0, 8, 0], [1, 9, 0], [2, 9, 0], [3, 8, 0]);
+        w.block_changed(0, depot, 0, 10);
+        w.block_changed(0, tunnel, 0, 11);
+        w.block_changed(0, funnel, 0, 12);
+        w.block_changed(0, last, 0, 10);
+        let turns = |w: &mut CreateWorld, now| {
+            let mut phase = w.transport_ticks(0, now);
+            std::iter::from_fn(|| phase.next(w)).collect::<Vec<_>>()
+        };
+        // An idle tunnel takes no turn; the funnel just placed is due at once.
+        assert_eq!(
+            turns(&mut w, 40),
+            [
+                TransportTick::Depot(depot),
+                TransportTick::Funnel(funnel),
+                TransportTick::Depot(last)
+            ]
+        );
+        // The tunnel holds a stack and the funnel waits out its cooldown.
+        w.dims[0].brass.get_mut(&tunnel).unwrap().stack = Some(("minecraft:iron_ingot".into(), 3));
+        *w.dims[0].funnels.get_mut(&funnel).unwrap() = 49;
+        assert_eq!(
+            turns(&mut w, 41),
+            [
+                TransportTick::Depot(depot),
+                TransportTick::Brass(tunnel),
+                TransportTick::Depot(last)
+            ]
+        );
+        // Emptied, it still counts `distributionProgress` down.
+        let b = w.dims[0].brass.get_mut(&tunnel).unwrap();
+        (b.stack, b.progress) = (None, 3);
+        assert_eq!(
+            turns(&mut w, 49),
+            [
+                TransportTick::Depot(depot),
+                TransportTick::Brass(tunnel),
+                TransportTick::Funnel(funnel),
+                TransportTick::Depot(last)
+            ]
+        );
+        states::clear_range();
     }
 
     #[test]
@@ -6006,7 +6091,7 @@ mod tests {
                 .unwrap()
                 .items
                 .add(crate::belt::Item::new("minecraft:iron_ingot", 16, 0, false));
-            let mut turns = w.transport_ticks(0);
+            let mut turns = w.transport_ticks(0, 0);
             while let Some(turn) = turns.next(&mut w) {
                 match turn {
                     TransportTick::Belt(_) => {
@@ -6049,7 +6134,7 @@ mod tests {
     fn empty_belt_inventory_direction_is_saved() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = item_belt_world(32.0);
-        assert_eq!(w.transport_ticks(0).next(&mut w), None);
+        assert_eq!(w.transport_ticks(0, 0).next(&mut w), None);
         let saved = w.column_belts(0, 0, 0);
         assert_eq!(saved.len(), 1);
         assert!(saved[0].1.positive);
@@ -6061,9 +6146,9 @@ mod tests {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = item_belt_world(32.0);
         w.take_belt_saved_changes(0);
-        assert_eq!(w.transport_ticks(0).next(&mut w), None);
+        assert_eq!(w.transport_ticks(0, 0).next(&mut w), None);
         assert_eq!(w.take_belt_saved_changes(0), [[0, 8, 0], [0, 8, -4]].into());
-        assert_eq!(w.transport_ticks(0).next(&mut w), None);
+        assert_eq!(w.transport_ticks(0, 0).next(&mut w), None);
         assert!(w.take_belt_saved_changes(0).is_empty());
     }
 
@@ -6140,7 +6225,7 @@ mod tests {
             assert!(w.dims[0].kinetics.restore_state(p, 0, kinetic));
         }
         assert_eq!(
-            w.transport_ticks(0).next(&mut w),
+            w.transport_ticks(0, 0).next(&mut w),
             Some(TransportTick::Belt(c))
         );
         let rpm = w.speed(0, c).unwrap();
@@ -6160,12 +6245,12 @@ mod tests {
     fn empty_belt_tick_sets_first_stack_order() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = item_belt_world(32.0);
-        assert_eq!(w.transport_ticks(0).next(&mut w), None);
+        assert_eq!(w.transport_ticks(0, 0).next(&mut w), None);
         let b = w.dims[0].belts.get_mut(&[0, 8, 0]).unwrap();
         let mut item = crate::belt::Item::new("minecraft:iron_ingot", 16, 180, false);
         item.position = 1.5 + if b.items.positive { -1.0 } else { 1.0 } / 16.0;
         b.items.add(item);
-        let mut phase = w.transport_ticks(0);
+        let mut phase = w.transport_ticks(0, 0);
         assert_eq!(phase.next(&mut w), Some(TransportTick::Belt([0, 8, 0])));
         let b = w.dims[0].belts.get_mut(&[0, 8, 0]).unwrap();
         b.items.tick(
@@ -6192,7 +6277,7 @@ mod tests {
             .unwrap()
             .items
             .add(item.clone());
-        let mut phase = w.transport_ticks(0);
+        let mut phase = w.transport_ticks(0, 0);
         assert_eq!(phase.next(&mut w), Some(TransportTick::Belt(sender)));
         item.position = 4.26; // DirectBeltInputBehaviour's start at the receiving end.
         w.dims[0].belts.get_mut(&receiver).unwrap().items.add(item);
@@ -6220,7 +6305,7 @@ mod tests {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = item_belt_world(-32.0);
         let receiver = [0, 8, -4];
-        let mut phase = w.transport_ticks(0);
+        let mut phase = w.transport_ticks(0, 0);
         // Both empty controllers already took their turns.
         assert_eq!(phase.next(&mut w), None);
         let mut item = crate::belt::Item::new("minecraft:iron_ingot", 16, 180, false);
@@ -6228,7 +6313,7 @@ mod tests {
         w.dims[0].belts.get_mut(&receiver).unwrap().items.add(item);
         assert_eq!(phase.next(&mut w), None);
         assert!(w.dims[0].belts[&receiver].items.items.is_empty());
-        let mut phase = w.transport_ticks(0);
+        let mut phase = w.transport_ticks(0, 0);
         assert_eq!(phase.next(&mut w), Some(TransportTick::Belt(receiver)));
         let b = w.dims[0].belts.get_mut(&receiver).unwrap();
         b.items.tick(4, -32.0 / 480.0, true, &mut ItemBeltSide);
@@ -6732,7 +6817,7 @@ mod tests {
             )),
         );
         for _ in 0..9 {
-            let mut turns = w.transport_ticks(0);
+            let mut turns = w.transport_ticks(0, 0);
             while let Some(TransportTick::Depot(p)) = turns.next(&mut w) {
                 w.tick_depot(0, p, false);
             }
@@ -6743,7 +6828,7 @@ mod tests {
         w.restore_depot(0, pos, saved);
         assert_eq!(w.saved_depot(0, pos), Some(saved));
         for expected in [0.48592162, 0.48944122, 0.49208093] {
-            let mut turns = w.transport_ticks(0);
+            let mut turns = w.transport_ticks(0, 0);
             while let Some(TransportTick::Depot(p)) = turns.next(&mut w) {
                 w.tick_depot(0, p, false);
             }
@@ -6778,7 +6863,7 @@ mod tests {
         assert_eq!(w.take_depot_changes(0), [[0, 0, 0]]);
         let mut ticks = 0;
         while !w.dims[0].sliding.is_empty() {
-            let mut turns = w.transport_ticks(0);
+            let mut turns = w.transport_ticks(0, 0);
             while let Some(TransportTick::Depot(p)) = turns.next(&mut w) {
                 w.tick_depot(0, p, false);
             }

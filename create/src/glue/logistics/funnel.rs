@@ -120,7 +120,6 @@ pub(crate) fn wake_funnel(dim: usize, pos: [i32; 3]) {
         let d = &mut w.dims[dim];
         if let Some(due) = d.funnels.get_mut(&pos) {
             *due = 0;
-            d.funnel_timers.at(0, pos);
         }
     });
 }
@@ -515,85 +514,67 @@ pub fn tick_funnel_shapes(lv: &mut ServerLevel<'_>) {
     }
 }
 
-/// Funnels due to look again (`FunnelBlockEntity.tick` once its cooldown has run out): an
+/// The turn of a funnel due to look again in the shared transport walk
+/// (`FunnelBlockEntity.tick` once its cooldown has run out, in the level's block-entity order,
+/// so a stack pushed onto a belt or depot ticked earlier waits for its next turn): an
 /// extracting funnel on an inventory drops a stack in front while nothing lies there
 /// (`activateExtractor`); a belt funnel pushing onto its belt puts one there
 /// (`activateExtractingBeltFunnel`); either looks again 8 ticks after it moved items, the next
 /// tick while blocked, and 8 ticks later when the inventory gave nothing (Create looks every
-/// tick then). An inserting, pulling or powered funnel is dormant until its state changes; a
-/// tick with no funnel due costs one look at the earliest.
-pub fn tick_funnels(lv: &mut ServerLevel<'_>) {
+/// tick then). An inserting, pulling or powered funnel is dormant until its state changes.
+pub(super) fn tick_funnel(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     use create_engine::funnel::{EXTRACTION_COOLDOWN, Mode, belt_mode};
     let dim = lv.dim;
     let now = lv.game_time().max(0) as u64;
-    let due = with_world(|w| {
-        let d = &mut w.dims[dim];
-        if d.funnel_timers.is_empty() {
-            return Vec::new();
-        }
-        let funnels = &d.funnels;
-        d.funnel_timers
-            .due(now, |p, t| funnels.get(&p).is_some_and(|due| *due == t))
-    })
-    .unwrap_or_default();
-    let schedule = |pos: [i32; 3], at: u64| {
+    let schedule = |at: u64| {
         with_world(|w| {
-            let d = &mut w.dims[dim];
-            if let Some(due) = d.funnels.get_mut(&pos) {
+            if let Some(due) = w.dims[dim].funnels.get_mut(&pos) {
                 *due = at;
-                if at != u64::MAX {
-                    d.funnel_timers.at(at, pos);
-                }
             }
         });
     };
-    for pos in due {
-        let Some(f) = funnel_at(lv, pos) else {
-            schedule(pos, u64::MAX);
-            continue;
-        };
-        let mode = match f.belt {
-            Some(shape) => belt_mode(f.powered, shape, belt_movement_below(lv, pos), f.facing),
-            None if f.powered => Mode::Paused,
-            None if f.extracting => Mode::Extract,
-            None => Mode::Collect,
-        };
-        let side = face(f.facing);
-        let behind = create_engine::funnel::behind(pos, f.facing);
-        let max = super::amount::funnel_extraction(lv, pos, &f);
-        let next = match mode {
-            Mode::Extract => extract_in_front(lv, pos, f.facing, side, behind, max),
-            Mode::PushingToBelt if depot_below(lv, pos) => {
-                push_onto_depot(lv, pos, f.facing, side, behind, max)
-            }
-            Mode::PushingToBelt if machine_below(lv, pos) => {
-                push_into_machine(lv, pos, f.facing, side, behind, max)
-            }
-            Mode::PushingToBelt => push_onto_belt(lv, pos, f.facing, side, behind, max),
-            Mode::TakingFromBelt if depot_below(lv, pos) => {
-                // The depot hands its stack over each tick it holds one
-                // (`DepotBehaviour.tick`, `handleBeltFunnelOutput`).
-                pull_from_depot(lv, pos, side, behind);
-                Some(Some(false))
-            }
-            // Inserting, pulling from a belt (the belt does it), paused or invalid: dormant.
-            _ => None,
-        };
-        // `startCooldown` after a stack left: counted down over 8 ticks, the funnel acts on the
-        // 9th. Blocked, or the inventory empty (`awaitNewVersion`, a check each tick), it tries
-        // again the next tick.
-        schedule(
-            pos,
-            match next {
-                Some(Some(true)) => now + u64::from(EXTRACTION_COOLDOWN) + 1,
-                Some(_) => now + 1,
-                // A belt funnel looks at the belt's way each tick (Create's mode is read each
-                // tick): the belt reversed or started, it may push.
-                None if f.belt.is_some() => now + 1,
-                None => u64::MAX,
-            },
-        );
-    }
+    let Some(f) = funnel_at(lv, pos) else {
+        schedule(u64::MAX);
+        return;
+    };
+    let mode = match f.belt {
+        Some(shape) => belt_mode(f.powered, shape, belt_movement_below(lv, pos), f.facing),
+        None if f.powered => Mode::Paused,
+        None if f.extracting => Mode::Extract,
+        None => Mode::Collect,
+    };
+    let side = face(f.facing);
+    let behind = create_engine::funnel::behind(pos, f.facing);
+    let max = super::amount::funnel_extraction(lv, pos, &f);
+    let next = match mode {
+        Mode::Extract => extract_in_front(lv, pos, f.facing, side, behind, max),
+        Mode::PushingToBelt if depot_below(lv, pos) => {
+            push_onto_depot(lv, pos, f.facing, side, behind, max)
+        }
+        Mode::PushingToBelt if machine_below(lv, pos) => {
+            push_into_machine(lv, pos, f.facing, side, behind, max)
+        }
+        Mode::PushingToBelt => push_onto_belt(lv, pos, f.facing, side, behind, max),
+        Mode::TakingFromBelt if depot_below(lv, pos) => {
+            // The depot hands its stack over each tick it holds one
+            // (`DepotBehaviour.tick`, `handleBeltFunnelOutput`).
+            pull_from_depot(lv, pos, side, behind);
+            Some(Some(false))
+        }
+        // Inserting, pulling from a belt (the belt does it), paused or invalid: dormant.
+        _ => None,
+    };
+    // `startCooldown` after a stack left: counted down over 8 ticks, the funnel acts on the
+    // 9th. Blocked, or the inventory empty (`awaitNewVersion`, a check each tick), it tries
+    // again the next tick.
+    schedule(match next {
+        Some(Some(true)) => now + u64::from(EXTRACTION_COOLDOWN) + 1,
+        Some(_) => now + 1,
+        // A belt funnel looks at the belt's way each tick (Create's mode is read each
+        // tick): the belt reversed or started, it may push.
+        None if f.belt.is_some() => now + 1,
+        None => u64::MAX,
+    });
 }
 
 /// `activateExtractor`: Some(Some(true)) when a stack left, Some(Some(false)) when an item in

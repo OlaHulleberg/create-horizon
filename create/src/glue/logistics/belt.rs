@@ -754,7 +754,8 @@ pub fn break_pass(lv: &mut ServerLevel<'_>) {
 pub fn tick_transport(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     crate::glue::fluids::pipes::tick_pipes(lv);
-    let Some(mut phase) = with_world(|w| w.transport_ticks(dim)) else {
+    let now = lv.game_time().max(0) as u64;
+    let Some(mut phase) = with_world(|w| w.transport_ticks(dim, now)) else {
         return;
     };
     while let Some(turn) = with_world(|w| phase.next(w)).flatten() {
@@ -783,6 +784,14 @@ pub fn tick_transport(lv: &mut ServerLevel<'_>) {
             }
             create_engine::world::TransportTick::Depot(p) => {
                 super::depot::tick_depot(lv, p);
+                continue;
+            }
+            create_engine::world::TransportTick::Brass(p) => {
+                super::tunnel::tick_brass(lv, p);
+                continue;
+            }
+            create_engine::world::TransportTick::Funnel(p) => {
+                super::funnel::tick_funnel(lv, p);
                 continue;
             }
             create_engine::world::TransportTick::Belt(c) => c,

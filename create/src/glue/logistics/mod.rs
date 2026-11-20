@@ -288,9 +288,7 @@ impl Subsystem for Logistics {
         chute::tick_chute_shapes(lv);
         chute::tick_chutes(lv);
         funnel::tick_funnel_shapes(lv);
-        funnel::tick_funnels(lv);
         tunnel::tick_tunnels(lv);
-        tunnel::tick_brass(lv);
         belt::tick_covers(lv);
         belt::tick_transport(lv);
         depot::send_changed_depots(lv);

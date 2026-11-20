@@ -134,9 +134,6 @@ pub fn set_stack(
         b.entered_from = from;
         b.progress = -1;
         b.new_item = item.count > 0;
-        if !d.brass_running.contains(&pos) {
-            d.brass_running.push(pos);
-        }
         w.mark_unsaved(dim, pos);
     });
     super::items::set_slot(lv, pos, 0, stack);
@@ -165,9 +162,6 @@ pub fn slot_changed(lv: &ServerLevel<'_>, pos: [i32; 3]) {
         b.entered_from = None;
         b.progress = -1;
         b.new_item = b.stack.is_some();
-        if !d.brass_running.contains(&pos) {
-            d.brass_running.push(pos);
-        }
         w.mark_unsaved(dim, pos);
     });
 }
@@ -686,175 +680,165 @@ fn insert_into_tunnel(
     Some(0)
 }
 
-/// Brass tunnels holding a stack (`BrassTunnelBlockEntity.tick`): two ticks after it arrives
-/// (then every `brassTunnelTimer` while some is left), the stack is split among the outputs of
-/// the tunnel and those connected with it, filtered sides first, as its mode says; synchronizing
-/// tunnels hand out only while every one of their group holds a stack.
-pub fn tick_brass(lv: &mut ServerLevel<'_>) {
+/// The turn of a brass tunnel in the shared transport walk (`BrassTunnelBlockEntity.tick`, in
+/// the level's block-entity order: a belt or depot ticked before it holds what it hands out
+/// until its next turn): two ticks after a stack arrives (then every `brassTunnelTimer` while
+/// some is left), the stack is split among the outputs of the tunnel and those connected with
+/// it, filtered sides first, as its mode says; synchronizing tunnels hand out only while every
+/// one of their group holds a stack.
+pub(super) fn tick_brass(lv: &mut ServerLevel<'_>, t: [i32; 3]) {
     let dim = lv.dim;
-    let Some(list) = with_world(|w| w.dims[dim].brass_running.clone()) else {
+    let Some(mut b) = with_world(|w| w.dims[dim].brass.get(&t).cloned()).flatten() else {
         return;
     };
-    for t in list {
-        let Some(mut b) = with_world(|w| w.dims[dim].brass.get(&t).cloned()).flatten() else {
-            with_world(|w| w.dims[dim].brass_running.retain(|p| *p != t));
-            continue;
-        };
-        let below = [t[0], t[1] - 1, t[2]];
-        let rpm = belt_segment(lv, below)
-            .and_then(|(c, ..)| with_world(|w| w.speed(dim, c)).flatten())
-            .unwrap_or(0.0);
-        let save = |b: &tunnel::Brass| {
+    let below = [t[0], t[1] - 1, t[2]];
+    let rpm = belt_segment(lv, below)
+        .and_then(|(c, ..)| with_world(|w| w.speed(dim, c)).flatten())
+        .unwrap_or(0.0);
+    let save = |b: &tunnel::Brass| {
+        with_world(|w| {
+            let d = &mut w.dims[dim];
+            let changed = d.brass.get(&t).is_some_and(|x| x != b);
+            if let Some(x) = d.brass.get_mut(&t) {
+                *x = b.clone();
+            }
+            if changed {
+                w.mark_unsaved(dim, t);
+            }
+        });
+    };
+    let phase = b.begin_tick(rpm != 0.0);
+    if matches!(phase, tunnel::BrassPhase::Idle | tunnel::BrassPhase::Wait) {
+        save(&b);
+        return;
+    }
+    let Some((axis, _)) = tunnel_state(lv, t) else {
+        return;
+    };
+    if phase == tunnel::BrassPhase::Gather {
+        let group = brass_group(lv, t, axis);
+        let held: Vec<bool> = group
+            .iter()
+            .map(|p| {
+                with_world(|w| w.dims[dim].brass.get(p).is_some_and(|x| x.stack.is_some()))
+                    .unwrap_or(false)
+            })
+            .collect();
+        let (sync_update, can_gather) = b.gather_sync(&held);
+        if let Some(synced) = sync_update {
             with_world(|w| {
+                let mut changed = Vec::new();
                 let d = &mut w.dims[dim];
-                let changed = d.brass.get(&t).is_some_and(|x| x != b);
-                if let Some(x) = d.brass.get_mut(&t) {
-                    *x = b.clone();
+                for p in &group {
+                    if let Some(x) = d.brass.get_mut(p)
+                        && x.synced != synced
+                    {
+                        x.synced = synced;
+                        changed.push(*p);
+                    }
                 }
-                if b.stack.is_none() && !b.synced {
-                    d.brass_running.retain(|p| *p != t);
-                }
-                if changed {
-                    w.mark_unsaved(dim, t);
+                for p in changed {
+                    w.mark_unsaved(dim, p);
                 }
             });
-        };
-        let phase = b.begin_tick(rpm != 0.0);
-        if matches!(phase, tunnel::BrassPhase::Idle | tunnel::BrassPhase::Wait) {
-            save(&b);
-            continue;
         }
-        let Some((axis, _)) = tunnel_state(lv, t) else {
-            continue;
-        };
-        if phase == tunnel::BrassPhase::Gather {
-            let group = brass_group(lv, t, axis);
-            let held: Vec<bool> = group
-                .iter()
-                .map(|p| {
-                    with_world(|w| w.dims[dim].brass.get(p).is_some_and(|x| x.stack.is_some()))
-                        .unwrap_or(false)
-                })
-                .collect();
-            let (sync_update, can_gather) = b.gather_sync(&held);
-            if let Some(synced) = sync_update {
-                with_world(|w| {
-                    let mut changed = Vec::new();
-                    let d = &mut w.dims[dim];
-                    for p in &group {
-                        if let Some(x) = d.brass.get_mut(p)
-                            && x.synced != synced
-                        {
-                            x.synced = synced;
-                            if synced && !d.brass_running.contains(p) {
-                                d.brass_running.push(*p);
-                            }
-                            changed.push(*p);
-                        }
-                    }
-                    for p in changed {
-                        w.mark_unsaved(dim, p);
-                    }
-                });
-            }
-            if !can_gather {
-                save(&b);
-                continue;
-            }
-            let Some((item, count)) = b.stack.clone() else {
-                save(&b);
-                continue;
-            };
-            let mut one = create_engine::belt::Item::new(&item, count, 180, false);
-            one.progress = b.stack_progress.clone();
-            let outputs: Vec<([i32; 3], Dir)> = group
-                .iter()
-                .enumerate()
-                .flat_map(|(i, g)| valid_outputs_of(lv, *g, i == 0))
-                .collect();
-            let any = outputs
-                .into_iter()
-                .any(|(g, d)| insert_into_tunnel(lv, g, d, &one, true).is_some());
-            if !any {
-                save(&b);
-                continue;
-            }
-            b.schedule_distribution();
+        if !can_gather {
             save(&b);
-            continue;
+            return;
         }
         let Some((item, count)) = b.stack.clone() else {
-            b.progress = -1;
             save(&b);
-            continue;
+            return;
         };
-        let group = brass_group(lv, t, axis);
         let mut one = create_engine::belt::Item::new(&item, count, 180, false);
         one.progress = b.stack_progress.clone();
-        // `distributionTargets`: the filtered sides first, then the rest; never back out of
-        // the side it came in by.
-        let mut filtered = Vec::new();
-        let mut plain = Vec::new();
-        for (i, g) in group.iter().enumerate() {
-            for (g2, d) in valid_outputs_of(lv, *g, i == 0) {
-                if g2 == t && Some(d) == b.entered_from {
-                    continue;
-                }
-                if insert_into_tunnel(lv, g2, d, &one, true).is_none() {
-                    continue;
-                }
-                if flap_filter_empty(lv, g2, d) {
-                    plain.push((g2, d));
-                } else {
-                    filtered.push((g2, d));
-                }
-            }
+        let outputs: Vec<([i32; 3], Dir)> = group
+            .iter()
+            .enumerate()
+            .flat_map(|(i, g)| valid_outputs_of(lv, *g, i == 0))
+            .collect();
+        let any = outputs
+            .into_iter()
+            .any(|(g, d)| insert_into_tunnel(lv, g, d, &one, true).is_some());
+        if !any {
+            save(&b);
+            return;
         }
-        let mut left = count;
-        for outputs in [filtered, plain] {
-            if left == 0 || outputs.is_empty() {
-                continue;
-            }
-            let random = super::items::random_angle(lv, t) as usize;
-            let dealt = tunnel::distribute(
-                left,
-                outputs.len(),
-                b.previous_output,
-                b.mode,
-                random,
-                |i, n, simulate| {
-                    let (g, d) = outputs[i];
-                    let mut part = one.clone();
-                    part.count = n;
-                    insert_into_tunnel(lv, g, d, &part, simulate)
-                },
-            );
-            // A forced mode with an output refusing hands out nothing and stays on the same
-            // output (`distribute` returns early).
-            if let Some(l) = dealt {
-                left = l;
-                b.previous_output = (b.previous_output + 1) % outputs.len().max(1);
-            }
-        }
-        let changed = left != count;
-        b.stack = (left > 0).then(|| (item.clone(), left));
-        if b.stack.is_none() {
-            b.entered_from = None;
-            b.stack_progress = None;
-        }
+        b.schedule_distribution();
+        save(&b);
+        return;
+    }
+    let Some((item, count)) = b.stack.clone() else {
         b.progress = -1;
         save(&b);
-        if changed {
-            let rest = if left == 0 {
-                None
+        return;
+    };
+    let group = brass_group(lv, t, axis);
+    let mut one = create_engine::belt::Item::new(&item, count, 180, false);
+    one.progress = b.stack_progress.clone();
+    // `distributionTargets`: the filtered sides first, then the rest; never back out of
+    // the side it came in by.
+    let mut filtered = Vec::new();
+    let mut plain = Vec::new();
+    for (i, g) in group.iter().enumerate() {
+        for (g2, d) in valid_outputs_of(lv, *g, i == 0) {
+            if g2 == t && Some(d) == b.entered_from {
+                continue;
+            }
+            if insert_into_tunnel(lv, g2, d, &one, true).is_none() {
+                continue;
+            }
+            if flap_filter_empty(lv, g2, d) {
+                plain.push((g2, d));
             } else {
-                let mut part = one.clone();
-                part.count = left;
-                super::items::slot(lv, t, 0)
-                    .and_then(|s| super::items::with_count(&s, u32::from(left)))
-                    .or_else(|| super::belt::belt_stack(lv, &part))
-            };
-            super::items::set_slot(lv, t, 0, rest);
+                filtered.push((g2, d));
+            }
         }
+    }
+    let mut left = count;
+    for outputs in [filtered, plain] {
+        if left == 0 || outputs.is_empty() {
+            continue;
+        }
+        let random = super::items::random_angle(lv, t) as usize;
+        let dealt = tunnel::distribute(
+            left,
+            outputs.len(),
+            b.previous_output,
+            b.mode,
+            random,
+            |i, n, simulate| {
+                let (g, d) = outputs[i];
+                let mut part = one.clone();
+                part.count = n;
+                insert_into_tunnel(lv, g, d, &part, simulate)
+            },
+        );
+        // A forced mode with an output refusing hands out nothing and stays on the same
+        // output (`distribute` returns early).
+        if let Some(l) = dealt {
+            left = l;
+            b.previous_output = (b.previous_output + 1) % outputs.len().max(1);
+        }
+    }
+    let changed = left != count;
+    b.stack = (left > 0).then(|| (item.clone(), left));
+    if b.stack.is_none() {
+        b.entered_from = None;
+        b.stack_progress = None;
+    }
+    b.progress = -1;
+    save(&b);
+    if changed {
+        let rest = if left == 0 {
+            None
+        } else {
+            let mut part = one.clone();
+            part.count = left;
+            super::items::slot(lv, t, 0)
+                .and_then(|s| super::items::with_count(&s, u32::from(left)))
+                .or_else(|| super::belt::belt_stack(lv, &part))
+        };
+        super::items::set_slot(lv, t, 0, rest);
     }
 }

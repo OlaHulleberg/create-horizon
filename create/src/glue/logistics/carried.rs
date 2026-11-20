@@ -45,11 +45,7 @@ pub(super) fn carry_out(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, out: 
             .filter_map(|s| Some(((pos, s), d.tunnel_filters.remove(&(pos, s))?)))
             .collect();
         let brass = (block == Block::BrassTunnel)
-            .then(|| {
-                let b = d.brass.remove(&pos)?;
-                d.brass_running.retain(|p| *p != pos);
-                Some(b)
-            })
+            .then(|| d.brass.remove(&pos))
             .flatten();
         (filter, amount, sides, brass)
     }) else {
