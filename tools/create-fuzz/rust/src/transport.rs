@@ -426,8 +426,9 @@ pub fn validate_scenario(sc: &crate::scenario::Scenario) {
                 "create:brass_funnel",
                 "create:chute",
                 "create:smart_chute",
-                // Only blowing into chutes: its current meets no item outside them.
                 "create:encased_fan",
+                // Its current's catalyst (`engine/fans.rs`).
+                "minecraft:lava",
                 // Pressing the contract's ingots (`press_processing`).
                 "create:mechanical_press"
             ]

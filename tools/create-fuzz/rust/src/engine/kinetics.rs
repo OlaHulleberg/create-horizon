@@ -66,6 +66,7 @@ impl Run {
             self.sequencer_step(p, step);
         }
         let mut events = Vec::new();
+        self.tick_fans();
         self.tick_fluids();
         self.tick_boilers();
         self.tick_burners();

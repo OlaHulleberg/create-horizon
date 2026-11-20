@@ -264,7 +264,8 @@ depots behind them, a floor funnel at the belt's end, and player pickups that fr
 funnel. The chute family ends belts at vertical chutes over depots, belts,
 chutes, stone or nothing, and under a chute leading into them.
 
-Four more cover depot output buffers (a spout fills a stack on a depot; item handlers,
+Four more cover depot output buffers (a spout fills a stack on a depot, in a quarter of the
+seeds inside an encased fan's current past lava, `engine/fans.rs`; item handlers,
 pickups, landings and a pulling belt funnel reach the buffer), brass funnels' filters and
 amounts (with the `filter_setting` action), chute columns (diagonal and smart chutes and
 encased fans at a belt's end) and presses over depots and belts. Each family's residues are in

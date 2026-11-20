@@ -10,6 +10,7 @@ mod brass;
 mod chutes;
 mod conveyors;
 mod ejectors;
+mod fans;
 mod fluid_machines;
 mod fluid_world;
 mod fluids;
