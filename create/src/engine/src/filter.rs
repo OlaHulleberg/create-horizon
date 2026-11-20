@@ -69,8 +69,7 @@ impl Mode {
     }
 }
 
-/// The item attributes of `AllItemAttributeTypes` the port can evaluate. Left out:
-/// `in_item_group` (no API lists the creative tabs or their contents).
+/// The item attributes of `AllItemAttributeTypes` the port can evaluate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Attribute {
     Placeable,
@@ -94,6 +93,8 @@ pub enum Attribute {
     Compostable,
     /// `InTagAttribute`: an item tag, without its `#`.
     InTag(String),
+    /// `InItemGroupAttribute`: a creative mode tab's registry id.
+    InItemGroup(String),
     /// `AddedByAttribute`: a mod id (the item id's namespace, `getCreatorModId`).
     AddedBy(String),
     /// `EnchantAttribute`: an enchantment id.
@@ -136,8 +137,6 @@ const SINGLETONS: [(&str, Attribute); 18] = [
 /// Why an attribute was refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Refused {
-    /// Create has it, the port can't evaluate it.
-    NotPorted(String),
     /// Create has no such attribute type, or its value is missing or bad.
     Unknown(String),
 }
@@ -147,6 +146,7 @@ impl Attribute {
     pub fn id(&self) -> String {
         let name = match self {
             Attribute::InTag(_) => "in_tag",
+            Attribute::InItemGroup(_) => "in_item_group",
             Attribute::AddedBy(_) => "added_by",
             Attribute::HasEnchant(_) => "has_enchant",
             Attribute::HasName(_) => "has_name",
@@ -167,6 +167,7 @@ impl Attribute {
     pub fn value(&self) -> Option<String> {
         match self {
             Attribute::InTag(v)
+            | Attribute::InItemGroup(v)
             | Attribute::AddedBy(v)
             | Attribute::HasEnchant(v)
             | Attribute::HasName(v)
@@ -206,7 +207,7 @@ impl Attribute {
             },
             "has_color" => Attribute::HasColor(text()?),
             "has_fluid" => Attribute::HasFluid(text()?),
-            "in_item_group" => return Err(Refused::NotPorted(name.to_owned())),
+            "in_item_group" => Attribute::InItemGroup(text()?),
             _ => return Err(Refused::Unknown(name.to_owned())),
         })
     }
@@ -760,7 +761,7 @@ mod tests {
         assert!(!attributes(None, &[]).test(&dirt));
         assert!(attributes(Some("whitelist_conj"), &[]).test(&dirt));
         assert!(attributes(Some("blacklist"), &[]).test(&dirt));
-        // Valued attributes, and ones the port can't read left out (decoded as null).
+        // Valued attributes preserve each attribute's argument.
         let tag = attributes(
             None,
             &[
@@ -780,9 +781,19 @@ mod tests {
                 tests: vec![
                     (Attribute::InTag("minecraft:logs".into()), false),
                     (Attribute::HasColor("red".into()), false),
+                    (
+                        Attribute::InItemGroup("minecraft:tools_and_utilities".into()),
+                        false
+                    ),
                 ]
             }
         );
+        let mut utility = s("minecraft:compass");
+        utility.attributes = vec![Attribute::InItemGroup(
+            "minecraft:tools_and_utilities".into(),
+        )];
+        assert!(tag.test(&utility));
+        assert!(!tag.test(&dirt));
         // Fluids never pass an attribute filter.
         assert!(!any.test_fluid(Fluid::Water));
     }
@@ -823,10 +834,10 @@ mod tests {
             Attribute::parse("book_copy", Some("2")),
             Ok(Attribute::BookCopy(2))
         );
-        assert!(matches!(
-            Attribute::parse("in_item_group", Some("x")),
-            Err(Refused::NotPorted(_))
-        ));
+        let group = Attribute::parse("create:in_item_group", Some("example:equipment")).unwrap();
+        assert_eq!(group.id(), "create:in_item_group");
+        assert_eq!(group.value().as_deref(), Some("example:equipment"));
+        assert!(Attribute::parse("in_item_group", None).is_err());
         assert!(matches!(
             Attribute::parse("nope", None),
             Err(Refused::Unknown(_))

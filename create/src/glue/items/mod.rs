@@ -89,6 +89,12 @@ pub(crate) fn add_reload_listeners(listeners: &mut dyn mod_api::ServerReloadList
     filters::add_reload_listeners(listeners);
 }
 
+/// The SDK holds the catalog for the active data generation; this gives read-only filters
+/// its snapshot before the server's levels tick.
+pub(crate) fn refresh_item_groups(host: &mut dyn ServerHost) {
+    filters::refresh_item_groups(host);
+}
+
 /// Create's tooltips on its items (`ClientEvents.addToItemTooltip`).
 pub(crate) fn item_tooltip(host: &dyn ClientHost, event: &mut mod_api::ItemTooltipEvent<'_>) {
     tooltip::item_tooltip(host, event);
@@ -298,7 +304,13 @@ impl Subsystem for Items {
     }
 
     fn world_closed(&self) {
+        filters::clear_item_groups();
         symmetry::world_closed();
+    }
+
+    fn tags_updated(&self, _host: &mut dyn ServerHost) {
+        // Reloading cannot build a catalog. The next server tick gets the new generation.
+        filters::clear_item_groups();
     }
 
     /// `ConfigureSymmetryWandPacket`, `ConfigureWorldshaperPacket`.
