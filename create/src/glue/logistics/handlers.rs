@@ -254,6 +254,9 @@ impl BeltItems {
             let d = &w.dims[dim];
             let c = d.belt_of.get(&self.0.pos).copied()?;
             let b = d.belts.get(&c)?;
+            if !b.segment.transports() {
+                return None;
+            }
             let i = b.chain.iter().position(|p| *p == self.0.pos)? as i32;
             b.items.stack_at(i).map(|s| (c, i, s.clone()))
         })
@@ -511,26 +514,29 @@ fn accepts(host: &dyn mod_api::Host, at: At, stack: &ItemStack) -> bool {
 
 /// `BrassTunnelItemHandler`: one slot, the stack the tunnel hands out. A distributing tunnel
 /// (`hasDistributionBehaviour`) takes a stack, up to its stack size, while it holds none and
-/// hands out with no synchronized group (`canTakeItems`); Create's rest (into the belt below,
-/// and every extraction) is not ported here.
+/// hands out with no synchronized group (`canTakeItems`); otherwise inserts pass to the belt
+/// below (`getBeltCapability`), and extraction always delegates to the belt below.
 struct TunnelItems(At);
 
 impl TunnelItems {
-    /// Whether the tunnel takes a stack now: distributing, its slot empty, not handing out
-    /// with its synchronized group.
-    fn takes(&self, host: &mut dyn ServerHost) -> bool {
-        let Some(dimension) = self.0.level.dimension().id(&*host) else {
-            return false;
-        };
-        let Some(lv) = super::super::server::ServerLevel::new(host, &dimension) else {
-            return false;
-        };
+    fn belt(&self) -> BeltItems {
+        BeltItems(At {
+            pos: [self.0.pos[0], self.0.pos[1] - 1, self.0.pos[2]],
+            ..self.0
+        })
+    }
+
+    fn target(&self, host: &mut dyn ServerHost) -> Option<create_engine::tunnel::HandlerTarget> {
+        let dimension = self.0.level.dimension().id(&*host)?;
+        let lv = super::super::server::ServerLevel::new(host, &dimension)?;
         let pos = self.0.pos;
-        if !super::tunnel::has_distribution(&lv, pos) {
-            return false;
+        let target = super::tunnel::handler_target(&lv, pos)?;
+        if target == create_engine::tunnel::HandlerTarget::Distribute
+            && read(&*lv.host, lv.host.block_entity(lv.level, pos), 0).is_some()
+        {
+            return Some(create_engine::tunnel::HandlerTarget::Busy);
         }
-        let synced = with_world(|w| w.dims[self.0.dim].brass.get(&pos).is_some_and(|b| b.synced));
-        synced == Some(false) && read(&*lv.host, lv.host.block_entity(lv.level, pos), 0).is_none()
+        Some(target)
     }
 }
 
@@ -555,23 +561,28 @@ impl ResourceHandler<ItemResource> for TunnelItems {
         resource: &ItemResource,
         amount: u32,
     ) -> u32 {
-        if index != 0 || !self.takes(host) {
-            return 0;
+        match self.target(host) {
+            Some(create_engine::tunnel::HandlerTarget::BeltBelow) => {
+                self.belt().insert(host, tx, index, resource, amount)
+            }
+            Some(create_engine::tunnel::HandlerTarget::Distribute) if index == 0 => {
+                let Some(e) = self.0.entity(&*host, self.0.pos) else {
+                    return 0;
+                };
+                let room = limit(&*host, resource);
+                put(host, tx, e, 0, resource, amount, room)
+            }
+            _ => 0,
         }
-        let Some(e) = self.0.entity(&*host, self.0.pos) else {
-            return 0;
-        };
-        let room = limit(&*host, resource);
-        put(host, tx, e, 0, resource, amount, room)
     }
     fn extract(
         &self,
-        _host: &mut dyn ServerHost,
-        _tx: &Transaction,
-        _index: usize,
-        _resource: &ItemResource,
-        _amount: u32,
+        host: &mut dyn ServerHost,
+        tx: &Transaction,
+        index: usize,
+        resource: &ItemResource,
+        amount: u32,
     ) -> u32 {
-        0
+        self.belt().extract(host, tx, index, resource, amount)
     }
 }

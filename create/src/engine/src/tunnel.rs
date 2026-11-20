@@ -258,6 +258,17 @@ impl Brass {
         self.stack.is_none() && !self.synced
     }
 
+    /// `BrassTunnelItemHandler.insertItem` (`:33-49`): where an item-handler insert goes.
+    pub fn handler_target(&self, distributing: bool) -> HandlerTarget {
+        if !distributing {
+            HandlerTarget::BeltBelow
+        } else if self.can_take() {
+            HandlerTarget::Distribute
+        } else {
+            HandlerTarget::Busy
+        }
+    }
+
     /// `BrassTunnelBlockEntity.tick` (`:131-200`): advances the timer and decides the tick phase.
     pub fn begin_tick(&mut self, belt_moving: bool) -> BrassPhase {
         if self.progress > 0 {
@@ -320,6 +331,17 @@ pub enum BrassPhase {
     Wait,
     /// `distributionProgress == 0`: distribute held stack (`:198-218`).
     Distribute,
+}
+
+/// Where `BrassTunnelItemHandler.insertItem` routes an insertion (`BrassTunnelItemHandler.java:33-49`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandlerTarget {
+    /// `!hasDistributionBehaviour()`: delegate to the belt segment below (`getBeltCapability`).
+    BeltBelow,
+    /// `hasDistributionBehaviour() && canTakeItems()`: take into `stackToDistribute`.
+    Distribute,
+    /// `hasDistributionBehaviour() && !canTakeItems()`: refuse while holding or synced.
+    Busy,
 }
 
 /// `BrassTunnelBlockEntity.getAdjacent`: the adjacent position across `axis` (`left` is
@@ -766,5 +788,23 @@ mod tests {
         assert_eq!(sync_update, Some(false));
         assert!(!can_gather);
         assert!(!b.synced);
+    }
+
+    #[test]
+    fn non_distributing_tunnel_passes_handler_inserts_to_belt() {
+        // Observed in t7-brass-item-handler-belt: a straight brass tunnel with nothing beside it
+        // (`hasDistributionBehaviour() == false`) delegates item-handler inserts to its belt
+        // capability, even if it holds or doesn't hold distribution state.
+        let mut b = Brass::default();
+        assert_eq!(b.handler_target(false), HandlerTarget::BeltBelow);
+        assert_eq!(b.handler_target(true), HandlerTarget::Distribute);
+
+        b.stack = Some(("minecraft:iron_ingot".into(), 3));
+        assert_eq!(b.handler_target(false), HandlerTarget::BeltBelow);
+        assert_eq!(b.handler_target(true), HandlerTarget::Busy);
+
+        b.stack = None;
+        b.synced = true;
+        assert_eq!(b.handler_target(true), HandlerTarget::Busy);
     }
 }

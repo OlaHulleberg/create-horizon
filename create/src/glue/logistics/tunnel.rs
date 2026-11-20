@@ -100,6 +100,20 @@ pub fn can_take(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
     .unwrap_or(false)
 }
 
+/// `BrassTunnelItemHandler.insertItem`: whether the brass tunnel at `pos` passes inserts to its
+/// belt below, accepts them to distribute, or holds them back.
+pub fn handler_target(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<tunnel::HandlerTarget> {
+    let distributing = has_distribution(lv, pos);
+    let dim = lv.dim;
+    with_world(|w| {
+        w.dims[dim]
+            .brass
+            .get(&pos)
+            .map(|b| b.handler_target(distributing))
+    })
+    .flatten()
+}
+
 /// `setStackToDistribute`: the brass tunnel at `pos` holds `item` (come in by side `from`) to
 /// hand out, in its block entity's slot (for hoppers and funnels) and its state.
 pub fn set_stack(
