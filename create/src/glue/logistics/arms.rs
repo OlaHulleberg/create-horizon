@@ -30,6 +30,7 @@ use super::items::{self, face, random_angle, stack_limit, upright};
 use super::{has_collision, info_at};
 use create_engine::Block;
 use create_engine::arm::{self, Kind, Point, Stack};
+use create_engine::depot;
 use create_engine::ejector;
 use create_engine::kinetics::Dir;
 use mod_api::{Compound, PlayerRef, ServerHost, Tag};
@@ -952,9 +953,11 @@ pub(super) fn depot_insert(
             if e.state != ejector::State::Charged || held.as_ref().is_some_and(|h| h.1 != item) {
                 return count;
             }
-            let limit = if e.max_stack == 0 { 64 } else { e.max_stack }.min(max);
             let present: u32 = stacks.iter().map(|s| u32::from(s.2)).sum();
-            u32::from(limit).saturating_sub(present).min(255) as u8
+            // `getRemainingSpace`: the held stack's own max caps the limit, and an empty
+            // depot holds but one (`ItemStack.EMPTY.getMaxStackSize()`).
+            let held_max = if held.is_some() { max } else { 1 };
+            depot::merge_take(e.max_stack, held_max, present, count)
         }
     };
     let n = count.min(room);
