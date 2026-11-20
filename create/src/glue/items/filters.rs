@@ -16,8 +16,8 @@
 //!
 //! `fluid_container` and `has_fluid` know the buckets (the items the game gives a fluid
 //! handler), `has_color` dyes, fireworks and colour-named items, and
-//! `shulker_fill_level` a shulker box's `container`. Left out: `in_item_group`, as no API reads
-//! the creative tabs (`API_GAPS.md`).
+//! `shulker_fill_level` a shulker box's `container`. `in_item_group` checks the creative
+//! catalog; the picker still needs the SDK to expose each tab's display name (`API_GAPS.md`).
 //!
 //! `max_enchanted` reads each enchantment's maximum level from the server's data
 //! (`enchantment/*.json`'s `max_level`, listed by a data reload listener), as the host answers
@@ -34,12 +34,39 @@ use create_engine::filter::{
     Passes, Probe, RESPECT_NBT_KEY, Spec,
 };
 use mod_api::{
-    CommandArgumentValue, CommandSource, Compound, Hand, Host, HostSide, Identifier,
-    InteractionResult, ItemPart, ItemStack, PlayerRef, RunModCommandEvent, ServerHost, SoundSource,
-    Tag, UseItemEvent, UseOnEvent,
+    CommandArgumentValue, CommandSource, Compound, CreativeModeTabs, CreativeTabPermissions, Hand,
+    Host, HostSide, Identifier, InteractionResult, ItemPart, ItemStack, PlayerRef,
+    RunModCommandEvent, ServerHost, SoundSource, Tag, UseItemEvent, UseOnEvent,
 };
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::sync::Arc;
+
+thread_local! {
+    /// A snapshot for read-only filter probes, which may run in a capability query. Remove
+    /// it when the SDK can read the already-built catalog without a mutable Host.
+    static ITEM_GROUPS: RefCell<Option<Arc<CreativeModeTabs>>> = const { RefCell::new(None) };
+    static ITEM_GROUPS_DIRTY: Cell<bool> = const { Cell::new(true) };
+}
+
+pub(super) fn refresh_item_groups(host: &mut dyn ServerHost) {
+    if ITEM_GROUPS_DIRTY.get()
+        && let Ok(tabs) = host.creative_tabs(CreativeTabPermissions::Normal)
+    {
+        ITEM_GROUPS.set(Some(tabs));
+        ITEM_GROUPS_DIRTY.set(false);
+    }
+}
+
+pub(super) fn invalidate_item_groups() {
+    ITEM_GROUPS_DIRTY.set(true);
+}
+
+pub(super) fn clear_item_groups() {
+    ITEM_GROUPS.set(None);
+    invalidate_item_groups();
+}
 
 fn flag(t: Option<&Tag>) -> bool {
     matches!(t, Some(Tag::Byte(b)) if *b != 0)
@@ -436,6 +463,13 @@ impl Probe for Looked<'_> {
                 .and_then(|id| host.tags().key(&id))
                 .and_then(|k| host.tags().is_in_tag(item, k))
                 .unwrap_or(false),
+            Attribute::InItemGroup(group) => ITEM_GROUPS.with_borrow(|tabs| {
+                tabs.as_ref()
+                    .and_then(|tabs| tabs.tab(group))
+                    .is_some_and(|tab| {
+                        tab.contains(host, stack) || tab.contains(host, &ItemStack::of(item))
+                    })
+            }),
             Attribute::AddedBy(m) => self.id.split_once(':').map_or("minecraft", |s| s.0) == m,
             // `getEnchantmentsForCrafting`: a book's stored ones.
             Attribute::HasEnchant(e) => {
@@ -726,9 +760,6 @@ pub(super) fn command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>)
                 };
                 match Attribute::parse(kind, value) {
                     Ok(at) => tests.push((at, inverted)),
-                    Err(filter::Refused::NotPorted(n)) => {
-                        return format!("filter: the {n} attribute is not ported");
-                    }
                     Err(filter::Refused::Unknown(n)) => return format!("filter: {n}?"),
                 }
             }
@@ -925,6 +956,18 @@ fn attr_line(kind: &str, value: Option<String>) -> filter_screen::AttrLine {
             value
                 .as_ref()
                 .map(|v| format!("#{}", v.trim_start_matches('#'))),
+            false,
+        ),
+        // Show the registry id, not a guessed title. A saved row without an id is unknown.
+        "in_item_group" => (
+            name.to_owned(),
+            Some(
+                value
+                    .as_deref()
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or("?")
+                    .to_owned(),
+            ),
             false,
         ),
         // `ModInfo.getDisplayName`, else the id capitalised.
