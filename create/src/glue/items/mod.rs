@@ -309,8 +309,8 @@ impl Subsystem for Items {
     }
 
     fn tags_updated(&self, _host: &mut dyn ServerHost) {
-        // Reloading cannot build a catalog. The next server tick gets the new generation.
-        filters::clear_item_groups();
+        // Keep the last catalog while the next server tick builds the new generation.
+        filters::invalidate_item_groups();
     }
 
     /// `ConfigureSymmetryWandPacket`, `ConfigureWorldshaperPacket`.
