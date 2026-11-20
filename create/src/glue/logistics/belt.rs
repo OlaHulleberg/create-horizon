@@ -474,7 +474,14 @@ pub fn handle_insertion(
         return Some(rest);
     }
     // BeltBlockEntity.tryInsertingFromSide on the next belt.
-    let (c2, index, seg2) = belt_segment(lv, next)?;
+    let Some((c2, index, seg2)) = belt_segment(lv, next) else {
+        // A belt segment whose chain has not formed has no controller to insert into: the
+        // behaviour gives the stack back untouched.
+        if with_world(|w| w.block_at(lv.dim, next)) == Some(Some(create_engine::Block::Belt)) {
+            return Some(item.count);
+        }
+        return None;
+    };
     if !seg2.transports() {
         return Some(item.count);
     }
@@ -545,7 +552,11 @@ pub fn direct_input_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
     let dim = lv.dim;
     let kept = with_world(|w| {
         let d = &w.dims[dim];
-        d.depots.contains_key(&pos) || d.belt_of.contains_key(&pos) || d.drains.contains_key(&pos)
+        // Every belt block entity is a `DirectBeltInputBehaviour`, whether or not its chain has
+        // formed yet (`BeltBlockEntity.addBehaviours`).
+        d.depots.contains_key(&pos)
+            || w.block_at(dim, pos) == Some(create_engine::Block::Belt)
+            || d.drains.contains_key(&pos)
     });
     kept == Some(true)
         || funnel_at(lv, pos).is_some()
@@ -575,6 +586,11 @@ pub fn direct_input_accepts(lv: &ServerLevel<'_>, pos: [i32; 3], side: Dir) -> b
         return rpm != 0.0
             && !matches!(seg.slope, belt::Slope::Sideways | belt::Slope::Vertical)
             && belt::movement_facing(rpm, seg.facing) != side.opposite();
+    }
+    if with_world(|w| w.block_at(lv.dim, pos)) == Some(Some(create_engine::Block::Belt)) {
+        // A segment whose chain has not formed: `getControllerBE` finds nothing and
+        // `tryInsertingFromSide` refuses.
+        return false;
     }
     if let Some(only) = super::super::processing::belt_input_side(lv, pos) {
         return only.is_none_or(|d| d == side);

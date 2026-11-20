@@ -1334,16 +1334,11 @@ impl CreateWorld {
             d.wheels.push(pos);
             d.wheel_checks.push(pos);
         }
-        if block == Block::Belt && !d.belt_of.contains_key(&pos) {
-            d.belt_dirty.push(pos);
-        }
         if block == Block::Depot && !d.depots.contains_key(&pos) {
             // Placed or loaded: clients draw what its block entity holds.
             d.depots.insert(pos, None);
             d.depot_changes.push(pos);
         }
-        let settings = d.settings.get(&pos).copied().unwrap_or_default();
-        let [a, b] = parts(block, info, &settings);
         let previous = d.states.get(&pos).and_then(|s| self.table.get(*s));
         // The block entity survives (another valve colour too); `KineticBlock.onPlace` still
         // treats a different block as non-equivalent.
@@ -1352,6 +1347,24 @@ impl CreateWorld {
         // A known-shape write skips it, leaving a retained block entity's information intact.
         let retain_kinetics = skip_shape_updates
             || previous.is_some_and(|(b, old)| kinetically_equivalent(b, old, block, info));
+        // A state write that is not kinetically equivalent runs `clearKineticInformation`, which
+        // a belt segment overrides to drop its `controller`, `beltLength` and `index` too. It is
+        // no segment of a belt until `initBelt` looks again, and `getController()` is itself
+        // meanwhile, so it is no neighbour of the belt's other segments.
+        if same && block == Block::Belt && !retain_kinetics {
+            d.belt_of.remove(&pos);
+            if let Some(s) = d.settings.get_mut(&pos) {
+                s.belt = Some(pos);
+            }
+            if !d.belt_dirty.contains(&pos) {
+                d.belt_dirty.push(pos);
+            }
+        }
+        if block == Block::Belt && !d.belt_of.contains_key(&pos) && !d.belt_dirty.contains(&pos) {
+            d.belt_dirty.push(pos);
+        }
+        let settings = d.settings.get(&pos).copied().unwrap_or_default();
+        let [a, b] = parts(block, info, &settings);
         if !same {
             d.kinetics.remove(pos);
         }
@@ -3446,7 +3459,8 @@ impl CreateWorld {
         }
     }
 
-    /// BeltBlockEntity.tick initializes its own chain before the base kinetic tick.
+    /// `BeltBlockEntity.tick` initializes its own chain before the base kinetic tick:
+    /// `BeltBlock.initBelt` (`beltLength == 0`).
     fn initialize_belt(&mut self, dim: usize, pos: [i32; 3]) {
         if self.dims[dim].belt_of.contains_key(&pos) {
             return;
@@ -3477,8 +3491,19 @@ impl CreateWorld {
         let d = &mut self.dims[dim];
         for p in &chain {
             d.belt_of.insert(*p, controller);
+            // `initBelt` points every segment at `currentPos`; a segment that was a controller
+            // is one no longer, and its inventory (`BeltBlockEntity.inventory`) is orphaned
+            // with the items the slicer did not move.
+            if *p != controller {
+                d.belts.remove(p);
+            }
         }
-        let items = d.belt_saved.remove(&controller).unwrap_or_default();
+        // `initBelt` leaves the controller's inventory alone: one the controller already had
+        // survives the chain changing under it (a join keeps the clicked belt's, F4).
+        let items = match d.belts.remove(&controller) {
+            Some(old) => old.items,
+            None => d.belt_saved.remove(&controller).unwrap_or_default(),
+        };
         d.belts.insert(
             controller,
             Belt {
@@ -3507,9 +3532,29 @@ impl CreateWorld {
         }
     }
 
-    /// `BeltSlicer`'s first step (`detachKinetics`, `beltLength = 0` on every segment): the belt
-    /// with segment `pos` is taken apart, its chain and items handed back; its segments form
-    /// belts again after the tick, from their states then (`settle_belts`).
+    /// `BeltBlock.getBeltChain` of the belt segment `pos` belongs to.
+    pub fn belt_chain(&self, dim: usize, pos: [i32; 3]) -> Option<Vec<[i32; 3]>> {
+        let d = &self.dims[dim];
+        let c = *d.belt_of.get(&pos)?;
+        Some(d.belts.get(&c)?.chain.clone())
+    }
+
+    /// One segment of `BeltSlicer`'s first loop over a chain (`BeltSlicer.java:86`, `:209`,
+    /// `:290`, `:317`): `detachKinetics()` and `beltLength = 0`, so the segment finds its chain
+    /// again at its own tick (`initBelt`). The controller's inventory stays where it is.
+    pub fn detach_belt_segment(&mut self, dim: usize, pos: [i32; 3]) {
+        let d = &mut self.dims[dim];
+        d.belt_of.remove(&pos);
+        if !d.belt_dirty.contains(&pos) {
+            d.belt_dirty.push(pos);
+        }
+        d.kinetics.detach_kinetics(pos);
+    }
+
+    /// `BeltSlicer`'s first step over a belt (`BeltSlicer.java:86`, `:209`, `:290`): every
+    /// segment `detachKinetics()`, and `beltLength = 0` (`BeltBlockEntity.tick` then runs
+    /// `initBelt` at each segment's own turn). The controller's inventory and the chain are
+    /// handed back; the segments form belts again from their states then.
     pub fn take_belt(&mut self, dim: usize, pos: [i32; 3]) -> Option<([i32; 3], Belt)> {
         let d = &mut self.dims[dim];
         let c = *d.belt_of.get(&pos)?;
@@ -3517,6 +3562,7 @@ impl CreateWorld {
         for p in &b.chain {
             d.belt_of.remove(p);
             d.belt_dirty.push(*p);
+            d.kinetics.detach_kinetics(*p);
         }
         d.belt_changes.push(c);
         d.belt_saved_changes.insert(c);
@@ -3529,8 +3575,71 @@ impl CreateWorld {
         self.dims[dim].belt_quiet.insert(pos);
     }
 
+    /// `BeltBlockEntity.destroy` while the slicer sets the clicked START to air: the block
+    /// entity is still the controller, so `getInventory().ejectAll()` takes every item off the
+    /// belt and drops it where it is (against the `beltLength` the slicer has just zeroed).
+    pub fn destroy_belt(&mut self, dim: usize, belt: &mut Belt) {
+        let d = &mut self.dims[dim];
+        let controller = belt.chain[0];
+        for item in belt.items.eject_all() {
+            d.belt_drops.push((controller, belt.segment, 0, item));
+        }
+        d.belt_saved_changes.insert(controller);
+    }
+
+    /// `BeltInventory.addItem` on the belt whose controller is `controller`: the items are on it
+    /// from its next tick.
+    pub fn belt_add_items(
+        &mut self,
+        dim: usize,
+        controller: [i32; 3],
+        items: impl IntoIterator<Item = crate::belt::Item>,
+    ) {
+        let d = &mut self.dims[dim];
+        if let Some(belt) = d.belts.get_mut(&controller) {
+            belt.items.add_all(items);
+            d.belt_changes.push(controller);
+            d.belt_saved_changes.insert(controller);
+        }
+    }
+
+    /// `BeltInventory.getTransportedItems` of the belt whose controller is `controller`, to
+    /// edit in place (`BeltSlicer`'s flipped join moves every item on the other belt).
+    pub fn belt_items_mut(
+        &mut self,
+        dim: usize,
+        controller: [i32; 3],
+    ) -> Option<&mut Vec<crate::belt::Item>> {
+        let d = &mut self.dims[dim];
+        if !d.belts.contains_key(&controller) {
+            return None;
+        }
+        d.belt_saved_changes.insert(controller);
+        Some(&mut d.belts.get_mut(&controller)?.items.items)
+    }
+
+    /// `BeltSlicer.java:311` `controllerBE.inventory = null`: the controller's items leave with
+    /// the returned list and its inventory starts over — a fresh `BeltInventory`, whose
+    /// `beltMovementPositive` is false until it ticks.
+    pub fn replace_belt_inventory(
+        &mut self,
+        dim: usize,
+        controller: [i32; 3],
+    ) -> Vec<crate::belt::Item> {
+        let d = &mut self.dims[dim];
+        let Some(belt) = d.belts.get_mut(&controller) else {
+            return Vec::new();
+        };
+        let items = std::mem::take(&mut belt.items);
+        belt.items = crate::belt::Inventory::fresh(Vec::new());
+        d.belt_saved_changes.insert(controller);
+        items.items
+    }
+
     /// The belt whose controller will be `controller` takes `items` once its chain forms; its
-    /// segments `chain` look for their chain after the tick.
+    /// segments `chain` look for their chain after the tick. An empty inventory is kept: its
+    /// direction flag is part of what `BeltBlockEntity.write` saves (`BeltSlicer` lengthening a
+    /// belt at its END keeps the controller's `BeltInventory`).
     pub fn reform_belt(
         &mut self,
         dim: usize,
@@ -3539,9 +3648,7 @@ impl CreateWorld {
         items: crate::belt::Inventory,
     ) {
         let d = &mut self.dims[dim];
-        if !items.is_empty() {
-            d.belt_saved.insert(controller, items);
-        }
+        d.belt_saved.insert(controller, items);
         d.belt_dirty.extend_from_slice(chain);
     }
 
@@ -5315,6 +5422,48 @@ mod tests {
         w
     }
 
+    /// The parts of `long_belt_world`'s belt states.
+    const BELT_START: u32 = 11;
+    const BELT_MIDDLE: u32 = 12;
+    const BELT_END: u32 = 13;
+
+    /// One belt of `length` segments along +z from `[0, 8, 0]` (facing south), its creative
+    /// motor at `[-1, 8, 0]` turning the START.
+    fn long_belt_world(length: i32, rpm: f32) -> CreateWorld {
+        let belt = |part| {
+            (
+                "create:belt",
+                vec![("facing", "south"), ("slope", "horizontal"), ("part", part)],
+            )
+        };
+        let names = [
+            ("create:creative_motor", vec![("facing", "east")]),
+            belt("start"),
+            belt("middle"),
+            belt("end"),
+        ];
+        states::set_range(10, 4);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        for i in 0..length {
+            let state = if i == 0 {
+                BELT_START
+            } else if i == length - 1 {
+                BELT_END
+            } else {
+                BELT_MIDDLE
+            };
+            w.block_changed(0, [0, 8, i], 0, state);
+        }
+        w.block_changed(0, [-1, 8, 0], 0, 10);
+        w.set_motor(0, [-1, 8, 0], rpm);
+        w.settle_belts(0);
+        w.tick(0, &mut Vec::new());
+        w
+    }
+
     #[test]
     fn registrations_include_only_create_block_entities() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -5355,6 +5504,118 @@ mod tests {
         assert!(w.dims[0].block_entities.registration_order(a) > original);
         w.block_changed(0, [6, 0, 0], 16, 13);
         assert_eq!(w.dims[0].block_entities.registration_order([6, 0, 0]), None);
+        states::clear_range();
+    }
+
+    /// Java #130: `BeltSlicer` sets the clicked START to air, which runs
+    /// `BeltBlockEntity.destroy` -> `getInventory().ejectAll()`: the items leave the belt as
+    /// entities and the transfer that follows finds an emptied inventory (f1: an iron stack of
+    /// 15 at 0.1625 is gone from the shortened 3-long belt the next tick).
+    #[test]
+    fn slicer_shorten_from_start_ejects_the_controller_inventory() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = long_belt_world(5, 32.0);
+        let c = [0, 8, 0];
+        let mut item = crate::belt::Item::new("minecraft:iron_ingot", 15, 0, false);
+        item.position = 0.16249985;
+        w.dims[0].belts.get_mut(&c).unwrap().items =
+            crate::belt::Inventory::from_saved(vec![item], false);
+        let (_, mut taken) = w.take_belt(0, c).unwrap();
+        // The slicer's `UPDATE_MOVE_BY_PISTON` write: no cascade, but `destroy` still runs.
+        w.remove_belt_quietly(0, c);
+        w.destroy_belt(0, &mut taken);
+        assert!(taken.items.items.is_empty());
+        let drops = &w.dims[0].belt_drops;
+        assert_eq!(drops.len(), 1);
+        assert_eq!((drops[0].0, drops[0].2), (c, 0));
+        assert_eq!(
+            (drops[0].3.item.as_str(), drops[0].3.count),
+            ("minecraft:iron_ingot", 15)
+        );
+        states::clear_range();
+    }
+
+    /// Java #131: the slicer detaches every segment before it changes states, and a segment whose
+    /// part changed drops its controller (`clearKineticInformation`), so `propagateRotationTo`
+    /// joins neither the old belt to the new half nor the two halves. f2: the second half of a
+    /// split at segment 3 of an 8-long belt has speed 0 and no source while the first half
+    /// keeps turning at 32.
+    #[test]
+    fn slicer_split_leaves_the_cut_off_half_stopped() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = long_belt_world(8, 32.0);
+        let middle = [0, 8, 3];
+        let start_of_second = [0, 8, 4];
+        // `BeltSlicer`: `detachKinetics` + `beltLength = 0`, then each half re-forms.
+        let (controller, taken) = w.take_belt(0, middle).unwrap();
+        w.switching_block_state(0, middle, BELT_END);
+        w.block_changed(0, middle, BELT_MIDDLE, BELT_END);
+        w.switching_block_state(0, start_of_second, BELT_START);
+        w.block_changed(0, start_of_second, BELT_MIDDLE, BELT_START);
+        assert!(!w.dims[0].belt_of.contains_key(&start_of_second));
+        let (first, second) = taken.chain.split_at(4);
+        w.reform_belt(0, controller, first, taken.items);
+        w.reform_belt(
+            0,
+            start_of_second,
+            second,
+            crate::belt::Inventory::fresh(Vec::new()),
+        );
+        w.settle_belts(0);
+        assert_eq!(w.speed(0, [0, 8, 0]), Some(32.0));
+        assert_eq!(w.speed(0, start_of_second), Some(0.0));
+        let saved = w.dims[0].kinetics.saved_state(start_of_second, 0).unwrap();
+        assert_eq!((saved.source, saved.network), (None, None));
+        assert_eq!(w.belt_chain(0, start_of_second).unwrap().len(), 4);
+        states::clear_range();
+    }
+
+    /// Java #132: a controller the slicer makes anew gets a fresh `BeltInventory`
+    /// (`beltMovementPositive` false, f3), while one that stays keeps its inventory and flag
+    /// even when empty (f3b: a belt lengthened at its END stays positive).
+    #[test]
+    fn slicer_new_controller_starts_with_an_empty_direction_but_keeps_an_old_one() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = long_belt_world(4, 0.0);
+        let c = [0, 8, 0];
+        w.dims[0].belts.get_mut(&c).unwrap().items =
+            crate::belt::Inventory::from_saved(Vec::new(), true);
+        let (_, mut taken) = w.take_belt(0, c).unwrap();
+        assert!(
+            w.belt_chain(0, [0, 8, 1]).is_none(),
+            "the belt is taken apart"
+        );
+        let chain = taken.chain.clone();
+        w.reform_belt(0, c, &chain, std::mem::take(&mut taken.items));
+        w.settle_belts(0);
+        let saved = w.column_belts(0, 0, 0);
+        assert!(saved.iter().find(|(p, _)| *p == c).unwrap().1.positive);
+        // A controller made anew: `Inventory::fresh` is `new BeltInventory`, flag false.
+        let fresh = crate::belt::Inventory::fresh(Vec::new());
+        assert!(!fresh.positive);
+        states::clear_range();
+    }
+
+    /// Java #133: the clicked belt keeps ticking with its old `beltLength` (the slicer only
+    /// zeroes the other belt), so a merged item past the old end stops there instead of being
+    /// ejected (f4: 13.104 -> 8.000, still on the belt).
+    #[test]
+    fn joined_belt_keeps_the_clicked_controller_length_for_a_tick() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = long_belt_world(4, 32.0);
+        let c = [0, 8, 0];
+        let mut item = crate::belt::Item::new("minecraft:iron_ingot", 8, 0, false);
+        item.position = 9.104164;
+        w.dims[0].belts.get_mut(&c).unwrap().items.add(item);
+        let out = w.dims[0].belts.get_mut(&c).unwrap().items.tick(
+            4,
+            32.0 / 480.0,
+            true,
+            &mut ItemBeltSide,
+        );
+        assert!(out.ejected.is_empty());
+        let item = &w.dims[0].belts[&c].items.items[0];
+        assert!((item.position - 4.0).abs() < 1e-6);
         states::clear_range();
     }
 
@@ -5833,6 +6094,9 @@ mod tests {
         }
         w.switching_block_state(0, middle, 14);
         w.block_changed(0, middle, 12, 14);
+        // `BeltBlockEntity.clearKineticInformation` drops the segment's controller, so its next
+        // tick runs `initBelt` again (the glue settles belts before each solve).
+        w.settle_belts(0);
         for _ in 0..100 {
             w.tick(0, &mut events);
             assert_eq!(w.speed(0, middle), Some(32.0));

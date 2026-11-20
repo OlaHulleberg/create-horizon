@@ -6,7 +6,7 @@
 use super::super::server::{ServerLevel, update_all};
 use super::super::states;
 use super::super::world::with_world;
-use super::belt::{belt_color, belt_segment, belt_stack, eject_item};
+use super::belt::{belt_color, belt_segment, eject_item};
 use super::items;
 use create_engine::Block;
 use create_engine::belt::{Inventory, Item, Part, Segment};
@@ -171,7 +171,10 @@ pub fn use_wrench(
     // Shorten from an end.
     if seg.hovering_end(hit) {
         let clicked = lv.block_state(pos);
-        let (_, taken) = with_world(|w| w.take_belt(dim, pos)).flatten()?;
+        // `BeltSlicer.java:86-93`: `detachKinetics`, `invalidateItemHandler` and
+        // `beltLength = 0` on every segment of the belt; the belt is gone until its segments
+        // form a new chain at their own tick.
+        let (_, mut taken) = with_world(|w| w.take_belt(dim, pos)).flatten()?;
         let next = if seg.part == Part::End {
             sub(pos, v)
         } else {
@@ -181,6 +184,13 @@ pub fn use_wrench(
         let next_cased = flag(lv, next, "casing");
         set_segment(lv, next, seg, next_cased);
         with_world(|w| w.remove_belt_quietly(dim, pos));
+        // `BeltSlicer.java:97` sets the clicked segment to air with `UPDATE_MOVE_BY_PISTON`,
+        // which still runs `BeltBlockEntity.destroy`. Shortening from the START clicks the
+        // controller, so `getInventory().ejectAll()` takes every item off the belt before the
+        // transfer below, which then finds nothing to hand on.
+        if seg.part == Part::Start {
+            with_world(|w| w.destroy_belt(dim, &mut taken));
+        }
         set_air(lv, pos);
         // `levelEvent(PARTICLES_DESTROY_BLOCK, pos, Block.getId(state))`.
         if let Some(state) = clicked {
@@ -192,41 +202,27 @@ pub fn use_wrench(
         {
             crate::glue::items::give_back(&mut *lv.host, player, shaft);
         }
-        let mut items = taken.items.to_save();
         let chain: Vec<[i32; 3]> = taken.chain.iter().copied().filter(|p| *p != pos).collect();
         let controller = chain[0];
         if seg.part == Part::End {
-            // Eject the items past the new end.
-            let (gone, kept): (Vec<Item>, Vec<Item>) = std::mem::take(&mut items.items)
+            // `BeltSlicer.java:106-113`: eject the items past the new end. The inventory keeps
+            // the controller that stays, and its direction flag with it.
+            let (gone, kept): (Vec<Item>, Vec<Item>) = std::mem::take(&mut taken.items.items)
                 .into_iter()
                 .partition(|i| i.position > (length - 1) as f32);
-            items.items = kept;
+            taken.items.items = kept;
             for i in gone {
-                eject_item(lv, taken.chain[0], &taken.segment, length, 0.0, &i);
+                // `BeltInventory.eject` reads the zeroed `beltLength` at this point.
+                eject_item(lv, controller, &taken.segment, 0, 0.0, &i);
             }
+            with_world(|w| w.reform_belt(dim, controller, &chain, taken.items));
         } else {
-            // The next segment is the controller now: items move back a segment, those off
-            // the belt drop where the start was.
-            let (gone, kept): (Vec<Item>, Vec<Item>) = std::mem::take(&mut items.items)
-                .into_iter()
-                .map(|mut i| {
-                    i.position -= 1.0;
-                    i
-                })
-                .partition(|i| i.position <= 0.0);
-            items.items = kept;
-            for i in gone {
-                if let Some(stack) = belt_stack(lv, &i) {
-                    let at = [
-                        f64::from(pos[0]) + 0.5,
-                        f64::from(pos[1]) + 11.0 / 16.0,
-                        f64::from(pos[2]) + 0.5,
-                    ];
-                    items::drop_stack(lv, at, [0.0; 3], stack, 10);
-                }
-            }
+            // `BeltSlicer.java:116-132`: `controllerBE.inventory = null; segmentBE.inventory =
+            // null; segmentBE.setController(next)`. The next segment is the controller now and
+            // gets a fresh `BeltInventory` (`beltMovementPositive` false); the emptied one has
+            // no item left to move.
+            with_world(|w| w.reform_belt(dim, controller, &chain, Inventory::fresh(Vec::new())));
         }
-        with_world(|w| w.reform_belt(dim, controller, &chain, items));
         return Some(true);
     }
 
@@ -280,31 +276,25 @@ pub fn use_wrench(
     let cut = index + i32::from(toward_positive);
     let cut = (cut.max(0) as usize).min(taken.chain.len());
     let (first, second) = taken.chain.split_at(cut);
-    let items = taken.items.to_save();
-    let (moved, kept): (Vec<Item>, Vec<Item>) = items
-        .items
+    // `BeltSlicer.java:222-236`: the items past the cut leave the old controller's inventory
+    // for `newController`, whose inventory the slicer nulls — a fresh `BeltInventory`
+    // (`beltMovementPositive` false) that the items are added to. The first half keeps the old
+    // inventory, and its direction flag.
+    let mut kept = taken.items;
+    let shift = index as f32 + if toward_positive { 1.0 } else { 0.0 };
+    let (moved, rest): (Vec<Item>, Vec<Item>) = std::mem::take(&mut kept.items)
         .into_iter()
-        .partition(|i| i.position - index as f32 - if toward_positive { 1.0 } else { 0.0 } > 0.0);
-    let moved = moved
-        .into_iter()
-        .map(|mut i| {
-            i.position -= index as f32 + if toward_positive { 1.0 } else { 0.0 };
-            i
-        })
-        .collect();
+        .partition(|i| i.position - shift > 0.0);
+    kept.items = rest;
+    let moved = moved.into_iter().map(|mut i| {
+        i.position -= shift;
+        i
+    });
+    let mut fresh = Inventory::fresh(Vec::new());
+    fresh.add_all(moved);
     with_world(|w| {
-        w.reform_belt(
-            dim,
-            controller,
-            first,
-            Inventory::from_saved(kept, items.positive),
-        );
-        w.reform_belt(
-            dim,
-            new_controller,
-            second,
-            Inventory::from_saved(moved, items.positive),
-        );
+        w.reform_belt(dim, controller, first, kept);
+        w.reform_belt(dim, new_controller, second, fresh);
     });
     Some(true)
 }
@@ -320,11 +310,11 @@ pub fn use_connector(
 ) -> Option<bool> {
     let (_, _, seg) = belt_segment(lv, pos)?;
     let dim = lv.dim;
-    let length = with_world(|w| {
+    let (clicked_controller, length) = with_world(|w| {
         let d = &w.dims[dim];
-        d.belts
-            .get(d.belt_of.get(&pos)?)
-            .map(|b| b.chain.len() as i32)
+        let c = *d.belt_of.get(&pos)?;
+        let b = d.belts.get(&c)?;
+        Some((c, b.chain.len() as i32))
     })
     .flatten()?;
     if length == MAX_LENGTH {
@@ -363,23 +353,33 @@ pub fn use_connector(
         if other_length + length > MAX_LENGTH {
             return Some(false);
         }
-        let (_, mine) = with_world(|w| w.take_belt(dim, pos)).flatten()?;
-        let (_, theirs) = with_world(|w| w.take_belt(dim, next)).flatten()?;
-        // Their belt turns to face the same way when it faced the other.
+        // `BeltSlicer.java:290-306`: each of the other belt's segments, in chain order,
+        // `detachKinetics`, `invalidateItemHandler`, `beltLength = 0`, takes the clicked belt's
+        // colour, and turns to face the same way when it faced the other (`world.setBlock`,
+        // whose `updateIndirectNeighbourShapes` clears the segment's kinetics). The clicked
+        // belt's segments keep their length: `BeltSlicer.java:308` reads the merged chain back
+        // before the loop (`:315-321`) that zeroes a chain, so only the other belt is zeroed.
+        let mut their_chain = with_world(|w| w.belt_chain(dim, next)).flatten()?;
+        let their_controller = with_world(|w| w.dims[dim].belt_of.get(&next).copied()).flatten()?;
+        // Their belt turns to face the same way when it faced the other (`BeltSlicer`'s
+        // "Reverse items": every item on it moves to the mirrored position).
         let flip = seg.facing != other.facing;
-        let mut their_items = theirs.items.to_save();
-        for p in &theirs.chain {
+        if flip {
+            with_world(|w| {
+                if let Some(items) = w.belt_items_mut(dim, their_controller) {
+                    for i in items {
+                        i.position = other_length as f32 - i.position;
+                    }
+                }
+            });
+        }
+        for p in &their_chain {
+            with_world(|w| w.detach_belt_segment(dim, *p));
             if flip && let Some(s) = segment_at(lv, *p) {
                 let cased = flag(lv, *p, "casing");
                 set_segment_direct(lv, *p, s.flipped(), cased);
             }
         }
-        if flip {
-            for i in &mut their_items.items {
-                i.position = other_length as f32 - i.position;
-            }
-        }
-        let mut their_chain = theirs.chain.clone();
         if flip {
             their_chain.reverse();
         }
@@ -411,38 +411,36 @@ pub fn use_connector(
                 }
             }
         }
-        // The joined belt's start is the controller: the items of the belt after it move on
-        // by the length of the one before.
-        let my_items = mine.items.to_save();
-        let (chain, mut all) = if seg.part == Part::End {
-            let mut chain = mine.chain.clone();
-            chain.extend(their_chain);
-            let mut all = my_items.items;
-            all.extend(their_items.items.into_iter().map(|mut i| {
-                i.position += length as f32;
-                i
-            }));
-            (chain, all)
-        } else {
-            let mut chain = their_chain;
-            chain.extend(mine.chain.iter().copied());
-            let mut all = their_items.items;
-            all.extend(my_items.items.into_iter().map(|mut i| {
-                i.position += other_length as f32;
-                i
-            }));
-            (chain, all)
-        };
-        all.sort_by(|a, b| b.position.total_cmp(&a.position));
-        for p in &chain {
+        for p in &their_chain {
             set_color(lv, *p, color.as_deref());
         }
-        let controller = chain[0];
-        with_world(|w| w.reform_belt(dim, controller, &chain, Inventory::from_saved(all, true)));
+        if seg.part == Part::End {
+            // `BeltSlicer.java:322-333`: the clicked belt starts the merged belt, so its
+            // inventory stays the merged one (and its direction flag) and the other belt's
+            // (`mergedController.inventory = null`) moves into it, by the clicked belt's length.
+            let their_items = with_world(|w| w.replace_belt_inventory(dim, their_controller))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|mut i| {
+                    i.position += length as f32;
+                    i
+                });
+            with_world(|w| w.belt_add_items(dim, clicked_controller, their_items));
+        } else {
+            // The other belt starts the merged belt: its controller keeps its inventory and
+            // direction flag, our items move on by its length, and `controllerBE.inventory =
+            // null` empties ours (a fresh `BeltInventory` on it).
+            let mut mine = with_world(|w| w.replace_belt_inventory(dim, clicked_controller))
+                .unwrap_or_default();
+            for i in &mut mine {
+                i.position += other_length as f32;
+            }
+            with_world(|w| w.belt_add_items(dim, their_controller, mine));
+        }
         return Some(true);
     }
     // Lengthen it at this end.
-    let (_, taken) = with_world(|w| w.take_belt(dim, pos)).flatten()?;
+    let (_, mut taken) = with_world(|w| w.take_belt(dim, pos)).flatten()?;
     let cased = flag(lv, pos, "casing");
     set_segment(
         lv,
@@ -456,18 +454,28 @@ pub fn use_connector(
     set_segment_new(lv, next, seg);
     set_color(lv, next, color.as_deref());
     sound(lv, pos, "minecraft:block.wool.place", 0.5, 1.0);
-    let mut items = taken.items.to_save();
     let mut chain = taken.chain.clone();
     if seg.part == Part::Start {
+        // `BeltSlicer.java:352-361`: the placed segment is the controller now; its `getInventory`
+        // is a fresh `BeltInventory` (`beltMovementPositive` false) and the items move on by one
+        // segment.
         chain.insert(0, next);
-        for i in &mut items.items {
-            i.position += 1.0;
-        }
+        let mut fresh = Inventory::fresh(Vec::new());
+        fresh.add_all(
+            std::mem::take(&mut taken.items.items)
+                .into_iter()
+                .map(|mut i| {
+                    i.position += 1.0;
+                    i
+                }),
+        );
+        with_world(|w| w.reform_belt(dim, next, &chain, fresh));
     } else {
+        // The controller stays, and so does its inventory and direction flag.
         chain.push(next);
+        let controller = chain[0];
+        with_world(|w| w.reform_belt(dim, controller, &chain, taken.items));
     }
-    let controller = chain[0];
-    with_world(|w| w.reform_belt(dim, controller, &chain, items));
     Some(true)
 }
 
