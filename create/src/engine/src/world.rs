@@ -6171,6 +6171,105 @@ mod tests {
         );
     }
 
+    /// An ejector with nothing on it and nothing in its arc.
+    struct EmptyArc;
+    impl crate::ejector::World for EmptyArc {
+        fn present(&mut self) -> crate::ejector::Present {
+            crate::ejector::Present {
+                count: 0,
+                held_position: None,
+            }
+        }
+        fn target_refuses(&mut self, _: [i32; 3]) -> bool {
+            false
+        }
+        fn take_all(&mut self) -> Vec<(String, u8)> {
+            Vec::new()
+        }
+        fn insert(&mut self, _: [i32; 3], _: &str, count: u8) -> Option<u8> {
+            Some(count)
+        }
+        fn drop_item(&mut self, _: [f64; 3], _: [f64; 3], _: &str, _: u8) {}
+        fn clip(
+            &mut self,
+            _: [f64; 3],
+            _: [f64; 3],
+        ) -> Option<([f64; 3], [i32; 3], crate::kinetics::Dir)> {
+            None
+        }
+        fn extracting_funnel(&mut self, _: [i32; 3]) -> bool {
+            false
+        }
+    }
+
+    /// The shared walk for `ticks` entity turns, ticking each ejector as its block entity does:
+    /// its kinetic base, then the depot behaviour it extends, then its own tick.
+    fn walk_ejectors(w: &mut CreateWorld, ticks: usize) {
+        for _ in 0..ticks {
+            let mut turns = w.transport_ticks(0);
+            while let Some(turn) = turns.next(w) {
+                match turn {
+                    TransportTick::Ejector(p) => {
+                        w.ejector_base_tick(0, p);
+                        w.tick_depot(0, p, false);
+                        let speed = w.speed(0, p).unwrap_or(0.0);
+                        let Some(mut e) = w.dims[0].ejectors.remove(&p) else {
+                            continue;
+                        };
+                        e.tick(p, crate::kinetics::Dir::East, speed, &mut EmptyArc);
+                        w.dims[0].ejectors.insert(p, e);
+                    }
+                    TransportTick::Depot(p) => {
+                        w.tick_depot(0, p, false);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_idle_ejector_winds_down_once_the_walk_turns_it() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // e2-ejector-idle-wind-up: a motor turns an ejector whose plate was left open; the
+        // motor's speed is set the tick after it is placed, as a player scrolls it.
+        let names = [
+            ("create:creative_motor", vec![("facing", "south")]),
+            (
+                "create:weighted_ejector",
+                vec![("facing", "east"), ("waterlogged", "false")],
+            ),
+        ];
+        states::set_range(10, 2);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (motor, e) = ([0, 8, -1], [0, 8, 0]);
+        w.block_changed(0, motor, 0, 10);
+        w.block_changed(0, e, 0, 11);
+        let mut events = Vec::new();
+        // Its shaft stands still on the first turn (the motor's generator is solved after the
+        // level's block entities tick): the plate holds where it is (it began retracting open).
+        walk_ejectors(&mut w, 1);
+        w.tick(0, &mut events);
+        assert_eq!(w.speed(0, e), Some(16.0));
+        assert_eq!(
+            w.dims[0].ejectors[&e].state,
+            crate::ejector::State::Retracting
+        );
+        assert_eq!(w.dims[0].ejectors[&e].lid.value, 1.0);
+        // 16 rpm one block ahead: `getWindUpSpeed` is 16/256 a tick. Java's tick 10 shows
+        // the lid at 0.4375 after nine turns.
+        walk_ejectors(&mut w, 9);
+        assert_eq!(w.dims[0].ejectors[&e].lid.value, 0.4375);
+        // Sixteen ticks of winding bring it down; the next turn charges it, as Java's tick 20
+        // (charged) shows.
+        walk_ejectors(&mut w, 8);
+        assert_eq!(w.dims[0].ejectors[&e].state, crate::ejector::State::Charged);
+        assert_eq!(w.dims[0].ejectors[&e].lid.value, 0.0);
+    }
+
     struct ItemBeltSide;
     impl crate::belt::Surroundings for ItemBeltSide {
         fn ending(&mut self) -> crate::belt::Ending {
