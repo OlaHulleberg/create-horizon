@@ -28,10 +28,6 @@
 //! (`data_pack_files`), which the game's own `clearCopperOnLightningStrike` reads.
 //!
 //! Left out, for want of API (each in `API_GAPS.md`):
-//! - The weathering neighbours of Create's copper (`WeatheringCopper` and its age): no API says
-//!   which blocks are weathering copper nor their age; Create's own are known to the
-//!   engine and vanilla's are read from their ids (`exposed_`, `weathered_`, `oxidized_`, never
-//!   `waxed_`). A state fact for it would make it exact.
 //! - A placard shows a 3D item at half size (`PlacardRenderer`: `isGui3d`): no API reads an
 //!   item model's `gui3d`, so an item that places a block stands for it.
 

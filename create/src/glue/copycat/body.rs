@@ -7,7 +7,7 @@ use super::with_prop;
 use create_engine::Block;
 use create_engine::copycat::{self as cc, Candidate, Shape, Special};
 use create_engine::kinetics::{Axis, Dir};
-use mod_api::{BlockShapeKind, BlockState, Host, HostBlockStates, ItemStack};
+use mod_api::{BlockClass, BlockShapeKind, BlockState, Host, HostBlockStates, ItemStack};
 
 /// The default state of the block `stack` places (`BlockItem.getBlock().defaultBlockState()`).
 fn item_block(host: &dyn Host, stack: &ItemStack) -> Option<BlockState> {
@@ -17,7 +17,11 @@ fn item_block(host: &dyn Host, stack: &ItemStack) -> Option<BlockState> {
 
 /// `getAcceptedBlockState`'s tests and `CopycatSpecialCases` of `state`, as a copycat at `pos`
 /// reads them.
-pub(super) fn candidate(lv: &ServerLevel<'_>, state: BlockState, pos: [i32; 3]) -> Candidate {
+pub(super) fn candidate(
+    lv: &ServerLevel<'_>,
+    state: BlockState,
+    pos: [i32; 3],
+) -> Option<Candidate> {
     let host = &*lv.host;
     let block = state.block();
     let id = block.id(host);
@@ -40,20 +44,34 @@ pub(super) fn candidate(lv: &ServerLevel<'_>, state: BlockState, pos: [i32; 3]) 
         .is_some_and(|s| !s.is_empty());
     let facts = host.block_states();
     let has = |k: &str| state.property(&facts, k).ok().flatten().is_some();
-    Candidate {
+    let class = |class| facts.block_class(state, class).ok().flatten();
+    // `CopycatSpecialCases`: Create's `GlassPaneBlock` variants and vanilla's panes
+    // inherit from `IronBarsBlock` but are not the special bar material.
+    let create_pane = create.is_some_and(|block| {
+        block.name().ends_with("_window_pane")
+            || matches!(
+                block,
+                Block::FramedGlassPane
+                    | Block::HorizontalFramedGlassPane
+                    | Block::VerticalFramedGlassPane
+                    | Block::TiledGlassPane
+            )
+    });
+    Some(Candidate {
         copycat: matches!(create, Some(Block::CopycatPanel | Block::CopycatStep)),
         allow: tagged("create:copycat_allow"),
         deny: tagged("create:copycat_deny"),
-        entity: facts.has_block_entity(state) == Some(true)
-            || create.is_some_and(Block::has_block_entity),
-        // No API names a block's class: vanilla's tags stand for `StairBlock` and
-        // `TrapDoorBlock`, and an `IronBarsBlock` that is no glass pane is a `_bars` block.
-        stairs: tagged("minecraft:stairs"),
+        // Create's own blocks can have custom block entities on non-EntityBlock templates.
+        entity: class(BlockClass::Entity)? || create.is_some_and(Block::has_block_entity),
+        stairs: class(BlockClass::Stair)?,
         full,
         collides,
-        bars: id.ends_with("_bars") && !id.ends_with("_pane"),
-        trapdoor: tagged("minecraft:trapdoors") && has("half") && has("open") && has("facing"),
-    }
+        bars: class(BlockClass::IronBars)?
+            && !class(BlockClass::StainedGlassPane)?
+            && id != "minecraft:glass_pane"
+            && !create_pane,
+        trapdoor: class(BlockClass::TrapDoor)? && has("half") && has("open") && has("facing"),
+    })
 }
 
 /// `getAcceptedBlockState` for the item `stack` on a copycat of `shape` at `pos`: the item's
@@ -66,7 +84,7 @@ pub(super) fn accepted(
     face: Option<Dir>,
 ) -> Option<(BlockState, Special)> {
     let mut state = item_block(&*lv.host, stack)?;
-    let c = candidate(lv, state, pos);
+    let c = candidate(lv, state, pos)?;
     if !cc::accepts(shape, &c) {
         return None;
     }
