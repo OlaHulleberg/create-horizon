@@ -5,7 +5,7 @@
 //! with their `ITEMS` handlers.
 //!
 //! The slots are on the blocks' block entities: the `create:kinetic` type for all but the
-//! toolboxes, which keep no other state and have their own type, `create:toolbox`.
+//! toolboxes, whose own `create:toolbox` payload also keeps the compartment kinds and UUID.
 
 use crate::glue::server::ServerLevel;
 use crate::glue::states;
@@ -49,22 +49,6 @@ impl mod_api::BlockPart for ToolboxDraw {}
 
 #[mod_api::sunrise_part]
 impl mod_api::BlockEntityPart for ToolboxDraw {
-    fn block_entity_save_additional(
-        &self,
-        _level: &dyn mod_api::LevelHost,
-        event: &mut mod_api::BlockEntitySaveAdditionalEvent<'_>,
-    ) {
-        super::toolbelt::save_additional(event);
-    }
-
-    fn block_entity_load_additional(
-        &self,
-        _level: &dyn mod_api::LevelHost,
-        event: &mut mod_api::BlockEntityLoadAdditionalEvent<'_>,
-    ) {
-        super::toolbelt::load_additional(event);
-    }
-
     fn block_entity_on_load(
         &self,
         host: mod_api::HostSide,

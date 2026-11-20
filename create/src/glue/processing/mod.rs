@@ -188,7 +188,6 @@ impl Subsystem for Processing {
         basin::clear();
         spoutput::clear();
         crafter::clear();
-        toolbelt::clear();
         fist::clear();
     }
 
@@ -199,32 +198,10 @@ impl Subsystem for Processing {
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
         persist::load(lv.dim, data);
-        toolbelt::load(lv, data);
     }
 
     fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
         persist::save(lv.dim, chunk, data);
-    }
-
-    fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {
-        toolbelt::chunk_unload(dim, chunk);
-    }
-
-    /// A toolbox's block replaced by anything but a toolbox (`ToolboxBlock.onRemove` removing
-    /// its block entity): its compartment kinds and id go with it.
-    fn block_changed(
-        &self,
-        dim: usize,
-        pos: [i32; 3],
-        old: u32,
-        new: u32,
-        _: mod_api::BlockUpdateFlags,
-    ) {
-        let toolbox =
-            |s: u32| super::packages::block_of(s).is_some_and(create_engine::dye::is_toolbox);
-        if toolbox(old) && !toolbox(new) {
-            toolbelt::removed(dim, pos);
-        }
     }
 
     /// Legacy `level_tick_post` order: crafters, millstones, fans, crushers, burners, mixers.
