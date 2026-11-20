@@ -278,6 +278,10 @@ impl Subsystem for Logistics {
     }
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        // The belt break cascade first: `BeltBlock.onRemove` runs at block-change time in
+        // Java, before every block entity tick, and `BeltTunnelBlock.neighborChanged` breaks
+        // a tunnel over a segment it removes in the same tick.
+        belt::break_pass(lv);
         placement::tick_vault_layers(lv);
         chute::tick_vaults(lv);
         chute::tick_chute_shapes(lv);
