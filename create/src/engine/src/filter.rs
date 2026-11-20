@@ -207,7 +207,23 @@ impl Attribute {
             },
             "has_color" => Attribute::HasColor(text()?),
             "has_fluid" => Attribute::HasFluid(text()?),
-            "in_item_group" => Attribute::InItemGroup(text()?),
+            "in_item_group" => {
+                let raw = text()?;
+                let (namespace, path) = raw.split_once(':').unwrap_or(("minecraft", &raw));
+                let valid = |b: u8| {
+                    b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'-' | b'.')
+                };
+                if namespace.is_empty()
+                    || path.is_empty()
+                    || !namespace.bytes().all(valid)
+                    || !path.bytes().all(|b| valid(b) || b == b'/')
+                {
+                    return Err(Refused::Unknown(format!(
+                        "in_item_group: invalid tab id {raw:?}"
+                    )));
+                }
+                Attribute::InItemGroup(format!("{namespace}:{path}"))
+            }
             _ => return Err(Refused::Unknown(name.to_owned())),
         })
     }
@@ -642,6 +658,31 @@ mod tests {
             ),
             ..Spec::default()
         })
+    }
+
+    #[test]
+    fn item_group_ids_are_canonical_and_malformed_ids_are_refused() {
+        assert_eq!(
+            Attribute::parse("in_item_group", Some("tools_and_utilities")),
+            Ok(Attribute::InItemGroup(
+                "minecraft:tools_and_utilities".into()
+            ))
+        );
+        assert_eq!(
+            Attribute::parse("in_item_group", Some("create:decor/panes")),
+            Ok(Attribute::InItemGroup("create:decor/panes".into()))
+        );
+        for id in [
+            None,
+            Some(""),
+            Some(":tools"),
+            Some("minecraft:"),
+            Some("TooLs"),
+            Some("other:tab:extra"),
+            Some("other/bad:tab"),
+        ] {
+            assert!(Attribute::parse("in_item_group", id).is_err());
+        }
     }
 
     #[test]
