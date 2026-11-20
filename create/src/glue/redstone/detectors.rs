@@ -181,48 +181,86 @@ pub(super) fn detects(lv: &mut ServerLevel<'_>, at: [i32; 3], observer: bool) ->
             .is_some()
 }
 
-/// What a smart observer's display sources read of its target (`InvManipulationBehaviour`,
-/// `TankManipulationBehaviour`, through the observer's filter): each matching stack's item id
-/// and count of an item handler, and the matching fluid of a tank; None where there is none.
-#[derive(Default)]
-pub(crate) struct Observed {
-    pub(crate) items: Option<Vec<(String, u32)>>,
-    pub(crate) fluids: Option<Vec<(create_engine::tank::Fluid, u32)>>,
+fn observed_target(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<([i32; 3], Option<Filter>)> {
+    let (Block::ContentObserver, info) = block_at(lv, pos)? else {
+        return None;
+    };
+    let target = observe::target_pos(pos, info.target?, info.facing?);
+    let filter = with_world(|w| w.dims[lv.dim].detectors.filter(pos).cloned()).flatten();
+    Some((target, filter))
 }
 
-/// `Observed` for the smart observer at `pos`.
-pub(crate) fn observed(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Observed {
-    let Some((Block::ContentObserver, info)) = block_at(lv, pos) else {
-        return Observed::default();
-    };
-    let (Some(t), Some(f)) = (info.target, info.facing) else {
-        return Observed::default();
-    };
-    let target = observe::target_pos(pos, t, f);
-    let (seen, _) = seen_at(lv, target, false);
-    let dim = lv.dim;
-    let filter = with_world(|w| w.dims[dim].detectors.filter(pos).cloned()).flatten();
+/// A smart observer's display link reads the matching stacks and counts from its target's
+/// inventory, keeping components for `CountedItemStackList` and the observer's filter.
+pub(crate) fn observed_items(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+) -> Option<Vec<(ItemStack, u32)>> {
+    let (target, filter) = observed_target(lv, pos)?;
+    let block = block_at(lv, target).map(|(b, _)| b);
+    if block == Some(Block::ItemVault) {
+        let parts = with_world(|w| w.dims[lv.dim].vaults.inventory(target)).flatten()?;
+        return Some(
+            parts
+                .into_iter()
+                .flat_map(|p| (0..create_engine::vault::SLOTS as u32).map(move |i| (p, i)))
+                .filter_map(|(p, i)| slot_stack(lv, p, i))
+                .filter(|s| filters::passes(&*lv.host, filter.as_ref(), s))
+                .map(|s| {
+                    let count = s.count();
+                    (s, count)
+                })
+                .collect(),
+        );
+    }
+    if matches!(
+        block,
+        Some(
+            Block::Belt
+                | Block::Depot
+                | Block::WeightedEjector
+                | Block::ChainConveyor
+                | Block::FluidTank
+        )
+    ) || crate::glue::fluids::pipe_inflows(lv, target).is_some()
+    {
+        return None;
+    }
+    let handler = lv
+        .level
+        .capability(&mut *lv.host, &mod_api::ITEMS, target, None)?;
+    let mut stacks = Vec::new();
+    for i in 0..handler.size(&mut *lv.host) {
+        let count = handler.amount(&mut *lv.host, i);
+        if count > 0
+            && let Some(resource) = handler.resource(&mut *lv.host, i)
+            && filters::passes(&*lv.host, filter.as_ref(), resource.as_stack())
+        {
+            stacks.push((resource.as_stack().clone(), count));
+        }
+    }
+    Some(stacks)
+}
+
+/// The matching fluids a smart observer's display link reads from its target's tanks.
+pub(crate) fn observed_fluids(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+) -> Option<Vec<(create_engine::tank::Fluid, u32)>> {
+    let (target, filter) = observed_target(lv, pos)?;
+    let tanks = seen_at(lv, target, false).0.tanks?;
     let passes = filters::Detector {
         host: &*lv.host,
         filter: filter.as_ref(),
     };
     use create_engine::filter::Passes;
-    Observed {
-        items: seen.inventory.map(|(slots, _)| {
-            slots
-                .into_iter()
-                .filter_map(|s| Some((s.item?, s.count)))
-                .filter(|(item, n)| *n > 0 && passes.item(item))
-                .collect()
-        }),
-        fluids: seen.tanks.map(|tanks| {
-            tanks
-                .into_iter()
-                .filter_map(|t| Some((t.fluid?, t.amount)))
-                .filter(|(f, n)| *n > 0 && passes.fluid(*f))
-                .collect()
-        }),
-    }
+    Some(
+        tanks
+            .into_iter()
+            .filter_map(|t| Some((t.fluid?, t.amount)))
+            .filter(|(f, n)| *n > 0 && passes.fluid(*f))
+            .collect(),
+    )
 }
 
 /// The stack in slot `slot` of the block entity at `pos`.

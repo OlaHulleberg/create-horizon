@@ -615,6 +615,21 @@ fn stats_of(lv: &ServerLevel<'_>, pos: [i32; 3], target: Target) -> Stats {
     }
 }
 
+/// `CountedItemStackList`: equal item and components, independent of the rendered label.
+fn count_stacks(items: Vec<(ItemStack, u32)>) -> Vec<(ItemStack, i64)> {
+    let mut entries: Vec<(ItemStack, i64)> = Vec::new();
+    for (stack, count) in items {
+        match entries
+            .iter_mut()
+            .find(|(item, _)| item.is_stackable_with(&stack))
+        {
+            Some((_, total)) => *total += i64::from(count),
+            None => entries.push((stack, i64::from(count))),
+        }
+    }
+    entries
+}
+
 /// What a source reads from the world now.
 fn read_source(lv: &mut ServerLevel<'_>, pos: [i32; 3], source: Source) -> Reading {
     let dim = lv.dim;
@@ -676,9 +691,8 @@ fn read_source(lv: &mut ServerLevel<'_>, pos: [i32; 3], source: Source) -> Readi
                 let Some((b, _)) = block_at(lv, p) else {
                     break;
                 };
-                let item: Option<String> = match b {
-                    Block::Depot | Block::WeightedEjector => super::redstone::slot_stack(lv, p, 0)
-                        .map(|s| super::redstone::item_id(lv, &s)),
+                let stack = match b {
+                    Block::Depot | Block::WeightedEjector => super::redstone::slot_stack(lv, p, 0),
                     // BeltBlockEntity.applyToAllItems(.25): the last item within a quarter of
                     // the segment's centre.
                     Block::Belt => with_world(|w| {
@@ -690,13 +704,14 @@ fn read_source(lv: &mut ServerLevel<'_>, pos: [i32; 3], source: Source) -> Readi
                             .items
                             .iter()
                             .rfind(|i| (index + 0.5 - i.position).abs() < 0.25)
-                            .map(|i| i.item.clone())
+                            .cloned()
                     })
-                    .flatten(),
+                    .flatten()
+                    .and_then(|i| super::logistics::belt_stack(lv, &i)),
                     _ => break,
                 };
-                if let Some(id) = item {
-                    names.push(item_name(&id));
+                if let Some(stack) = stack {
+                    names.push(super::item_name(&*lv.host, &stack));
                 }
                 p = [p[0] + step[0], p[1] + step[1], p[2] + step[2]];
             }
@@ -707,26 +722,22 @@ fn read_source(lv: &mut ServerLevel<'_>, pos: [i32; 3], source: Source) -> Readi
         } else {
             None
         }),
-        // ItemCountDisplaySource and ItemListDisplaySource (`CountedItemStackList`: one entry
-        // an item).
+        // `CountedItemStackList`: count equal items with equal components, not equal labels.
         Source::CountItems | Source::ListItems => {
-            let items = super::redstone::observed(lv, at).items;
+            let items = super::redstone::observed_items(lv, at);
             if source == Source::CountItems {
                 return Reading::Count(items.map(|i| i.iter().map(|(_, n)| i64::from(*n)).sum()));
             }
-            let mut entries: Vec<(i64, String)> = Vec::new();
-            for (id, n) in items.unwrap_or_default() {
-                let name = item_name(&id);
-                match entries.iter_mut().find(|e| e.1 == name) {
-                    Some(e) => e.0 += i64::from(n),
-                    None => entries.push((i64::from(n), name)),
-                }
-            }
-            Reading::Entries(entries)
+            Reading::Entries(
+                count_stacks(items.unwrap_or_default())
+                    .into_iter()
+                    .map(|(stack, count)| (count, super::item_name(&*lv.host, &stack)))
+                    .collect(),
+            )
         }
         // FluidAmountDisplaySource and FluidListDisplaySource.
         Source::CountFluids | Source::ListFluids => {
-            let fluids = super::redstone::observed(lv, at).fluids;
+            let fluids = super::redstone::observed_fluids(lv, at);
             if source == Source::CountFluids {
                 return Reading::Fluid(fluids.map(|f| f.iter().map(|(_, n)| i64::from(*n)).sum()));
             }
@@ -2827,4 +2838,24 @@ fn displays_from_nbt(dim: usize, data: &Compound) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ItemStack, count_stacks};
+    use mod_api::{Identifier, prelude::ItemsHost, testing::FakeHost};
+
+    #[test]
+    fn an_item_list_counts_components_not_just_the_item_key() {
+        let mut host = FakeHost::new();
+        let id = Identifier::parse("minecraft:iron_pickaxe").unwrap();
+        host.registries.resolve_items([id.clone()]).unwrap();
+        let fresh = ItemStack::of(host.item_key(&id).unwrap());
+        let mut damaged = fresh.clone();
+        damaged.set_damage(10);
+        let entries = count_stacks(vec![(fresh.clone(), 1), (damaged.clone(), 1), (fresh, 2)]);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].1, 3);
+        assert_eq!(entries[1], (damaged, 1));
+    }
 }
