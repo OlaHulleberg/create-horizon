@@ -892,6 +892,15 @@ impl belt::Surroundings for Side<'_> {
         locked: bool,
     ) -> Option<belt::Process> {
         let p = belt::position_for_offset(self.controller, &self.segment, self.length, index);
+        // The glue's `BeltSide::process`: no machine two above, or (arriving) `isBlocked`, and
+        // nothing acts.
+        let above = self.run.w.block_at(0, [p[0], p[1] + 2, p[2]]);
+        if !above.is_some_and(belt::processes_below) {
+            return None;
+        }
+        if !locked && self.run.processing_blocked(p) {
+            return None;
+        }
         // `belt_process` in subsystem order: processing (presses) before fluids (spouts).
         if let Some(r) = self.run.press_on_belt(p, item, locked) {
             return Some(r);

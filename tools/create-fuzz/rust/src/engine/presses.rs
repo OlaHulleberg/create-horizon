@@ -20,9 +20,11 @@ fn pressing(item: &str) -> Option<&'static str> {
 }
 
 impl Run {
-    /// `ServerLevel::blocked`: a collision shape at `p` (a funnel's too).
-    fn press_blocked(&self, p: Pos) -> bool {
-        self.host_collision(p)
+    /// `ServerLevel::processing_blocked` (`BeltProcessingBehaviour.isBlocked`) for the
+    /// processing space `space`: a collision shape over it, but not a funnel's.
+    pub(super) fn processing_blocked(&self, space: Pos) -> bool {
+        let above = [space[0], space[1] + 1, space[2]];
+        belt::processing_blocked(self.w.block_at(0, above), || self.host_collision(above))
     }
     /// `tick_presses`: the depots whose stack arrived or changed ask the press above; running
     /// presses move their head.
@@ -55,7 +57,7 @@ impl Run {
                 continue;
             };
             let speed = self.w.speed(0, above).unwrap_or(0.);
-            let in_way = self.press_blocked([at[0], at[1] + 1, at[2]]);
+            let in_way = self.processing_blocked(at);
             let fits = pressing(&stack.item).is_some();
             match press::depot_step(&mut held, &p, speed, in_way, fits) {
                 Step::Idle => {}
@@ -143,9 +145,6 @@ impl Run {
         use belt::Process;
         let above = [at[0], at[1] + 2, at[2]];
         let mut p = self.w.dims[0].presses.get(&above).copied()?;
-        if !locked && self.press_blocked([at[0], at[1] + 1, at[2]]) {
-            return None;
-        }
         if self.w.speed(0, above).unwrap_or(0.) == 0. {
             return Some(Process::Pass);
         }
