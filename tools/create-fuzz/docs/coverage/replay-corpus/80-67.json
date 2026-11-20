@@ -1,0 +1,141 @@
+{
+  "version": 3,
+  "seed": 80,
+  "checkpoints": [
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    40,
+    60,
+    80,
+    101
+  ],
+  "ticks": 180,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:chain_conveyor"
+    },
+    {
+      "pos": [
+        5,
+        8,
+        0
+      ],
+      "state": "create:chain_conveyor"
+    },
+    {
+      "pos": [
+        5,
+        9,
+        5
+      ],
+      "state": "create:chain_conveyor"
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "chain_link",
+        "target": [
+          5,
+          8,
+          0
+        ],
+        "connect": false
+      },
+      "tick": 10,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "chain_link",
+        "target": [
+          5,
+          9,
+          5
+        ],
+        "connect": false
+      },
+      "tick": 20,
+      "pos": [
+        5,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "chain_link",
+        "target": [
+          0,
+          8,
+          0
+        ],
+        "connect": true
+      },
+      "tick": 30,
+      "pos": [
+        5,
+        9,
+        5
+      ]
+    },
+    {
+      "action": {
+        "kind": "chain_link",
+        "target": [
+          5,
+          8,
+          0
+        ],
+        "connect": true
+      },
+      "tick": 70,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "chain_link",
+        "target": [
+          5,
+          8,
+          0
+        ],
+        "connect": true
+      },
+      "tick": 90,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "reload"
+      },
+      "tick": 21,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    }
+  ]
+}

@@ -1,0 +1,179 @@
+{
+  "version": 3,
+  "seed": 162,
+  "checkpoints": [
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    70
+  ],
+  "ticks": 100,
+  "blocks": [
+    {
+      "pos": [
+        -6,
+        8,
+        -4
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 256
+    },
+    {
+      "pos": [
+        -6,
+        8,
+        -3
+      ],
+      "state": "create:large_cogwheel[axis=z]"
+    },
+    {
+      "pos": [
+        -5,
+        8,
+        -3
+      ],
+      "state": "create:cogwheel[axis=z]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        -4
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 256
+    },
+    {
+      "pos": [
+        0,
+        8,
+        -3
+      ],
+      "state": "create:large_cogwheel[axis=z]"
+    },
+    {
+      "pos": [
+        1,
+        9,
+        -3
+      ],
+      "state": "create:cogwheel[axis=z]"
+    },
+    {
+      "pos": [
+        6,
+        8,
+        -4
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 256
+    },
+    {
+      "pos": [
+        6,
+        8,
+        -3
+      ],
+      "state": "create:large_cogwheel[axis=z]"
+    },
+    {
+      "pos": [
+        7,
+        9,
+        -2
+      ],
+      "state": "create:cogwheel[axis=z]"
+    },
+    {
+      "pos": [
+        -6,
+        8,
+        2
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 256
+    },
+    {
+      "pos": [
+        -6,
+        8,
+        3
+      ],
+      "state": "create:large_cogwheel[axis=z]"
+    },
+    {
+      "pos": [
+        -5,
+        8,
+        3
+      ],
+      "state": "create:large_cogwheel[axis=x]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        2
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 256
+    },
+    {
+      "pos": [
+        0,
+        8,
+        3
+      ],
+      "state": "create:large_cogwheel[axis=z]"
+    },
+    {
+      "pos": [
+        1,
+        9,
+        3
+      ],
+      "state": "create:large_cogwheel[axis=x]"
+    },
+    {
+      "pos": [
+        6,
+        8,
+        2
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 256
+    },
+    {
+      "pos": [
+        6,
+        8,
+        3
+      ],
+      "state": "create:large_cogwheel[axis=z]"
+    },
+    {
+      "pos": [
+        7,
+        9,
+        4
+      ],
+      "state": "create:large_cogwheel[axis=x]"
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "reload"
+      },
+      "tick": 19,
+      "pos": [
+        -6,
+        8,
+        -4
+      ]
+    }
+  ]
+}

@@ -1791,52 +1791,34 @@ pub(crate) fn toolbox_block(b: Block) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mod_api::{Identifier, ItemResource, STORAGE, prelude::ItemsHost, testing::FakeHost};
+    use mod_api::{Identifier, prelude::ItemsHost, testing::FakeHost};
 
     #[test]
-    fn a_notified_storage_insert_sets_a_kind_that_survives_emptying() {
-        let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+    fn seed_kinds_uses_the_first_occupied_slot_and_never_replaces_a_kind() {
         let mut host = FakeHost::new();
-        let id = Identifier::parse("minecraft:diamond").unwrap();
-        host.registries.resolve_items([id.clone()]).unwrap();
-        let diamond = ItemStack::of(host.item_key(&id).unwrap());
-        let resource = ItemResource::of(&diamond);
-        let pos = [0, 0, 0];
-        host.level.block_entity(pos).with_items(tb::STORED);
-        let level = host.level.level();
-        let storage = level.capability(&mut host, &STORAGE, pos, None).unwrap();
+        let diamond = Identifier::parse("minecraft:diamond").unwrap();
+        let copper = Identifier::parse("minecraft:copper_ingot").unwrap();
+        host.registries
+            .resolve_items([diamond.clone(), copper.clone()])
+            .unwrap();
+        let diamond = host.item_key(&diamond).unwrap();
+        let copper = ItemStack::of(host.item_key(&copper).unwrap());
         let mut kinds = Filters::default();
-        host.transaction(|host, tx| {
-            assert_eq!(storage.insert(host, tx, &resource, 7), 7);
-            Ok::<_, ()>(())
-        })
-        .unwrap();
-        let slots = |host: &FakeHost| {
-            host.level
-                .block_entity_at(pos)
-                .unwrap()
-                .items
-                .as_ref()
-                .unwrap()
-                .slots
-                .clone()
-        };
-        // The pin's notification gives the post-write slots, not the original offer.
-        assert!(seed_kinds(&host, &mut kinds, &slots(&host)));
-        assert_eq!(kinds[0], diamond.to_nbt(&host));
-        assert!(kinds[0].is_some());
-        assert!(!seed_kinds(&host, &mut kinds, &slots(&host)));
+        let mut slots = vec![None; tb::STORED];
+        slots[1] = Some(ItemStack::new(diamond, 7).unwrap());
+        slots[2] = Some(copper.clone());
 
-        host.transaction(|host, tx| {
-            assert_eq!(storage.extract(host, tx, &resource, 7), 7);
-            Ok::<_, ()>(())
-        })
-        .unwrap();
-        assert!(slots(&host).iter().all(Option::is_none));
-        assert!(!seed_kinds(&host, &mut kinds, &slots(&host)));
-        assert_eq!(
-            read_kinds(Some(&write_kinds(&kinds)))[0],
-            diamond.to_nbt(&host)
-        );
+        assert!(seed_kinds(&host, &mut kinds, &slots));
+        assert_eq!(kinds[0], ItemStack::of(diamond).to_nbt(&host));
+        assert!(kinds[0].is_some());
+        assert!(kinds[1..].iter().all(Option::is_none));
+        let saved = kinds.clone();
+
+        slots[1] = None;
+        assert!(!seed_kinds(&host, &mut kinds, &slots));
+        assert_eq!(kinds, saved);
+        slots[2] = None;
+        assert!(!seed_kinds(&host, &mut kinds, &slots));
+        assert_eq!(kinds, saved);
     }
 }

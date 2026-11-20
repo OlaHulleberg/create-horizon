@@ -67,7 +67,7 @@ pub fn chute_take(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &ItemStack) ->
         return false;
     }
     let dim = lv.dim;
-    with_world(|w| w.dims[dim].chutes.insert(pos, 1.0));
+    with_world(|w| w.set_chute_position(dim, pos, 1.0));
     crate::glue::advancements::award_placer(lv, pos, "chute");
     true
 }
@@ -96,14 +96,6 @@ pub fn use_chute(lv: &mut ServerLevel<'_>, pos: [i32; 3], click: &BlockClick<'_>
     let Some((block, _)) = info_at(lv, pos) else {
         return false;
     };
-    let shape = || {
-        lv.block_state(pos).and_then(|s| {
-            s.property(&lv.host.block_states(), "shape")
-                .ok()
-                .flatten()
-                .and_then(create_engine::chute::Shape::read)
-        })
-    };
     match held.as_deref() {
         None => {
             if click.hand != mod_api::Hand::Main {
@@ -120,7 +112,10 @@ pub fn use_chute(lv: &mut ServerLevel<'_>, pos: [i32; 3], click: &BlockClick<'_>
         }
         Some("create:industrial_iron_block") if block == Block::Chute => {
             use create_engine::chute::Shape;
-            if matches!(shape(), Some(Shape::Intersection | Shape::Encased) | None) {
+            if matches!(
+                chute_shape(lv, pos),
+                Some(Shape::Intersection | Shape::Encased) | None
+            ) {
                 return false;
             }
             lv.set_property(pos, "shape", "encased", super::super::server::update_all());
@@ -167,15 +162,9 @@ fn place_diagonal(
         .block_state(at)
         .is_none_or(|s| lv.host.block_states().replaceable(s) != Some(false));
     let shape = match existing {
-        Some((Block::Chute, i)) if i.facing.unwrap_or(Dir::Down) == Dir::Down => lv
-            .block_state(at)
-            .and_then(|s| {
-                s.property(&lv.host.block_states(), "shape")
-                    .ok()
-                    .flatten()
-                    .and_then(Shape::read)
-            })
-            .unwrap_or(Shape::Normal),
+        Some((Block::Chute, i)) if i.facing.unwrap_or(Dir::Down) == Dir::Down => {
+            chute_shape(lv, at).unwrap_or(Shape::Normal)
+        }
         _ if free => Shape::Normal,
         _ => return true,
     };
@@ -227,15 +216,7 @@ pub fn tick_chute_shapes(lv: &mut ServerLevel<'_>) {
         let Some(state) = lv.block_state(pos) else {
             continue;
         };
-        let shape = {
-            let facts = lv.host.block_states();
-            state
-                .property(&facts, "shape")
-                .ok()
-                .flatten()
-                .and_then(Shape::read)
-                .unwrap_or(Shape::Normal)
-        };
+        let shape = chute_shape(lv, pos).unwrap_or(Shape::Normal);
         let facing = info.facing.unwrap_or(Dir::Down);
         let above = [pos[0], pos[1] + 1, pos[2]];
         let funnel_down = super::funnel::funnel_at(lv, above)
@@ -283,6 +264,38 @@ fn fan_blowing(lv: &ServerLevel<'_>, pos: [i32; 3], way: Dir) -> Option<f32> {
 /// down), in chutes a tick.
 pub fn chute_motion(lv: &ServerLevel<'_>, pos: [i32; 3]) -> f32 {
     create_engine::chute::item_motion(chute_push(lv, pos, 0), chute_pull(lv, pos, 0))
+}
+
+/// `ChuteBlockEntity.canDirectlyInsert` of the chute at `pos`: whether it takes a stack straight
+/// from a belt's end (`create_engine::chute::can_directly_insert`).
+pub fn can_directly_insert(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    create_engine::chute::can_directly_insert(
+        chute_facing(lv, [pos[0], pos[1] + 1, pos[2]]),
+        chute_motion(lv, pos),
+        || !input_chutes(lv, pos).is_empty(),
+        chute_open(lv, pos),
+    )
+}
+
+/// `AbstractChuteBlock.isOpenChute` at `pos` (`create_engine::chute::is_open`).
+fn chute_open(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    match info_at(lv, pos) {
+        Some((Block::Chute, i)) => {
+            create_engine::chute::is_open(i.facing.unwrap_or(Dir::Down), chute_shape(lv, pos))
+        }
+        Some((Block::SmartChute, _)) => create_engine::chute::is_open(Dir::Down, None),
+        _ => false,
+    }
+}
+
+/// `ChuteBlock.SHAPE` of the chute at `pos`; None when no chute (or a smart chute) is there.
+fn chute_shape(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<create_engine::chute::Shape> {
+    let state = lv.block_state(pos)?;
+    state
+        .property(&lv.host.block_states(), "shape")
+        .ok()
+        .flatten()
+        .and_then(create_engine::chute::Shape::read)
 }
 
 /// `getInputChutes`: the chutes leading into the one at `pos`, the one above facing down and
@@ -367,7 +380,7 @@ fn rise(
         Fall::Out if above_chute.is_some() => {
             set_chute_stack(lv, above, Some(stack));
             set_chute_stack(lv, pos, None);
-            with_world(|w| w.dims[dim].chutes.insert(above, 0.0));
+            with_world(|w| w.set_chute_position(dim, above, 0.0));
             None
         }
         Fall::Out if container => {
@@ -439,7 +452,7 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
             let next = rise(lv, pos, position, motion, stack, active);
             with_world(|w| match next {
                 Some(p) => {
-                    w.dims[dim].chutes.insert(pos, p);
+                    w.set_chute_position(dim, pos, p);
                 }
                 None => {
                     w.dims[dim].chutes.remove(&pos);
@@ -496,7 +509,7 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
             set_chute_stack(lv, target, Some(stack));
             set_chute_stack(lv, pos, None);
             let at = if diagonal { 0.51 } else { 1.0 };
-            with_world(|w| w.dims[dim].chutes.insert(target, at));
+            with_world(|w| w.set_chute_position(dim, target, at));
         };
         let next = match step(position, motion, can) {
             Fall::At(p) => Some(p),
@@ -548,7 +561,7 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
         };
         with_world(|w| match next {
             Some(p) => {
-                w.dims[dim].chutes.insert(pos, p);
+                w.set_chute_position(dim, pos, p);
             }
             None => {
                 w.dims[dim].chutes.remove(&pos);
@@ -590,10 +603,7 @@ fn show_chute_item(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     if chute_facing(lv, pos) != Some(Dir::Down) {
         return;
     }
-    let window = lv.block_state(pos).is_some_and(|s| {
-        s.property(&lv.host.block_states(), "shape").ok().flatten() == Some("window")
-    });
-    if !window {
+    if chute_shape(lv, pos) != Some(create_engine::chute::Shape::Window) {
         return;
     }
     let dim = lv.dim;
@@ -718,7 +728,7 @@ fn tick_chute_pulls(lv: &mut ServerLevel<'_>) {
         match taken {
             Some(stack) => {
                 set_chute_stack(lv, pos, Some(stack));
-                with_world(|w| w.dims[dim].chutes.insert(pos, start));
+                with_world(|w| w.set_chute_position(dim, pos, start));
             }
             None => {
                 with_world(|w| {
@@ -790,7 +800,7 @@ fn lift_from_below(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, powere
                 .position(&*lv.host)
                 .map_or(-1.0, |p| (p[1] - f64::from(pos[1])) as f32);
             set_chute_stack(lv, pos, Some(stack));
-            with_world(|w| w.dims[dim].chutes.insert(pos, y));
+            with_world(|w| w.set_chute_position(dim, pos, y));
             let _ = e.discard(&mut *lv.host);
             return true;
         }
@@ -839,7 +849,7 @@ fn lift_from_below(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, powere
                 }
                 set_chute_stack(lv, pos, Some(stack));
                 let start = -((i - 1) as f32);
-                with_world(|w| w.dims[dim].chutes.insert(pos, start));
+                with_world(|w| w.set_chute_position(dim, pos, start));
                 return true;
             }
             return false;

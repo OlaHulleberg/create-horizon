@@ -1,7 +1,8 @@
 //! Create's mechanical press (`PressingBehaviour`, `BeltPressingCallbacks`,
 //! `MechanicalPressBlockEntity`): a 240-tick cycle whose middle presses what lies on the depot
-//! two blocks below. A press runs only while it presses; a depot under it asks it only when its
-//! stack arrives, changes, or the press finishes or starts turning.
+//! two blocks below. A press runs only while it presses, at its own turn in the level's
+//! block-entity order; a depot under it asks it at the depot's turn each tick its stack has
+//! arrived.
 
 use crate::depot::Held;
 
@@ -106,28 +107,23 @@ impl Press {
 /// What a depot does with its held stack under a press this tick.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
-    /// Nothing to do until something changes (it stops asking).
-    Idle,
-    /// Keep asking every tick.
+    /// Nothing this tick (`PASS`, or `HOLD` while the press runs); the stack's lock is set.
     Wait,
-    /// The press starts its cycle on it (`start(Mode.BELT)`); keep asking.
+    /// The press starts its cycle on it (`start(Mode.BELT)`).
     Start,
-    /// Press it now (`whenItemHeld` at the head's lowest point); keep asking.
+    /// Press it now (`whenItemHeld` at the head's lowest point).
     Process,
 }
 
 /// `DepotBehaviour.tick` after the stack arrived, with `BeltPressingCallbacks`:
-/// `onItemReceived` for an unlocked stack, `whenItemHeld` for a locked one. `blocked` is
-/// `BeltProcessingBehaviour.isBlocked` (something solid between depot and press); `fits` says
-/// whether a pressing recipe takes the stack.
-pub fn depot_step(held: &mut Held, press: &Press, speed: f32, blocked: bool, fits: bool) -> Step {
-    if !held.locked && blocked {
-        return Step::Idle;
-    }
+/// `onItemReceived` for an unlocked stack, `whenItemHeld` for a locked one (the depot asked
+/// `BeltProcessingBehaviour.isBlocked` before, at its turn); `fits` says whether a pressing
+/// recipe takes the stack.
+pub fn depot_step(held: &mut Held, press: &Press, speed: f32, fits: bool) -> Step {
     if held.locked {
         if speed == 0.0 {
             held.locked = false;
-            return Step::Idle;
+            return Step::Wait;
         }
         if !press.running {
             // PASS: unlocked; next tick it is received again (and may start another cycle).
@@ -140,14 +136,14 @@ pub fn depot_step(held: &mut Held, press: &Press, speed: f32, blocked: bool, fit
         return Step::Process;
     }
     if speed == 0.0 {
-        return Step::Idle;
+        return Step::Wait;
     }
     if press.running {
         held.locked = true;
         return Step::Wait;
     }
     if !fits {
-        return Step::Idle;
+        return Step::Wait;
     }
     held.locked = true;
     Step::Start
@@ -224,15 +220,12 @@ mod tests {
         let mut held = Held::new(0, false);
         let mut press = Press::default();
         let speed = 32.0;
-        assert_eq!(
-            depot_step(&mut held, &press, speed, false, true),
-            Step::Start
-        );
+        assert_eq!(depot_step(&mut held, &press, speed, true), Step::Start);
         press.start(Mode::Belt);
         assert!(held.locked);
         let mut pressed_at = None;
         for tick in 1..200 {
-            if depot_step(&mut held, &press, speed, false, true) == Step::Process {
+            if depot_step(&mut held, &press, speed, true) == Step::Process {
                 pressed_at.get_or_insert(tick);
             }
             if press.tick(speed) == Tick::Done {
@@ -242,28 +235,18 @@ mod tests {
             }
         }
         // The cycle ended: the locked stack is let go, then received again, and starts again.
-        assert_eq!(
-            depot_step(&mut held, &press, speed, false, true),
-            Step::Wait
-        );
+        assert_eq!(depot_step(&mut held, &press, speed, true), Step::Wait);
         assert!(!held.locked);
-        assert_eq!(
-            depot_step(&mut held, &press, speed, false, true),
-            Step::Start
-        );
-        // Nothing to press, or a block in the way, or no speed: it stops asking.
+        assert_eq!(depot_step(&mut held, &press, speed, true), Step::Start);
+        // Nothing to press, or no speed: nothing happens.
         let mut other = Held::new(0, false);
         assert_eq!(
-            depot_step(&mut other, &Press::default(), speed, false, false),
-            Step::Idle
+            depot_step(&mut other, &Press::default(), speed, false),
+            Step::Wait
         );
         assert_eq!(
-            depot_step(&mut other, &Press::default(), speed, true, true),
-            Step::Idle
-        );
-        assert_eq!(
-            depot_step(&mut other, &Press::default(), 0.0, false, true),
-            Step::Idle
+            depot_step(&mut other, &Press::default(), 0.0, true),
+            Step::Wait
         );
     }
 

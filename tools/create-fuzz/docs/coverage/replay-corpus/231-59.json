@@ -1,0 +1,240 @@
+{
+  "version": 3,
+  "seed": 231,
+  "checkpoints": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    19,
+    28,
+    44,
+    60,
+    76,
+    92,
+    120
+  ],
+  "ticks": 190,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        7,
+        0
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        0,
+        9,
+        0
+      ],
+      "state": "create:large_cogwheel[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        1
+      ],
+      "state": "create:shaft[axis=z,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        2
+      ],
+      "state": "create:mechanical_press[facing=south]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        -1
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 32
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:rotation_speed_controller",
+        "face": "up",
+        "hit": [
+          0.9,
+          1.0,
+          0.9
+        ],
+        "yaw": 92.0,
+        "pitch": 0.0,
+        "sneaking": true
+      },
+      "tick": 10,
+      "pos": [
+        0,
+        7,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "speed_setting",
+        "row": 0,
+        "value": 245
+      },
+      "tick": 20,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "speed_setting",
+        "row": 1,
+        "value": 235
+      },
+      "tick": 28,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "speed_setting",
+        "row": 0,
+        "value": 201
+      },
+      "tick": 36,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "speed_setting",
+        "row": 0,
+        "value": 158
+      },
+      "tick": 44,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "speed_setting",
+        "row": 0,
+        "value": 132
+      },
+      "tick": 52,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "speed_setting",
+        "row": 0,
+        "value": 254
+      },
+      "tick": 60,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "speed_setting",
+        "row": 0,
+        "value": 177
+      },
+      "tick": 68,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "speed_setting",
+        "row": 0,
+        "value": 252
+      },
+      "tick": 76,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "speed_setting",
+        "row": 0,
+        "value": 252
+      },
+      "tick": 84,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "speed_setting",
+        "row": 0,
+        "value": 80
+      },
+      "tick": 92,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "speed_setting",
+        "row": 0,
+        "value": 165
+      },
+      "tick": 110,
+      "pos": [
+        0,
+        8,
+        -1
+      ]
+    },
+    {
+      "action": {
+        "kind": "reload"
+      },
+      "tick": 1,
+      "pos": [
+        0,
+        7,
+        0
+      ]
+    }
+  ]
+}

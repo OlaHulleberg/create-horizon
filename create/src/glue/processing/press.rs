@@ -139,123 +139,22 @@ fn press_in_world(lv: &mut ServerLevel<'_>, at: [i32; 3]) {
     }
 }
 
-/// Depots that ask their press, then running presses: `DepotBehaviour.tick` with
-/// `BeltPressingCallbacks`, then `PressingBehaviour.tick`. Nothing runs without either.
+/// The deployers the depots under them asked for (`DepotBehaviour.tick` with
+/// `BeltDeployerCallbacks`), idle presses looking at the ground under them, then the presses
+/// whose cycle changed told to clients. A press over a depot is asked at the depot's turn
+/// (`depot_turn`) and moves its head at its own (`tick_press`), in the transport walk.
 pub fn tick_presses(lv: &mut ServerLevel<'_>) {
-    use press::{Step, Tick};
     let dim = lv.dim;
     if recipes::ready() {
         scan_world(lv);
     }
-    let Some((work, running)) = with_world(|w| {
-        let d = &mut w.dims[dim];
-        let running: Vec<[i32; 3]> = d
-            .presses
-            .iter()
-            .filter(|(_, p)| p.running)
-            .map(|(k, _)| *k)
-            .collect();
-        (std::mem::take(&mut d.depot_work), running)
-    }) else {
-        return;
-    };
-    if work.is_empty() && running.is_empty() {
-        return;
-    }
-    if !recipes::ready() {
-        return;
-    }
+    let work = with_world(|w| std::mem::take(&mut w.dims[dim].depot_work)).unwrap_or_default();
     let mut keep = Vec::new();
-    for depot in work {
-        let above = [depot[0], depot[1] + 2, depot[2]];
-        if super::deployer::deployer_on_depot(lv, depot) {
-            keep.push(depot);
-            continue;
-        }
-        let Some(mut p) = with_world(|w| w.dims[dim].presses.get(&above).copied()).flatten() else {
-            continue;
-        };
-        let Some(mut held) =
-            with_world(|w| w.dims[dim].depots.get(&depot).copied().flatten()).flatten()
-        else {
-            continue;
-        };
-        if held.sliding() && held.position < 0.5 - 1.0 / 16.0 {
-            continue;
-        }
-        let Some(stack) = lv.slot(depot, 0) else {
-            continue;
-        };
-        let item = stacks::id(&*lv.host, &stack);
-        let count = stack.count().min(255) as u8;
-        let speed = lv.speed(above);
-        let in_way = lv.blocked([depot[0], depot[1] + 1, depot[2]]);
-        // A sequenced assembly's pressing step first (`SequencedAssemblyRecipe.getRecipe`).
-        let sequenced = sequenced_on_depot(lv, depot, "create:pressing", None);
-        let fits = sequenced.is_some()
-            || recipes::with(|r| r.pressing.find_single(&item).is_some()) == Some(true);
-        match press::depot_step(&mut held, &p, speed, in_way, fits) {
-            Step::Idle => {}
-            Step::Wait => keep.push(depot),
-            Step::Start => {
-                p.start(press::Mode::Belt);
-                with_world(|w| {
-                    w.dims[dim].presses.insert(above, p);
-                    w.dims[dim].press_changes.push(above);
-                });
+    if recipes::ready() {
+        for depot in work {
+            if super::deployer::deployer_on_depot(lv, depot) {
                 keep.push(depot);
             }
-            Step::Process => {
-                held = match &sequenced {
-                    Some((a, progress, _)) => {
-                        sequenced_step_on_depot(lv, depot, count, held, a, progress.as_ref())
-                    }
-                    None => press_on_depot(lv, depot, &item, count, held),
-                };
-                keep.push(depot);
-            }
-        }
-        with_world(|w| {
-            if let Some(h) = w.dims[dim].depots.get_mut(&depot) {
-                *h = h.map(|_| held);
-            }
-        });
-    }
-    for at in running {
-        let speed = lv.speed(at);
-        let basin_mode = with_world(|w| {
-            let d = &mut w.dims[dim];
-            let p = d.presses.get_mut(&at)?;
-            let tick = p.tick(speed);
-            match tick {
-                Tick::Moving => {}
-                Tick::Down => d.press_changes.push(at),
-                Tick::Done => {
-                    d.press_changes.push(at);
-                    let below = [at[0], at[1] - 2, at[2]];
-                    if d.depots.contains_key(&below) && !keep.contains(&below) {
-                        keep.push(below);
-                    }
-                }
-            }
-            Some((p.mode, tick))
-        })
-        .flatten();
-        // On the ground: pressed at the bottom (`applyInWorld`).
-        if basin_mode == Some((press::Mode::World, Tick::Down)) {
-            press_in_world(lv, at);
-        }
-        let basin_mode = basin_mode
-            .filter(|(m, _)| *m == press::Mode::Basin)
-            .map(|(_, t)| t);
-        // Over a basin: compact at the bottom (`tryProcessInBasin`), look again when done
-        // (`onPressingCompleted`).
-        match basin_mode {
-            Some(Tick::Down) => super::basin::compact_in_basin(lv, at),
-            Some(Tick::Done) => {
-                with_world(|w| w.dims[dim].mixer_checks.push(at));
-            }
-            _ => {}
         }
     }
     let changed = with_world(|w| {
@@ -274,6 +173,80 @@ pub fn tick_presses(lv: &mut ServerLevel<'_>) {
     if !changed.is_empty() {
         let players = lv.players();
         send_presses(lv.host, &players, dim, &changed);
+    }
+}
+
+/// `DepotBehaviour.tick` at the depot's turn, its stack arrived (and not blocked: the depot
+/// asked `isBlocked`), with the press two above (`BeltPressingCallbacks`): the press starts on
+/// a stack a pressing recipe takes (a sequenced assembly's pressing step first), and at the
+/// head's lowest point one of it is pressed. A press registered after the depot moves in the
+/// same tick (`tick_press`).
+pub(crate) fn depot_turn(lv: &mut ServerLevel<'_>, depot: [i32; 3]) {
+    use press::Step;
+    let dim = lv.dim;
+    if !recipes::ready() {
+        return;
+    }
+    let above = [depot[0], depot[1] + 2, depot[2]];
+    let Some(mut p) = with_world(|w| w.dims[dim].presses.get(&above).copied()).flatten() else {
+        return;
+    };
+    let Some(mut held) =
+        with_world(|w| w.dims[dim].depots.get(&depot).copied().flatten()).flatten()
+    else {
+        return;
+    };
+    let Some(stack) = lv.slot(depot, 0) else {
+        return;
+    };
+    let item = stacks::id(&*lv.host, &stack);
+    let count = stack.count().min(255) as u8;
+    let speed = lv.speed(above);
+    // A sequenced assembly's pressing step first (`SequencedAssemblyRecipe.getRecipe`).
+    let sequenced = sequenced_on_depot(lv, depot, "create:pressing", None);
+    let fits = sequenced.is_some()
+        || recipes::with(|r| r.pressing.find_single(&item).is_some()) == Some(true);
+    match press::depot_step(&mut held, &p, speed, fits) {
+        Step::Wait => {}
+        Step::Start => {
+            p.start(press::Mode::Belt);
+            with_world(|w| {
+                w.dims[dim].presses.insert(above, p);
+                w.dims[dim].press_changes.push(above);
+            });
+        }
+        Step::Process => {
+            held = match &sequenced {
+                Some((a, progress, _)) => {
+                    sequenced_step_on_depot(lv, depot, count, held, a, progress.as_ref())
+                }
+                None => press_on_depot(lv, depot, &item, count, held),
+            };
+        }
+    }
+    with_world(|w| {
+        if let Some(h) = w.dims[dim].depots.get_mut(&depot) {
+            *h = h.map(|_| held);
+        }
+    });
+}
+
+/// `PressingBehaviour.tick` of the running press at `at`, at its turn in the transport walk:
+/// its head moves; on the ground it presses at the bottom (`applyInWorld`), over a basin it
+/// compacts there (`tryProcessInBasin`) and looks again when done (`onPressingCompleted`).
+pub(crate) fn tick_press(lv: &mut ServerLevel<'_>, at: [i32; 3]) {
+    use press::{Mode, Tick};
+    let dim = lv.dim;
+    if !recipes::ready() {
+        return;
+    }
+    match with_world(|w| w.tick_press(dim, at)).flatten() {
+        Some((Mode::World, Tick::Down)) => press_in_world(lv, at),
+        Some((Mode::Basin, Tick::Down)) => super::basin::compact_in_basin(lv, at),
+        Some((Mode::Basin, Tick::Done)) => {
+            with_world(|w| w.dims[dim].mixer_checks.push(at));
+        }
+        _ => {}
     }
 }
 
@@ -348,7 +321,7 @@ pub fn press_on_depot(
 
 /// `BeltPressingCallbacks` for a stack on the belt segment at `at` under the press two above
 /// (`BeltProcessingBehaviour` of `PressingBehaviour`): None without a press there. An item
-/// arriving (`onItemReceived`) passes a blocked press (`isBlocked`) and one standing still, is
+/// arriving (`onItemReceived`; the belt asked `isBlocked` before) passes one standing still, is
 /// held while the press runs, and starts it when a recipe takes it (a sequenced assembly's
 /// pressing step first); held (`whenItemHeld`), at the head's lowest point one of it becomes the
 /// recipe's rolled results, at rest where they lie (locked, a random angle).
@@ -363,9 +336,6 @@ pub fn press_on_belt(
     let dim = lv.dim;
     let above = [at[0], at[1] + 2, at[2]];
     let mut p = with_world(|w| w.dims[dim].presses.get(&above).copied()).flatten()?;
-    if !locked && lv.blocked([at[0], at[1] + 1, at[2]]) {
-        return None;
-    }
     if lv.speed(above) == 0.0 {
         return Some(Process::Pass);
     }
@@ -556,14 +526,15 @@ pub fn sequenced_step_on_depot(
             // One held: it becomes the transitional item, centred; more: one goes to the first
             // free output, or drops above the depot.
             let angle = random_angle(lv, depot);
-            let mut next = held;
+            // `applyToAllItems`: what stays held is centred (`setCenteredHeldItem`).
+            let mut next = held.centred();
             let placed = if count == 1 {
                 next = depot::Held {
                     angle,
-                    position: 0.5,
                     locked: true,
                     ..held
-                };
+                }
+                .centred();
                 lv.set_slots(depot, &[(0, Some(stack.clone()))])
             } else {
                 let slots = lv.slots(depot, depot::SLOTS).unwrap_or_default();
@@ -595,8 +566,9 @@ pub fn sequenced_step_on_depot(
 
 /// A processing result on a depot's held stack (`handleProcessingOnItem`): one of the stack
 /// (all of it when it is one) becomes `results`: a single item is replaced by them (the first
-/// held, centred; the rest in the outputs); otherwise the rest stays held and the results go to
-/// the outputs. What finds no room drops above the depot. The held stack's motion after.
+/// held; the rest in the outputs); otherwise the rest stays held and the results go to the
+/// outputs. What stays held is centred (`applyToAllItems`, `setCenteredHeldItem`); what finds
+/// no room drops above the depot. The held stack's motion after.
 pub fn results_on_depot(
     lv: &mut ServerLevel<'_>,
     depot: [i32; 3],
@@ -612,7 +584,7 @@ pub fn results_on_depot(
     let dim = lv.dim;
     let single = count == 1;
     let angle = random_angle(lv, depot);
-    let mut next = held;
+    let mut next = held.centred();
     let Some(slots) = lv.slots(depot, depot::SLOTS) else {
         return held;
     };
@@ -623,10 +595,10 @@ pub fn results_on_depot(
             Some((first, n)) => {
                 next = depot::Held {
                     angle,
-                    position: 0.5,
                     locked: true,
                     ..held
-                };
+                }
+                .centred();
                 stacks::stack(host, first, u32::from(*n))
             }
             None => None,

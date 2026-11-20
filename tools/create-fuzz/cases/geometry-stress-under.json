@@ -1,0 +1,394 @@
+{
+  "seed": 0,
+  "ticks": 150,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:cogwheel[axis=x]"
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "state": "create:hand_crank[facing=west]"
+    },
+    {
+      "pos": [
+        0,
+        9,
+        1
+      ],
+      "state": "create:large_cogwheel[axis=x]"
+    },
+    {
+      "pos": [
+        1,
+        9,
+        1
+      ],
+      "state": "create:weighted_ejector[facing=north,waterlogged=false]"
+    },
+    {
+      "pos": [
+        2,
+        9,
+        1
+      ],
+      "state": "create:weighted_ejector[facing=north,waterlogged=false]"
+    },
+    {
+      "pos": [
+        3,
+        9,
+        1
+      ],
+      "state": "create:weighted_ejector[facing=north,waterlogged=false]"
+    },
+    {
+      "pos": [
+        4,
+        9,
+        1
+      ],
+      "state": "create:weighted_ejector[facing=north,waterlogged=false]"
+    },
+    {
+      "pos": [
+        5,
+        9,
+        1
+      ],
+      "state": "create:weighted_ejector[facing=north,waterlogged=false]"
+    },
+    {
+      "pos": [
+        6,
+        9,
+        1
+      ],
+      "state": "create:weighted_ejector[facing=north,waterlogged=false]"
+    },
+    {
+      "pos": [
+        7,
+        9,
+        1
+      ],
+      "state": "create:weighted_ejector[facing=north,waterlogged=false]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 15,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 19,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 23,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 27,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 31,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 35,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 39,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 43,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 47,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 51,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 55,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 59,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 63,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 67,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 71,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 75,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 79,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 83,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 87,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 91,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 95,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 99,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 103,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 107,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 111,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 115,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 119,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 123,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 127,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 131,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 135,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 139,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 143,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 147,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    }
+  ]
+}

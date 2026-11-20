@@ -55,6 +55,24 @@ all succeeded. The cogwheel, motor and depot drew in the world, and the cogwheel
 At that point the wrench occupied a slot but had no icon or held model. The visual test below verifies the
 replacement item model and other assets migrated off local preparation.
 
+## Repeat the toolbox smoke test
+
+On Linux with Python 3.9+ and a display (or Xvfb), set `nightly`, `resources` and `jars` to absolute paths
+for the pinned Nightly, a private copy of its prepared resources, and the directory containing the verified
+Create jar named by SHA-512. From the repository root, stage the native app with a one-frame run, then start
+the test using that app:
+
+```sh
+(cd create && xvfb-run -a cargo sunrise-mod run --game "$nightly/sunrise-client" \
+    --resources "$resources" --jars "$jars" -- --frames 1)
+xvfb-run -a python3 tools/check-toolbox.py "$nightly/sunrise-ctl" \
+    create/target/sunrise-mod/run/app/sunrise-client "$resources" "$jars"
+```
+
+The script launches its own game with an isolated `SUNRISE_HOME`, `--game-dir` and control socket, then shuts
+it down and removes those temporary files. It checks indexed compartment kinds, contents and UUID before
+and after breaking and re-placing the sole drop. It does not drive `STORAGE`.
+
 ## Registry visuals on `ed3ac19`
 
 Built and checked a second `.smod` from a clean checkout with no `create-data prepare` outputs. The 5,916 staged
@@ -238,6 +256,23 @@ Known differences left: the category editor's inventory shows the inventory as i
 it, so items picked up while it is open appear after the next change (Create's menu syncs them at once). The game
 dropped to the title screen ("End of stream") five times across three test sessions with no panic or crash report;
 none reproduced.
+
+## Potato projectile on `9425651`
+
+`tools/check-potato-projectile.py` passed with the stock native package, the signed SDK, and the verified Create jar. A potato took a pig from 10 to 5 health and consumed one round; with no backtank, the cannon's existing wear stayed unchanged (see `API_GAPS.md`). A shallow shot planted one crop. An offhand cake took a pig to 2 health and used only the cake.
+
+The disposable fixture checks ten cases. The join callback sees initialized ammo. A join veto keeps the dual-wield turn, and changing the selected slot at join leaves both the cannon and main-hand ammo unspent. Changing it on the ammo debit leaves the pickaxe alone; that callback sees the turn marker on the original cannon and four air already taken from the backtank. A sky shot keeps flying when `clip` gives no answer. A hit from an absent shooter has the shot's direct source but no causing entity; a second shot whose shooter returns before impact has both. Flight keeps the same shot and owner UUIDs on reopen and resumes at the independently calculated next position and velocity. Two in-game screenshots from opposite oblique angles show the face of the synced potato, rather than its edge. A sticky cake drops one round into the world with the inventory full, follows its target one block sideways and hits a second pig after reopen without recovering another round. Both the full and partially vetoed sweet-berry volleys hit on their first step, spend one berry and recover at most one, on the first admitted shot.
+
+To reproduce on Linux, set `GAME`, `CTL`, `RESOURCES` and `JARS` to absolute paths for the signed Nightly client and matching control tool, a private prepared resource tree, and the verified jar directory. From the repository root:
+
+```sh
+(cd create && xvfb-run -a cargo sunrise-mod run --game "$GAME" --resources "$RESOURCES" --jars "$JARS" -- --frames 1)
+xvfb-run -a python3 tools/check-potato-projectile.py --ctl "$CTL" \
+  --game create/target/sunrise-mod/run/app/sunrise-client --resources "$RESOURCES" \
+  --jars "$JARS" --scratch target/potato-smoke
+```
+
+In a **disposable checkout**, apply `git apply tools/fixtures/potato-projectile.patch`, repeat the staging command with that checkout, and append `--fixture` to the test (or `--fixture --case flight` for the two billboard screenshots). Do not ship the instrumented build or publish the screenshots. Dedicated multiplayer, a free camera and flight prediction were not checked.
 
 ## In-game smoke test on `9425651` (main `684e89b`)
 

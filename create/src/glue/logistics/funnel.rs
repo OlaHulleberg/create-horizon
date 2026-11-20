@@ -149,17 +149,6 @@ fn take_filtered(
     )
 }
 
-/// Whether `block` is a funnel (`AbstractFunnelBlock`).
-pub fn is_funnel(block: Block) -> bool {
-    matches!(
-        block,
-        Block::AndesiteFunnel
-            | Block::BrassFunnel
-            | Block::AndesiteBeltFunnel
-            | Block::BrassBeltFunnel
-    )
-}
-
 /// The funnel at `pos`, if one is there (a miss is a state test).
 pub fn funnel_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<FunnelState> {
     let (block, info) = info_at(lv, pos)?;

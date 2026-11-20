@@ -73,6 +73,37 @@ pub fn can_output_down(
     !diagonal && drop()
 }
 
+/// `AbstractChuteBlock.isOpen` of a chute facing `facing` with `shape` (`ChuteBlock.isOpen`):
+/// open facing down, or as an intersection; a diagonal chute leading on in its own line is shut.
+/// A smart chute (no shape) always is.
+pub fn is_open(facing: Dir, shape: Option<Shape>) -> bool {
+    match shape {
+        Some(shape) => facing == Dir::Down || shape == Shape::Intersection,
+        None => true,
+    }
+}
+
+/// `ChuteBlockEntity.canDirectlyInsert` (its `DirectBeltInputBehaviour.onlyInsertWhen`): whether
+/// a chute takes a stack straight from a belt's end or another direct inserter. Not under a chute
+/// leading down into it (`facing_above`: `getChuteFacing` of the block above, None when it is no
+/// chute); not while the fans blow its stacks up (`motion`, `getItemMotion`) unless a chute leads
+/// into it (`has_inputs`, `getInputChutes` not empty); else while it is `open`
+/// (`isOpenChute`).
+pub fn can_directly_insert(
+    facing_above: Option<Dir>,
+    motion: f32,
+    has_inputs: impl FnOnce() -> bool,
+    open: bool,
+) -> bool {
+    if facing_above == Some(Dir::Down) {
+        return false;
+    }
+    if motion > 0.0 && !has_inputs() {
+        return false;
+    }
+    open
+}
+
 /// `ChuteBlockEntity.getExtractionAmount`: a chute takes up to 16 at once.
 pub const CHUTE_AMOUNT: u32 = 16;
 /// `SmartChuteBlockEntity.getExtractionAmount` with the filter's default count (64, "up to"):
@@ -183,6 +214,34 @@ impl crate::world::CreateWorld {
         // `withCallback(invVersionTracker.reset)`: it looks at its inventory again.
         d.chute_pulls.wake(pos);
         old
+    }
+
+    /// `ChuteBlockEntity.itemPosition` set (`setItem`'s `startWithValue`, or `tick` moving the
+    /// stack): the stack of the chute at `pos` is at `position` (1 the top, 0 the bottom). Its
+    /// column is saved again, as `write` saves `ItemPosition`.
+    pub fn set_chute_position(&mut self, dim: usize, pos: [i32; 3], position: f32) {
+        let d = &mut self.dims[dim];
+        if d.chutes.insert(pos, position) != Some(position) {
+            d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        }
+    }
+
+    /// `ChuteBlockEntity.write`'s `ItemPosition` of the chutes in a column, to save.
+    pub fn column_chutes(&self, dim: usize, cx: i32, cz: i32) -> Vec<([i32; 3], f32)> {
+        let mut out: Vec<_> = self.dims[dim]
+            .chutes
+            .iter()
+            .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (cx, cz))
+            .map(|(p, at)| (*p, *at))
+            .collect();
+        out.sort_by_key(|e| e.0);
+        out
+    }
+
+    /// What `column_chutes` saved: each chute's stack goes on from there when its block loads
+    /// (`read`'s `itemPosition.startWithValue`).
+    pub fn load_chutes(&mut self, dim: usize, saved: impl Iterator<Item = ([i32; 3], f32)>) {
+        self.dims[dim].chute_saved.extend(saved);
     }
 
     /// The contents of the container at `pos` changed: chutes asleep under it (or under another
@@ -391,6 +450,48 @@ mod tests {
         assert!(!can_output_down(false, None, None, || false));
         assert!(!can_output_down(true, None, None, || true));
         assert!(can_output_down(false, None, Some(true), || false));
+    }
+
+    #[test]
+    fn a_chute_the_fans_blow_up_takes_from_a_belt_only_while_a_chute_leads_in() {
+        // Java issue #163: `canDirectlyInsert` refuses while `getItemMotion() > 0 &&
+        // getInputChutes().isEmpty()` (`ChuteBlockEntity.java:133`). Observed in Java: a fan
+        // turning at 16 rpm under two chutes blows them up at 16 / 64 / 20 chutes a tick; the
+        // top one, at a belt's end with a chute below it and a depot over it, refuses the belt's
+        // stacks (they wait stalled at its end). The port asked for a chute below instead.
+        let up = item_motion(16.0, 0.0);
+        assert_eq!(up, 0.0125);
+        assert!(!can_directly_insert(None, up, || false, true));
+        // A diagonal chute over it leading in (not facing down) feeds it: it takes them.
+        assert!(can_directly_insert(Some(Dir::East), up, || true, true));
+        // Falling, it takes them whatever leads in.
+        assert!(can_directly_insert(None, MOTION, || false, true));
+        // Under a chute leading down into it, never.
+        assert!(!can_directly_insert(Some(Dir::Down), MOTION, || true, true));
+    }
+
+    #[test]
+    fn a_shut_diagonal_chute_takes_nothing_from_a_belt() {
+        // Java issue #164: `canDirectlyInsert` ends with `isOpenChute` (`ChuteBlockEntity.java:135`),
+        // and `ChuteBlock.isOpen` is `FACING == DOWN || SHAPE == INTERSECTION`
+        // (`ChuteBlock.java:71-73`). Observed in Java: a chute facing east with shape `normal`
+        // (a diagonal chute over it leading into it) at a belt's end refuses the belt's stacks;
+        // they wait stalled at its end.
+        let shut = is_open(Dir::East, Some(Shape::Normal));
+        assert!(!shut);
+        assert!(!can_directly_insert(None, MOTION, || true, shut));
+        assert!(!is_open(Dir::North, Some(Shape::Encased)));
+        // Down-facing chutes of any shape, diagonal intersections and smart chutes are open.
+        assert!(is_open(Dir::Down, Some(Shape::Normal)));
+        assert!(is_open(Dir::Down, Some(Shape::Window)));
+        assert!(is_open(Dir::East, Some(Shape::Intersection)));
+        assert!(is_open(Dir::Down, None));
+        assert!(can_directly_insert(
+            None,
+            MOTION,
+            || false,
+            is_open(Dir::East, Some(Shape::Intersection))
+        ));
     }
 
     #[test]

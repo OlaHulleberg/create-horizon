@@ -154,7 +154,7 @@ impl BlockPart for Placement {
                     level
                         .block_state(p)
                         .and_then(|state| states::level_block(level, state))
-                        .is_some_and(super::funnel::is_funnel)
+                        .is_some_and(create_engine::funnel::is_funnel)
                 };
                 let facing =
                     create_engine::place::nearest_looking_directions(ctx, c.replace_clicked)

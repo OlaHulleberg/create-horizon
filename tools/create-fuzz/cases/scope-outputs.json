@@ -1,0 +1,9 @@
+{
+  "seed": 0,
+  "ticks": 100,
+  "blocks": [
+    {"pos":[0,8,0],"state":"create:display_board[facing=north,up=true,down=true,waterlogged=false]"},
+    {"pos":[3,8,0],"state":"create:metal_girder_encased_shaft[axis=x,top=true,bottom=true,waterlogged=false]"},
+    {"pos":[6,8,0],"state":"create:fluid_valve[facing=north,axis_along_first=false,enabled=true,waterlogged=false]"}
+  ]
+}

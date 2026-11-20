@@ -26,10 +26,11 @@ use super::belt::{belt_segment, put_on_from_above};
 use super::chute::{chute_accepts, chute_at, chute_stack, set_chute_stack};
 use super::depot::depot_items;
 use super::funnel::funnel_at;
+use super::info_at;
 use super::items::{self, face, random_angle, stack_limit, upright};
-use super::{has_collision, info_at};
 use create_engine::Block;
 use create_engine::arm::{self, Kind, Point, Stack};
+use create_engine::depot;
 use create_engine::ejector;
 use create_engine::kinetics::Dir;
 use mod_api::{Compound, PlayerRef, ServerHost, Tag};
@@ -133,10 +134,9 @@ impl Subsystem for Arms {
     }
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
-        turn_placed_ejectors(lv);
         tick_arms(lv);
         entities_on_ejectors(lv);
-        tick_ejectors(lv);
+        flush_ejectors(lv);
     }
 
     fn right_click_block(
@@ -635,7 +635,7 @@ impl arm::World for ArmWorld<'_, '_> {
                 let n = count.min(max);
                 if !simulate {
                     set_chute_stack(lv, pos, items::stack_of(&*lv.host, item, u32::from(n)));
-                    with_world(|w| w.dims[dim].chutes.insert(pos, 1.0));
+                    with_world(|w| w.set_chute_position(dim, pos, 1.0));
                 }
                 count - n
             }
@@ -952,9 +952,11 @@ pub(super) fn depot_insert(
             if e.state != ejector::State::Charged || held.as_ref().is_some_and(|h| h.1 != item) {
                 return count;
             }
-            let limit = if e.max_stack == 0 { 64 } else { e.max_stack }.min(max);
             let present: u32 = stacks.iter().map(|s| u32::from(s.2)).sum();
-            u32::from(limit).saturating_sub(present).min(255) as u8
+            // `getRemainingSpace`: the held stack's own max caps the limit, and an empty
+            // depot holds but one (`ItemStack.EMPTY.getMaxStackSize()`).
+            let held_max = held.as_ref().map(|_| max);
+            depot::merge_take(e.max_stack, held_max, present, count)
         }
     };
     let n = count.min(room);
@@ -979,7 +981,33 @@ pub(super) fn depot_insert(
 }
 
 /// Arms and ejectors whose redstone input may have changed read it (`redstoneUpdate`: a newly
-/// freed arm looks for items at once; `updateSignal`).
+/// freed arm looks for items at once; `updateSignal`). The ejectors run before the transport
+/// walk ticks them; the arms stay with their own phase.
+pub(super) fn ejector_signals(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let checks = with_world(|w| std::mem::take(&mut w.dims[dim].arm_signals)).unwrap_or_default();
+    for pos in checks {
+        let powered = lv.has_neighbor_signal(pos);
+        let arm = with_world(|w| w.dims[dim].arms.arms.contains_key(&pos)).unwrap_or(false);
+        if arm {
+            // `tick_arm_signals` reads it at the arms' phase.
+            with_world(|w| w.dims[dim].arm_signals.push(pos));
+            continue;
+        }
+        with_world(|w| {
+            let d = &mut w.dims[dim];
+            if let Some(e) = d.ejectors.get_mut(&pos)
+                && e.powered != powered
+            {
+                e.powered = powered;
+                d.ejector_changes.push(pos);
+            }
+        });
+    }
+}
+
+/// `tick_arm_signals` for arms: those whose redstone input may have changed read it (a newly
+/// freed arm looks for items at once).
 fn tick_arm_signals(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let checks = with_world(|w| std::mem::take(&mut w.dims[dim].arm_signals)).unwrap_or_default();
@@ -996,19 +1024,7 @@ fn tick_arm_signals(lv: &mut ServerLevel<'_>) {
                     arms.changes.push(pos);
                 }
             });
-            continue;
         }
-        with_world(|w| {
-            let d = &mut w.dims[dim];
-            if let Some(e) = d.ejectors.get_mut(&pos)
-                && e.powered != powered
-            {
-                e.powered = powered;
-                if !d.ejecting.contains(&pos) {
-                    d.ejecting.push(pos);
-                }
-            }
-        });
     }
 }
 
@@ -1105,9 +1121,7 @@ fn wake_on_speed(dim: usize, pos: [i32; 3]) {
             d.arms.changes.push(pos);
         }
         if d.ejectors.contains_key(&pos) {
-            if !d.ejecting.contains(&pos) {
-                d.ejecting.push(pos);
-            }
+            // Clients redraw the plate's wind-up at its new speed (`Shown::of`).
             d.ejector_changes.push(pos);
         }
     });
@@ -1333,9 +1347,15 @@ impl ejector::World for EjectorWorld<'_, '_> {
     }
 
     fn clip(&mut self, from: [f64; 3], to: [f64; 3]) -> Option<([f64; 3], [i32; 3], Dir)> {
-        let own = self.pos;
+        // `Level.clip(Block.COLLIDER)`: the host's collider boxes of each cell, Create's
+        // blocks and the vanilla ones alike.
         let lv = &*self.lv;
-        ejector::clip_blocks(from, to, |p| p != own && has_collision(lv, p))
+        ejector::clip(from, to, |p| {
+            let [x, y, z] = p.map(f64::from);
+            lv.level
+                .collision_boxes(&*lv.host, [x, y, z, x + 1.0, y + 1.0, z + 1.0])
+                .unwrap_or_default()
+        })
     }
 
     fn extracting_funnel(&mut self, pos: [i32; 3]) -> bool {
@@ -1343,43 +1363,46 @@ impl ejector::World for EjectorWorld<'_, '_> {
     }
 }
 
-/// Weighted ejectors that have something to do (`EjectorBlockEntity.tick`): winding up,
-/// launching, stacks in flight, or charged with something on them; the rest cost nothing.
-/// Stacks of removed ejectors drop; clients see the ejectors whose plate or flight changed.
-fn tick_ejectors(lv: &mut ServerLevel<'_>) {
+/// One weighted ejector's turn in the shared transport walk (`EjectorBlockEntity.tick`, with
+/// the `DepotBehaviour` it extends ticked first through `super.tick()`): its held stack
+/// slides, then its own tick. Stacks of removed ejectors drop; clients see the ejectors whose
+/// plate or flight changed.
+pub(crate) fn tick_ejector(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let dim = lv.dim;
-    let list = with_world(|w| w.dims[dim].ejecting.clone()).unwrap_or_default();
-    for pos in list {
-        let Some(facing) = info_at(lv, pos).and_then(|(_, i)| i.facing) else {
-            continue;
-        };
-        let Some(mut e) = with_world(|w| w.dims[dim].ejectors.remove(&pos)).flatten() else {
-            continue;
-        };
-        let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
-        let flying = e.flying.len();
-        let before = e.state;
-        let changed = e.tick(pos, facing, speed, &mut EjectorWorld { lv: &mut *lv, pos });
-        if before == ejector::State::Charged && e.state == ejector::State::Launching {
-            launch_entities(lv, pos, e.launcher.entity_motion(facing));
-        }
-        let has_items = !depot_items(lv, pos).is_empty();
-        let busy = e.busy(speed, has_items);
-        with_world(|w| {
-            let d = &mut w.dims[dim];
-            d.ejectors.insert(pos, e);
-            if changed {
-                d.ejector_changes.push(pos);
-                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
-            } else if flying > 0 {
-                // Stacks still in flight are saved with it.
-                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
-            }
-            if !busy {
-                d.ejecting.retain(|p| *p != pos);
-            }
-        });
+    let Some(facing) = info_at(lv, pos).and_then(|(_, i)| i.facing) else {
+        return;
+    };
+    let Some(mut e) = with_world(|w| w.dims[dim].ejectors.remove(&pos)).flatten() else {
+        return;
+    };
+    // `KineticBlockEntity.tick` first (`attachKinetics`), then `DepotBehaviour.tick` inside
+    // `super.tick()`: the slide, then what its arrival asks.
+    with_world(|w| w.ejector_base_tick(dim, pos));
+    super::depot::tick_depot(lv, pos);
+    let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
+    let before = e.state;
+    let flying = e.flying.len();
+    let changed = e.tick(pos, facing, speed, &mut EjectorWorld { lv: &mut *lv, pos });
+    if before == ejector::State::Charged && e.state == ejector::State::Launching {
+        launch_entities(lv, pos, e.launcher.entity_motion(facing));
     }
+    with_world(|w| {
+        let d = &mut w.dims[dim];
+        d.ejectors.insert(pos, e);
+        if changed {
+            d.ejector_changes.push(pos);
+            d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        } else if flying > 0 {
+            // Stacks still in flight are saved with it.
+            d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        }
+    });
+}
+
+/// Ejectors after the walk: stacks of removed ones drop, clients see those whose plate or
+/// flight changed.
+pub(super) fn flush_ejectors(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
     let (drops, changes) = with_world(|w| {
         let d = &mut w.dims[dim];
         let mut c = std::mem::take(&mut d.ejector_changes);
@@ -1463,7 +1486,7 @@ fn entities_on_ejectors(lv: &mut ServerLevel<'_>) {
 }
 
 /// `EjectorBlockEntity.activate` (`EjectorTriggerPacket` from a player's client, or something
-/// landing on it).
+/// landing on it): its block entity's next turn launches.
 pub fn trigger_ejector(dim: usize, pos: [i32; 3]) {
     with_world(|w| {
         let d = &mut w.dims[dim];
@@ -1474,9 +1497,6 @@ pub fn trigger_ejector(dim: usize, pos: [i32; 3]) {
             return;
         }
         e.activate();
-        if !d.ejecting.contains(&pos) {
-            d.ejecting.push(pos);
-        }
     });
 }
 
@@ -1514,21 +1534,6 @@ fn launch_entities(lv: &mut ServerLevel<'_>, pos: [i32; 3], motion: [f64; 3]) {
         e.teleport_to(&mut *lv.host, at, None);
         e.set_velocity(&mut *lv.host, motion);
     }
-}
-
-/// An ejector starts ticking: its depot changed, it started turning.
-pub fn wake_ejectors(dim: usize, list: &[[i32; 3]]) {
-    with_world(|w| {
-        let d = &mut w.dims[dim];
-        if d.ejectors.is_empty() {
-            return;
-        }
-        for p in list {
-            if d.ejectors.contains_key(p) && !d.ejecting.contains(p) {
-                d.ejecting.push(*p);
-            }
-        }
-    });
 }
 
 /// Ejectors to `players`.
@@ -1636,34 +1641,117 @@ fn arms_to_nbt(dim: usize, chunk: [i32; 2], own: &mut Compound) {
     if !ejectors.is_empty() {
         let list = ejectors
             .iter()
-            .map(|(p, e)| {
-                let mut v = vec![
-                    p[0],
-                    p[1],
-                    p[2],
-                    e.launcher.h,
-                    e.launcher.v,
-                    i32::from(e.state.index()),
-                    e.lid.value.to_bits() as i32,
-                    i32::from(e.powered),
-                    i32::from(e.max_stack),
-                ];
-                for f in &e.flying {
-                    v.extend([f.time, i32::from(f.count)]);
-                }
-                let mut c = Compound::new();
-                c.insert("v".into(), Tag::IntArray(v));
-                let items = e
-                    .flying
-                    .iter()
-                    .map(|f| Tag::String(f.item.as_str().into()))
-                    .collect();
-                c.insert("flying".into(), Tag::List(items));
-                Tag::Compound(c)
-            })
+            .map(|(p, e)| Tag::Compound(ejector_to_tag(*p, e)))
             .collect();
         own.insert("ejectors".into(), Tag::List(list));
     }
+}
+
+/// `EjectorBlockEntity.write` for one ejector: its position, target, state, lid, powered flag
+/// and stack size, each stack in flight's tick and count, its item, and the scan's early target
+/// (`EarlyTarget`, `EarlyTargetPos`, `EarlyTargetTime`).
+fn ejector_to_tag(pos: [i32; 3], e: &ejector::Ejector) -> Compound {
+    let mut v = vec![
+        pos[0],
+        pos[1],
+        pos[2],
+        e.launcher.h,
+        e.launcher.v,
+        i32::from(e.state.index()),
+        e.lid.value.to_bits() as i32,
+        i32::from(e.powered),
+        i32::from(e.max_stack),
+    ];
+    for f in &e.flying {
+        v.extend([f.time, i32::from(f.count)]);
+    }
+    let mut c = Compound::new();
+    c.insert("v".into(), Tag::IntArray(v));
+    let items = e
+        .flying
+        .iter()
+        .map(|f| Tag::String(f.item.as_str().into()))
+        .collect();
+    c.insert("flying".into(), Tag::List(items));
+    // `EarlyTarget`, `EarlyTargetPos` and `EarlyTargetTime`.
+    if let Some(early) = e.early {
+        let at = early.at.iter().map(|v| Tag::Double(v.to_bits())).collect();
+        c.insert(
+            "early".into(),
+            Tag::Compound(Compound::from([
+                ("pos".into(), Tag::IntArray(early.block.to_vec())),
+                ("at".into(), Tag::List(at)),
+                ("time".into(), Tag::Float(early.time.to_bits())),
+            ])),
+        );
+    }
+    c
+}
+
+/// What [`ejector_to_tag`] wrote: the ejector's position and the ejector.
+fn ejector_from_tag(c: &Compound) -> Option<([i32; 3], ejector::Ejector)> {
+    let text = |t: Option<&Tag>| match t {
+        Some(Tag::String(s)) => s.to_string_lossy(),
+        _ => String::new(),
+    };
+    let Some(Tag::IntArray(v)) = c.get(&"v".into()) else {
+        return None;
+    };
+    if v.len() < 9 {
+        return None;
+    }
+    let pos = [v[0], v[1], v[2]];
+    let mut e = ejector::Ejector {
+        launcher: ejector::Launcher::new(v[3], v[4]),
+        ..Default::default()
+    };
+    e.launcher.clamp(ejector::MAX_DISTANCE);
+    e.state = ejector::State::from_index(v[5].clamp(0, 2) as u8);
+    let lid = f32::from_bits(v[6] as u32).clamp(0.0, 1.0);
+    e.lid.value = lid;
+    e.lid.previous = lid;
+    e.lid.target = lid;
+    e.powered = v[7] != 0;
+    e.max_stack = v[8].clamp(0, 64) as u8;
+    let items: Vec<String> = match c.get(&"flying".into()) {
+        Some(Tag::List(l)) => l.iter().map(|t| text(Some(t))).collect(),
+        _ => Vec::new(),
+    };
+    for (f, item) in v[9..].as_chunks::<2>().0.iter().zip(items) {
+        let id = e.next_id;
+        e.next_id += 1;
+        e.flying.push(ejector::Flying {
+            id,
+            time: f[0],
+            item,
+            count: f[1].clamp(1, 64) as u8,
+        });
+    }
+    if let Some(Tag::Compound(c)) = c.get(&"early".into()) {
+        let block = match c.get(&"pos".into()) {
+            Some(Tag::IntArray(v)) if v.len() == 3 => Some([v[0], v[1], v[2]]),
+            _ => None,
+        };
+        let at: Vec<f64> = match c.get(&"at".into()) {
+            Some(Tag::List(l)) => l
+                .iter()
+                .filter_map(|t| match t {
+                    Tag::Double(b) => Some(f64::from_bits(*b)),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        let time = match c.get(&"time".into()) {
+            Some(Tag::Float(b)) => Some(f32::from_bits(*b)),
+            _ => None,
+        };
+        let at: Option<[f64; 3]> = at[..].try_into().ok();
+        if let (Some(block), Some(time), Some(at)) = (block, time, at) {
+            e.early = Some(ejector::Early { at, block, time });
+        }
+    }
+    Some((pos, e))
 }
 
 /// What [`arm_to_tag`] wrote: the arm's position and the arm.
@@ -1717,10 +1805,6 @@ pub(super) fn arm_from_tag(c: &Compound) -> Option<([i32; 3], arm::Arm)> {
 
 /// What `arms_to_nbt` wrote: arms and ejectors waiting for their blocks.
 fn arms_from_nbt(dim: usize, data: &Compound) {
-    let text = |t: Option<&Tag>| match t {
-        Some(Tag::String(s)) => s.to_string_lossy(),
-        _ => String::new(),
-    };
     let mut arms = Vec::new();
     if let Some(Tag::List(list)) = data.get(&"arms".into()) {
         for t in list {
@@ -1732,40 +1816,7 @@ fn arms_from_nbt(dim: usize, data: &Compound) {
     if let Some(Tag::List(list)) = data.get(&"ejectors".into()) {
         for t in list {
             let Tag::Compound(c) = t else { continue };
-            let Some(Tag::IntArray(v)) = c.get(&"v".into()) else {
-                continue;
-            };
-            if v.len() < 9 {
-                continue;
-            }
-            let pos = [v[0], v[1], v[2]];
-            let mut e = ejector::Ejector {
-                launcher: ejector::Launcher::new(v[3], v[4]),
-                ..Default::default()
-            };
-            e.launcher.clamp(ejector::MAX_DISTANCE);
-            e.state = ejector::State::from_index(v[5].clamp(0, 2) as u8);
-            let lid = f32::from_bits(v[6] as u32).clamp(0.0, 1.0);
-            e.lid.value = lid;
-            e.lid.previous = lid;
-            e.lid.target = lid;
-            e.powered = v[7] != 0;
-            e.max_stack = v[8].clamp(0, 64) as u8;
-            let items: Vec<String> = match c.get(&"flying".into()) {
-                Some(Tag::List(l)) => l.iter().map(|t| text(Some(t))).collect(),
-                _ => Vec::new(),
-            };
-            for (f, item) in v[9..].as_chunks::<2>().0.iter().zip(items) {
-                let id = e.next_id;
-                e.next_id += 1;
-                e.flying.push(ejector::Flying {
-                    id,
-                    time: f[0],
-                    item,
-                    count: f[1].clamp(1, 64) as u8,
-                });
-            }
-            ejectors.push((pos, e));
+            ejectors.extend(ejector_from_tag(c));
         }
     }
     if arms.is_empty() && ejectors.is_empty() {
@@ -2224,7 +2275,7 @@ pub fn ejector_placed(host: &mut dyn ServerHost, event: &mod_api::EntityPlaceEve
 }
 
 /// Ejectors placed this tick turn to face their target.
-fn turn_placed_ejectors(lv: &mut ServerLevel<'_>) {
+pub(super) fn turn_placed_ejectors(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let due: Vec<([i32; 3], Dir)> = EJECTOR_FACING.with_borrow_mut(|f| {
         let (mine, rest): (Vec<_>, Vec<_>) = f.drain(..).partition(|(d, _, _)| *d == dim);
@@ -2240,5 +2291,57 @@ fn turn_placed_ejectors(lv: &mut ServerLevel<'_>) {
                 super::super::server::update_all(),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod ejector_save_tests {
+    use super::*;
+
+    #[test]
+    fn an_ejectors_early_target_survives_a_reload() {
+        // `EjectorBlockEntity.write`: `State`, `Lid`, `LaunchedItems`, and the obstacle scan's
+        // `EarlyTarget`/`EarlyTargetPos`/`EarlyTargetTime` — e4's depot throw meets the casing
+        // at [1, 8, 0] and 9.304945, and must still be there after the chunk loads.
+        let mut e = ejector::Ejector {
+            launcher: ejector::Launcher::new(1, 0),
+            state: ejector::State::Charged,
+            max_stack: 4,
+            ..Default::default()
+        };
+        e.lid.value = 0.25;
+        e.lid.previous = 0.25;
+        e.lid.target = 0.25;
+        e.early = Some(ejector::Early {
+            at: [1.4971566682659168, 9.0625, 0.5000000000000001],
+            block: [1, 8, 0],
+            time: 9.304945,
+        });
+        e.flying.push(ejector::Flying {
+            id: e.next_id,
+            time: 3,
+            item: "minecraft:iron_ingot".into(),
+            count: 1,
+        });
+        let (pos, back) = ejector_from_tag(&ejector_to_tag([0, 8, 0], &e)).expect("saved");
+        assert_eq!(pos, [0, 8, 0]);
+        assert_eq!(back.early, e.early);
+        assert_eq!(back.state, e.state);
+        assert_eq!(back.max_stack, 4);
+        assert_eq!(back.lid.value, 0.25);
+        assert_eq!(back.flying.len(), 1);
+        assert_eq!(back.flying[0].time, 3);
+        assert_eq!(back.flying[0].item, "minecraft:iron_ingot");
+        // An ejector saved before the scan's fields existed reads with no early target.
+        let mut old = ejector_to_tag([0, 8, 0], &e);
+        let mut v = match old.get(&"v".into()) {
+            Some(Tag::IntArray(v)) => v.clone(),
+            _ => unreachable!(),
+        };
+        v.truncate(9);
+        old.insert("v".into(), Tag::IntArray(v));
+        old.insert("early".into(), Tag::End);
+        let (_, back) = ejector_from_tag(&old).expect("legacy save");
+        assert_eq!(back.early, None);
     }
 }

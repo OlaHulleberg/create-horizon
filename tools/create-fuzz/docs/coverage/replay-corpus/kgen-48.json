@@ -1,0 +1,62 @@
+{
+  "version": 3,
+  "seed": 48,
+  "checkpoints": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+  ],
+  "ticks": 153,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "state": "create:stressometer[axis_along_first=true,facing=up]"
+    },
+    {
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:mechanical_saw[axis_along_first=false,facing=east,flipped=true]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 73,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "minecraft:air"
+    },
+    {
+      "action": {
+        "kind": "reload"
+      },
+      "tick": 1,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    }
+  ]
+}

@@ -1,0 +1,121 @@
+{
+ "version": 3,
+ "seed": 0,
+ "day_time": 0,
+ "ticks": 60,
+ "checkpoints": [
+  4,
+  8,
+  13,
+  21,
+  29,
+  41
+ ],
+ "blocks": [
+  {
+   "pos": [
+    0,
+    4,
+    0
+   ],
+   "state": "minecraft:stone"
+  }
+ ],
+ "events": [
+  {
+   "tick": 2,
+   "pos": [
+    0,
+    4,
+    0
+   ],
+   "action": {
+    "kind": "use",
+    "item": "create:large_water_wheel",
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "yaw": 0.0,
+    "pitch": 0.0,
+    "sneaking": false
+   }
+  },
+  {
+   "tick": 12,
+   "pos": [
+    0,
+    6,
+    0
+   ],
+   "action": {
+    "kind": "use",
+    "item": "minecraft:oak_planks",
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "yaw": 0.0,
+    "pitch": 0.0,
+    "sneaking": false
+   }
+  },
+  {
+   "tick": 20,
+   "pos": [
+    0,
+    6,
+    0
+   ],
+   "action": {
+    "kind": "use",
+    "item": "create:andesite_casing",
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "yaw": 0.0,
+    "pitch": 0.0,
+    "sneaking": false
+   }
+  },
+  {
+   "tick": 28,
+   "pos": [
+    0,
+    7,
+    0
+   ],
+   "action": {
+    "kind": "remove"
+   }
+  },
+  {
+   "tick": 40,
+   "pos": [
+    0,
+    5,
+    1
+   ],
+   "action": {
+    "kind": "use",
+    "item": "create:wrench",
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "yaw": 0.0,
+    "pitch": 0.0,
+    "sneaking": true
+   }
+  }
+ ]
+}

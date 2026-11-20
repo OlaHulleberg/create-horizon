@@ -1,0 +1,282 @@
+{
+  "version": 1,
+  "seed": 16,
+  "ticks": 106,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:large_cogwheel[axis=x]"
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "state": "create:hand_crank[facing=west]"
+    },
+    {
+      "pos": [
+        0,
+        9,
+        1
+      ],
+      "state": "create:cogwheel[axis=x]"
+    },
+    {
+      "pos": [
+        1,
+        9,
+        1
+      ],
+      "state": "create:weighted_ejector[facing=north,waterlogged=false]"
+    },
+    {
+      "pos": [
+        2,
+        9,
+        1
+      ],
+      "state": "create:weighted_ejector[facing=north,waterlogged=false]"
+    },
+    {
+      "pos": [
+        3,
+        9,
+        1
+      ],
+      "state": "create:weighted_ejector[facing=north,waterlogged=false]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 6,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 10,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 14,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 18,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 22,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 26,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 30,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 34,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 38,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 42,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 46,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 50,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 54,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 58,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 62,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 66,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 70,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 74,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 78,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 82,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 86,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 90,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 94,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 98,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    },
+    {
+      "tick": 102,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "turn": true
+    }
+  ]
+}

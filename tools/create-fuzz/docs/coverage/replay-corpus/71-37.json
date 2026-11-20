@@ -1,0 +1,341 @@
+{
+  "version": 3,
+  "seed": 71,
+  "checkpoints": [
+    20,
+    24,
+    28,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    40,
+    44,
+    48,
+    52,
+    56,
+    60,
+    64,
+    68,
+    72,
+    76,
+    80,
+    84,
+    86,
+    87,
+    88,
+    89,
+    90,
+    91,
+    92,
+    93,
+    96,
+    100,
+    104,
+    108,
+    112,
+    116,
+    120,
+    124,
+    128,
+    132,
+    136,
+    140,
+    144,
+    148,
+    152,
+    156,
+    160,
+    164,
+    168,
+    172,
+    176,
+    180,
+    181,
+    182,
+    183,
+    184,
+    185,
+    186,
+    187,
+    188,
+    192,
+    196,
+    200,
+    204,
+    208,
+    212,
+    213,
+    214,
+    216,
+    220,
+    224,
+    228,
+    232,
+    236,
+    240,
+    244,
+    247,
+    248,
+    249,
+    250,
+    251,
+    252,
+    253,
+    254,
+    256,
+    260,
+    264,
+    268,
+    272,
+    276,
+    280,
+    284,
+    288,
+    292,
+    293,
+    294,
+    295,
+    296,
+    297,
+    298,
+    299,
+    300,
+    304,
+    308,
+    312,
+    316,
+    320,
+    324,
+    328,
+    332,
+    336,
+    340,
+    344,
+    348,
+    352,
+    356,
+    360,
+    364,
+    368,
+    372,
+    376,
+    380,
+    384,
+    388,
+    392,
+    396,
+    400
+  ],
+  "ticks": 402,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        3
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        0,
+        8,
+        4
+      ],
+      "state": "minecraft:stone"
+    },
+    {
+      "pos": [
+        0,
+        10,
+        1
+      ],
+      "state": "create:mechanical_press[facing=north]"
+    },
+    {
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 64
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 8,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 14,
+      "pos": [
+        0,
+        8,
+        3
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:gold_ingot",
+            "count": 5
+          }
+        }
+      },
+      "tick": 30,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:gold_ingot",
+            "count": 1
+          }
+        }
+      },
+      "tick": 86,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:iron_ingot",
+            "count": 7
+          }
+        }
+      },
+      "tick": 180,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "tick": 212,
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 0
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:diamond",
+            "count": 9
+          }
+        }
+      },
+      "tick": 247,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "tick": 248,
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 64
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:gold_ingot",
+            "count": 3
+          }
+        }
+      },
+      "tick": 293,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    }
+  ]
+}

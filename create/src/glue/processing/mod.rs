@@ -70,6 +70,8 @@ pub(crate) use deployer::activate as activate_deployer;
 pub(crate) use deployer::set_held_stack as set_deployer_held;
 pub(crate) use persist::{deployers_from_nbt, deployers_to_nbt};
 pub use press::transitional_of;
+// The press's depot callbacks and its head's tick, at their turns in logistics' transport walk.
+pub(crate) use press::{depot_turn as press_depot_turn, tick_press};
 // What the other subsystems call: fluids (the spout on a belt
 // or depot runs a sequenced assembly's filling step, pumps reach basins' tanks), logistics (a
 // stack's sequenced progress onto and off a belt).
@@ -687,7 +689,16 @@ impl ServerLevel<'_> {
             .unwrap_or_default()
     }
 
-    /// `BeltProcessingBehaviour.isBlocked`: a block with a collision shape at `at`.
+    /// `BeltProcessingBehaviour.isBlocked` for the processing space `space` (a belt segment or
+    /// depot): the block over it keeps the machine above from a stack arriving there
+    /// (`belt::processing_blocked`; a funnel never does).
+    pub fn processing_blocked(&self, space: [i32; 3]) -> bool {
+        let above = [space[0], space[1] + 1, space[2]];
+        let block = self.info(above).map(|(b, _)| b);
+        create_engine::belt::processing_blocked(block, || self.blocked(above))
+    }
+
+    /// Whether the block at `at` has a collision shape.
     pub fn blocked(&self, at: [i32; 3]) -> bool {
         !self
             .shape(at, mod_api::BlockShapeKind::Collision)

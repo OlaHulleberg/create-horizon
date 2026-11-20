@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "seed": 65,
+  "ticks": 74,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:brass_encased_cogwheel[axis=y,bottom_shaft=false,top_shaft=false]"
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": -256
+    },
+    {
+      "pos": [
+        0,
+        9,
+        1
+      ],
+      "state": "create:cogwheel[axis=x]"
+    },
+    {
+      "pos": [
+        1,
+        9,
+        1
+      ],
+      "state": "create:brass_encased_large_cogwheel[axis=x,bottom_shaft=false,top_shaft=true]"
+    }
+  ]
+}

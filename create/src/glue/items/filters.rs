@@ -1309,7 +1309,65 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
 }
 
 #[cfg(test)]
-mod enchantment_tests {
+mod tests {
+    use super::*;
+    use crate::glue::subsystem::Subsystem;
+    use mod_api::prelude::*;
+    use mod_api::testing::FakeHost;
+    use mod_api::{Backend, BackendRef, CreativeModeTabInfo, ItemKey};
+
+    struct CatalogHost;
+
+    mod_api::__mod_api_impl_host_areas!(CatalogHost, except(items));
+    mod_api::__mod_api_impl_backend_areas!(CatalogHost, except(items));
+    impl Host for CatalogHost {
+        fn backend(&self) -> Option<BackendRef<'_>> {
+            Some(mod_api::__private::backend_ref(self))
+        }
+    }
+    impl Backend for CatalogHost {}
+    impl ItemsHost for CatalogHost {
+        fn max_damage(&self, _: ItemKey) -> Option<u32> {
+            None
+        }
+    }
+    impl ItemsBackend for CatalogHost {
+        fn creative_stack_key(&self, stack: &ItemStack) -> Option<ItemStack> {
+            Some(stack.clone())
+        }
+    }
+
+    #[test]
+    fn item_group_membership_survives_invalidation_until_refresh() {
+        let mut fixture = FakeHost::new();
+        let id = Identifier::parse("create:cogwheel").unwrap();
+        fixture.registries.resolve_items([id.clone()]).unwrap();
+        let stack = ItemStack::of(fixture.item_key(&id).unwrap());
+        let tab = CreativeModeTabInfo::new(
+            "create:base".into(),
+            true,
+            vec![stack.clone()],
+            vec![stack.clone()],
+        );
+        ITEM_GROUPS.set(Some(Arc::new(CreativeModeTabs::new(
+            CreativeTabPermissions::Normal,
+            vec![tab],
+        ))));
+        ITEM_GROUPS_DIRTY.set(false);
+        let probe = Looked {
+            host: &CatalogHost,
+            stack: &stack,
+            id: id.to_string(),
+        };
+        let predicate = Attribute::InItemGroup("create:base".into());
+        assert!(probe.attribute(&predicate));
+        super::super::Items.tags_updated(&mut fixture);
+        assert!(ITEM_GROUPS_DIRTY.get());
+        assert!(probe.attribute(&predicate));
+        clear_item_groups();
+        assert!(!probe.attribute(&predicate));
+    }
+
     #[test]
     fn an_enchantments_max_level_is_its_top_level_field() {
         let sharpness = r##"{"description":{"translate":"enchantment.minecraft.sharpness"},

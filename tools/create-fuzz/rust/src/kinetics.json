@@ -1,0 +1,1719 @@
+[
+  {
+    "id": "create:shaft",
+    "properties": {
+      "axis": [
+        "x",
+        "y",
+        "z"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:370`; `com/simibubi/create/content/kinetics/simpleRelays/ShaftBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:cogwheel",
+    "properties": {
+      "axis": [
+        "x",
+        "y",
+        "z"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:380`; `com/simibubi/create/content/kinetics/simpleRelays/CogWheelBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "axis",
+      "cog": "small"
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:large_cogwheel",
+    "properties": {
+      "axis": [
+        "x",
+        "y",
+        "z"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:392`; `com/simibubi/create/content/kinetics/simpleRelays/CogWheelBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "axis",
+      "cog": "large"
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:andesite_encased_shaft",
+    "properties": {
+      "axis": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    "source": "`AllBlocks.java:405`; `com/simibubi/create/content/kinetics/simpleRelays/encased/EncasedShaftBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:brass_encased_shaft",
+    "properties": {
+      "axis": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    "source": "`AllBlocks.java:413`; `com/simibubi/create/content/kinetics/simpleRelays/encased/EncasedShaftBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:andesite_encased_cogwheel",
+    "properties": {
+      "axis": [
+        "x",
+        "y",
+        "z"
+      ],
+      "top_shaft": [
+        "false",
+        "true"
+      ],
+      "bottom_shaft": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:421`; `com/simibubi/create/content/kinetics/simpleRelays/encased/EncasedCogwheelBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "flags",
+      "cog": "small"
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:brass_encased_cogwheel",
+    "properties": {
+      "axis": [
+        "x",
+        "y",
+        "z"
+      ],
+      "top_shaft": [
+        "false",
+        "true"
+      ],
+      "bottom_shaft": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:432`; `com/simibubi/create/content/kinetics/simpleRelays/encased/EncasedCogwheelBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "flags",
+      "cog": "small"
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:andesite_encased_large_cogwheel",
+    "properties": {
+      "axis": [
+        "x",
+        "y",
+        "z"
+      ],
+      "top_shaft": [
+        "false",
+        "true"
+      ],
+      "bottom_shaft": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:443`; `com/simibubi/create/content/kinetics/simpleRelays/encased/EncasedCogwheelBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "flags",
+      "cog": "large"
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:brass_encased_large_cogwheel",
+    "properties": {
+      "axis": [
+        "x",
+        "y",
+        "z"
+      ],
+      "top_shaft": [
+        "false",
+        "true"
+      ],
+      "bottom_shaft": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:452`; `com/simibubi/create/content/kinetics/simpleRelays/encased/EncasedCogwheelBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "flags",
+      "cog": "large"
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:gearbox",
+    "properties": {
+      "axis": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    "source": "`AllBlocks.java:460`; `com/simibubi/create/content/kinetics/gearbox/GearboxBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "off_axis",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:clutch",
+    "properties": {
+      "axis": [
+        "x",
+        "y",
+        "z"
+      ],
+      "powered": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:474`; `com/simibubi/create/content/kinetics/transmission/ClutchBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:gearshift",
+    "properties": {
+      "axis": [
+        "x",
+        "y",
+        "z"
+      ],
+      "powered": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:486`; `com/simibubi/create/content/kinetics/transmission/GearshiftBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:encased_chain_drive",
+    "properties": {
+      "axis": [
+        "x",
+        "y",
+        "z"
+      ],
+      "part": [
+        "start",
+        "middle",
+        "end",
+        "none"
+      ],
+      "axis_along_first": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:498`; `com/simibubi/create/content/kinetics/chainDrive/ChainDriveBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": "Player chain traces cover topology; independent static shape injection excluded",
+    "observation_scope": {}
+  },
+  {
+    "id": "create:adjustable_chain_gearshift",
+    "properties": {
+      "axis": [
+        "x",
+        "y",
+        "z"
+      ],
+      "part": [
+        "start",
+        "middle",
+        "end",
+        "none"
+      ],
+      "axis_along_first": [
+        "false",
+        "true"
+      ],
+      "powered": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:511`; `com/simibubi/create/content/kinetics/chainDrive/ChainGearshiftBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": "Player chain traces cover topology; independent static shape injection excluded",
+    "observation_scope": {}
+  },
+  {
+    "id": "create:belt",
+    "properties": {
+      "facing": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "slope": [
+        "horizontal",
+        "upward",
+        "downward",
+        "vertical",
+        "sideways"
+      ],
+      "part": [
+        "start",
+        "middle",
+        "end",
+        "pulley"
+      ],
+      "casing": [
+        "false",
+        "true"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:531`; `com/simibubi/create/content/kinetics/belt/BeltBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "facing",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": "Static isolated belt injection excluded; connector/casing/pulley/slicer histories and plain item landing, pickup and transport are supported; native flight, components and loaded slicing remain outside the adapter",
+    "observation_scope": {}
+  },
+  {
+    "id": "create:chain_conveyor",
+    "properties": {},
+    "source": "`AllBlocks.java:544`; `com/simibubi/create/content/kinetics/chainConveyor/ChainConveyorBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "y",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": "Static isolated conveyor injection excluded; explicit chain_link histories are supported; conveyor packages, ports and riding remain outside the adapter",
+    "observation_scope": {}
+  },
+  {
+    "id": "create:creative_motor",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "source": "`AllBlocks.java:557`; `com/simibubi/create/content/kinetics/motor/CreativeMotorBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "facing",
+      "shafts": "front",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:water_wheel",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "source": "`AllBlocks.java:572`; `com/simibubi/create/content/kinetics/waterwheel/WaterWheelBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "facing",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": "Group 6: environmental sensing/assembly/steam inputs absent; passive source is not a driven generator test",
+    "observation_scope": {}
+  },
+  {
+    "id": "create:large_water_wheel",
+    "properties": {
+      "axis": [
+        "x",
+        "y",
+        "z"
+      ],
+      "extension": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:586`; `com/simibubi/create/content/kinetics/waterwheel/LargeWaterWheelBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": "Group 6: environmental sensing/assembly/steam inputs absent; passive source is not a driven generator test",
+    "observation_scope": {
+      "extension": "LargeWaterWheelBlock.updateShape"
+    }
+  },
+  {
+    "id": "create:encased_fan",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "source": "`AllBlocks.java:613`; `com/simibubi/create/content/kinetics/fan/EncasedFanBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:turntable",
+    "properties": {},
+    "source": "`AllBlocks.java:635`; `com/simibubi/create/content/kinetics/turntable/TurntableBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "y",
+      "shafts": "down",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:hand_crank",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:644`; `com/simibubi/create/content/kinetics/crank/HandCrankBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:cuckoo_clock",
+    "properties": {
+      "facing": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "source": "`AllBlocks.java:657`; `com/simibubi/create/content/kinetics/clock/CuckooClockBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:mysterious_cuckoo_clock",
+    "properties": {
+      "facing": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "source": "`AllBlocks.java:666`; `com/simibubi/create/content/kinetics/clock/CuckooClockBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:millstone",
+    "properties": {},
+    "source": "`AllBlocks.java:675`; `com/simibubi/create/content/kinetics/millstone/MillstoneBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "y",
+      "shafts": "down",
+      "cog": "small"
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:crushing_wheel",
+    "properties": {
+      "axis": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    "source": "`AllBlocks.java:685`; `com/simibubi/create/content/kinetics/crusher/CrushingWheelBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:mechanical_press",
+    "properties": {
+      "facing": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "source": "`AllBlocks.java:710`; `com/simibubi/create/content/kinetics/press/MechanicalPressBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "facing",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:mechanical_mixer",
+    "properties": {},
+    "source": "`AllBlocks.java:722`; `com/simibubi/create/content/kinetics/mixer/MechanicalMixerBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "y",
+      "shafts": "none",
+      "cog": "small"
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:weighted_ejector",
+    "properties": {
+      "facing": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:797`; `com/simibubi/create/content/logistics/depot/EjectorBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "clockwise",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:speedometer",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "axis_along_first": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:839`; `com/simibubi/create/content/kinetics/gauge/GaugeBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "directional",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:stressometer",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "axis_along_first": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:850`; `com/simibubi/create/content/kinetics/gauge/GaugeBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "directional",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:mechanical_pump",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:929`; `com/simibubi/create/content/fluids/pump/PumpBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "facing",
+      "shafts": "none",
+      "cog": "small"
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:fluid_valve",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "axis_along_first": [
+        "false",
+        "true"
+      ],
+      "enabled": [
+        "false",
+        "true"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:951`; `com/simibubi/create/content/fluids/pipes/valve/FluidValveBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "directional",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {},
+    "state_phase": "fluids: moving pointer tick installed; enabled is compared"
+  },
+  {
+    "id": "create:copper_valve_handle",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:963`; `com/simibubi/create/content/kinetics/crank/ValveHandleBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:hose_pulley",
+    "properties": {
+      "facing": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "source": "`AllBlocks.java:1022`; `com/simibubi/create/content/fluids/hosePulley/HosePulleyBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "clockwise",
+      "shafts": "clockwise",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:powered_shaft",
+    "properties": {
+      "axis": [
+        "x",
+        "y",
+        "z"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:1091`; `com/simibubi/create/content/kinetics/steamEngine/PoweredShaftBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": "Group 6: environmental sensing/assembly/steam inputs absent; passive source is not a driven generator test",
+    "observation_scope": {}
+  },
+  {
+    "id": "create:mechanical_piston",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "axis_along_first": [
+        "false",
+        "true"
+      ],
+      "state": [
+        "retracted",
+        "moving",
+        "extended"
+      ]
+    },
+    "source": "`AllBlocks.java:1103`; `com/simibubi/create/content/contraptions/piston/MechanicalPistonBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "directional",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": "Group 7: machine assembly, queued checks and world effects not ticked by Rust adapter",
+    "observation_scope": {}
+  },
+  {
+    "id": "create:sticky_mechanical_piston",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "axis_along_first": [
+        "false",
+        "true"
+      ],
+      "state": [
+        "retracted",
+        "moving",
+        "extended"
+      ]
+    },
+    "source": "`AllBlocks.java:1111`; `com/simibubi/create/content/contraptions/piston/MechanicalPistonBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "directional",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": "Group 7: machine assembly, queued checks and world effects not ticked by Rust adapter",
+    "observation_scope": {}
+  },
+  {
+    "id": "create:gantry_carriage",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "axis_along_first": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:1141`; `com/simibubi/create/content/contraptions/gantry/GantryCarriageBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "directional",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": "Group 7: machine assembly, queued checks and world effects not ticked by Rust adapter",
+    "observation_scope": {
+      "axis_along_first": "GantryCarriageBlock.updateShape/cycleAxisIfNecessary"
+    }
+  },
+  {
+    "id": "create:gantry_shaft",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "part": [
+        "start",
+        "middle",
+        "end",
+        "single"
+      ],
+      "powered": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:1152`; `com/simibubi/create/content/kinetics/gantry/GantryShaftBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "facing",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": "Group 7: machine assembly, queued checks and world effects not ticked by Rust adapter",
+    "observation_scope": {
+      "part": "GantryShaftBlock.updateShape"
+    }
+  },
+  {
+    "id": "create:windmill_bearing",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "source": "`AllBlocks.java:1179`; `com/simibubi/create/content/contraptions/bearing/WindmillBearingBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": "Group 6: environmental sensing/assembly/steam inputs absent; passive source is not a driven generator test",
+    "observation_scope": {}
+  },
+  {
+    "id": "create:mechanical_bearing",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "source": "`AllBlocks.java:1189`; `com/simibubi/create/content/contraptions/bearing/MechanicalBearingBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": "Group 7: machine assembly, queued checks and world effects not ticked by Rust adapter",
+    "observation_scope": {}
+  },
+  {
+    "id": "create:clockwork_bearing",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "source": "`AllBlocks.java:1199`; `com/simibubi/create/content/contraptions/bearing/ClockworkBearingBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": "Group 7: machine assembly, queued checks and world effects not ticked by Rust adapter",
+    "observation_scope": {}
+  },
+  {
+    "id": "create:rope_pulley",
+    "properties": {
+      "axis": [
+        "x",
+        "z"
+      ]
+    },
+    "source": "`AllBlocks.java:1208`; `com/simibubi/create/content/contraptions/pulley/PulleyBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": "Group 7: machine assembly, queued checks and world effects not ticked by Rust adapter",
+    "observation_scope": {}
+  },
+  {
+    "id": "create:elevator_pulley",
+    "properties": {
+      "facing": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "source": "`AllBlocks.java:1239`; `com/simibubi/create/content/contraptions/elevator/ElevatorPulleyBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "clockwise",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": "Group 7: machine assembly, queued checks and world effects not ticked by Rust adapter",
+    "observation_scope": {}
+  },
+  {
+    "id": "create:mechanical_drill",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:1345`; `com/simibubi/create/content/kinetics/drill/DrillBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:mechanical_saw",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "axis_along_first": [
+        "false",
+        "true"
+      ],
+      "flipped": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:1357`; `com/simibubi/create/content/kinetics/saw/SawBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "saw",
+      "shafts": "saw",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:deployer",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "axis_along_first": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:1371`; `com/simibubi/create/content/kinetics/deployer/DeployerBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "directional",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:mechanical_crafter",
+    "properties": {
+      "facing": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "pointing": [
+        "up",
+        "right",
+        "down",
+        "left"
+      ]
+    },
+    "source": "`AllBlocks.java:1544`; `com/simibubi/create/content/kinetics/crafter/MechanicalCrafterBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "facing",
+      "shafts": "none",
+      "cog": "small"
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:sequenced_gearshift",
+    "properties": {
+      "axis": [
+        "x",
+        "z"
+      ],
+      "state": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5"
+      ],
+      "vertical": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:1558`; `com/simibubi/create/content/kinetics/transmission/sequencer/SequencedGearshiftBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "sequencer",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": "Group 4: chain shapes, sequencer program or controller target adapters required",
+    "observation_scope": {}
+  },
+  {
+    "id": "create:flywheel",
+    "properties": {
+      "axis": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    "source": "`AllBlocks.java:1571`; `com/simibubi/create/content/kinetics/flywheel/FlywheelBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:rotation_speed_controller",
+    "properties": {
+      "axis": [
+        "x",
+        "z"
+      ]
+    },
+    "source": "`AllBlocks.java:1582`; `com/simibubi/create/content/kinetics/speedController/SpeedControllerBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": "Group 4: chain shapes, sequencer program or controller target adapters required",
+    "observation_scope": {}
+  },
+  {
+    "id": "create:mechanical_arm",
+    "properties": {
+      "ceiling": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:1596`; `com/simibubi/create/content/kinetics/mechanicalArm/ArmBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "y",
+      "shafts": "none",
+      "cog": "small"
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:display_board",
+    "properties": {
+      "facing": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "up": [
+        "false",
+        "true"
+      ],
+      "down": [
+        "false",
+        "true"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:2039`; `com/simibubi/create/content/trains/display/FlapDisplayBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "facing",
+      "shafts": "none",
+      "cog": "small"
+    },
+    "excluded": null,
+    "observation_scope": {
+      "up": "FlapDisplayBlock.updateShape/updatedShapeInner/updateColumn",
+      "down": "FlapDisplayBlock.updateShape/updatedShapeInner/updateColumn"
+    }
+  },
+  {
+    "id": "create:copper_backtank",
+    "properties": {
+      "facing": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:2190`; `com/simibubi/create/content/equipment/armor/BacktankBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "y",
+      "shafts": "up",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:netherite_backtank",
+    "properties": {
+      "facing": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:2196`; `com/simibubi/create/content/equipment/armor/BacktankBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "y",
+      "shafts": "up",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:metal_girder_encased_shaft",
+    "properties": {
+      "axis": [
+        "x",
+        "z"
+      ],
+      "top": [
+        "false",
+        "true"
+      ],
+      "bottom": [
+        "false",
+        "true"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java:2340`; `com/simibubi/create/content/decoration/girder/GirderEncasedShaftBlock.java`::hasShaftTowards/getRotationAxis (including inherited definitions in ledger)",
+    "connection": {
+      "axis": "property",
+      "shafts": "axis",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {
+      "top": "GirderEncasedShaftBlock.updateShape",
+      "bottom": "GirderEncasedShaftBlock.updateShape"
+    }
+  },
+  {
+    "id": "create:white_valve_handle",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java::valveHandle/DYED_VALVE_HANDLES`; `ValveHandleBlockEntity.getStressConfigKey/activate`; inherited `HandCrankBlock.hasShaftTowards`",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:orange_valve_handle",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java::valveHandle/DYED_VALVE_HANDLES`; `ValveHandleBlockEntity.getStressConfigKey/activate`; inherited `HandCrankBlock.hasShaftTowards`",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:magenta_valve_handle",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java::valveHandle/DYED_VALVE_HANDLES`; `ValveHandleBlockEntity.getStressConfigKey/activate`; inherited `HandCrankBlock.hasShaftTowards`",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:light_blue_valve_handle",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java::valveHandle/DYED_VALVE_HANDLES`; `ValveHandleBlockEntity.getStressConfigKey/activate`; inherited `HandCrankBlock.hasShaftTowards`",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:yellow_valve_handle",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java::valveHandle/DYED_VALVE_HANDLES`; `ValveHandleBlockEntity.getStressConfigKey/activate`; inherited `HandCrankBlock.hasShaftTowards`",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:lime_valve_handle",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java::valveHandle/DYED_VALVE_HANDLES`; `ValveHandleBlockEntity.getStressConfigKey/activate`; inherited `HandCrankBlock.hasShaftTowards`",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:pink_valve_handle",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java::valveHandle/DYED_VALVE_HANDLES`; `ValveHandleBlockEntity.getStressConfigKey/activate`; inherited `HandCrankBlock.hasShaftTowards`",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:gray_valve_handle",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java::valveHandle/DYED_VALVE_HANDLES`; `ValveHandleBlockEntity.getStressConfigKey/activate`; inherited `HandCrankBlock.hasShaftTowards`",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:light_gray_valve_handle",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java::valveHandle/DYED_VALVE_HANDLES`; `ValveHandleBlockEntity.getStressConfigKey/activate`; inherited `HandCrankBlock.hasShaftTowards`",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:cyan_valve_handle",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java::valveHandle/DYED_VALVE_HANDLES`; `ValveHandleBlockEntity.getStressConfigKey/activate`; inherited `HandCrankBlock.hasShaftTowards`",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:purple_valve_handle",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java::valveHandle/DYED_VALVE_HANDLES`; `ValveHandleBlockEntity.getStressConfigKey/activate`; inherited `HandCrankBlock.hasShaftTowards`",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:blue_valve_handle",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java::valveHandle/DYED_VALVE_HANDLES`; `ValveHandleBlockEntity.getStressConfigKey/activate`; inherited `HandCrankBlock.hasShaftTowards`",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:brown_valve_handle",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java::valveHandle/DYED_VALVE_HANDLES`; `ValveHandleBlockEntity.getStressConfigKey/activate`; inherited `HandCrankBlock.hasShaftTowards`",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:green_valve_handle",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java::valveHandle/DYED_VALVE_HANDLES`; `ValveHandleBlockEntity.getStressConfigKey/activate`; inherited `HandCrankBlock.hasShaftTowards`",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:red_valve_handle",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java::valveHandle/DYED_VALVE_HANDLES`; `ValveHandleBlockEntity.getStressConfigKey/activate`; inherited `HandCrankBlock.hasShaftTowards`",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  },
+  {
+    "id": "create:black_valve_handle",
+    "properties": {
+      "facing": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ],
+      "waterlogged": [
+        "false",
+        "true"
+      ]
+    },
+    "source": "`AllBlocks.java::valveHandle/DYED_VALVE_HANDLES`; `ValveHandleBlockEntity.getStressConfigKey/activate`; inherited `HandCrankBlock.hasShaftTowards`",
+    "connection": {
+      "axis": "facing",
+      "shafts": "back",
+      "cog": null
+    },
+    "excluded": null,
+    "observation_scope": {}
+  }
+]

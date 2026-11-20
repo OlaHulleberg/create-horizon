@@ -1,0 +1,117 @@
+{
+  "version": 3,
+  "seed": 31,
+  "checkpoints": [
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60
+  ],
+  "ticks": 120,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=y,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        4
+      ],
+      "state": "create:shaft[axis=y,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        7,
+        0
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": 32
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 10,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 20,
+      "pos": [
+        0,
+        8,
+        4
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:iron_ingot",
+            "count": 16
+          }
+        }
+      },
+      "tick": 40,
+      "pos": [
+        0,
+        8,
+        1
+      ]
+    }
+  ]
+}

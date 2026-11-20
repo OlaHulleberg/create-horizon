@@ -1,0 +1,240 @@
+{
+  "version": 3,
+  "seed": 116,
+  "checkpoints": [
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    86
+  ],
+  "ticks": 177,
+  "blocks": [
+    {
+      "pos": [
+        -6,
+        8,
+        -3
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        -5,
+        8,
+        -3
+      ],
+      "state": "create:hand_crank[facing=south,waterlogged=false]"
+    },
+    {
+      "pos": [
+        -5,
+        8,
+        -4
+      ],
+      "state": "create:shaft[axis=z]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        -3
+      ],
+      "state": "create:hand_crank[facing=south,waterlogged=false]"
+    },
+    {
+      "pos": [
+        1,
+        8,
+        -3
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": -32
+    },
+    {
+      "pos": [
+        0,
+        8,
+        -4
+      ],
+      "state": "create:shaft[axis=z]"
+    },
+    {
+      "pos": [
+        5,
+        7,
+        -3
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        5,
+        8,
+        -3
+      ],
+      "state": "create:hand_crank[facing=south,waterlogged=false]"
+    },
+    {
+      "pos": [
+        5,
+        8,
+        -4
+      ],
+      "state": "create:shaft[axis=z]"
+    },
+    {
+      "pos": [
+        -5,
+        8,
+        2
+      ],
+      "state": "create:hand_crank[facing=south,waterlogged=false]"
+    },
+    {
+      "pos": [
+        -5,
+        9,
+        2
+      ],
+      "state": "create:creative_motor[facing=down]",
+      "motor": -32
+    },
+    {
+      "pos": [
+        -5,
+        8,
+        1
+      ],
+      "state": "create:shaft[axis=z]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        1
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        0,
+        8,
+        2
+      ],
+      "state": "create:hand_crank[facing=south,waterlogged=false]"
+    },
+    {
+      "pos": [
+        5,
+        8,
+        2
+      ],
+      "state": "create:hand_crank[facing=south,waterlogged=false]"
+    },
+    {
+      "pos": [
+        5,
+        8,
+        3
+      ],
+      "state": "create:creative_motor[facing=north]",
+      "motor": -32
+    },
+    {
+      "pos": [
+        5,
+        8,
+        1
+      ],
+      "state": "create:shaft[axis=z]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 87,
+      "pos": [
+        -6,
+        8,
+        -3
+      ],
+      "state": "minecraft:air"
+    },
+    {
+      "tick": 97,
+      "pos": [
+        -6,
+        8,
+        -3
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": -32
+    },
+    {
+      "tick": 97,
+      "pos": [
+        1,
+        8,
+        -3
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": 32
+    },
+    {
+      "tick": 97,
+      "pos": [
+        5,
+        7,
+        -3
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": -32
+    },
+    {
+      "tick": 97,
+      "pos": [
+        -5,
+        9,
+        2
+      ],
+      "state": "create:creative_motor[facing=down]",
+      "motor": 32
+    },
+    {
+      "tick": 97,
+      "pos": [
+        0,
+        8,
+        1
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": -32
+    },
+    {
+      "tick": 97,
+      "pos": [
+        5,
+        8,
+        3
+      ],
+      "state": "create:creative_motor[facing=north]",
+      "motor": 32
+    },
+    {
+      "action": {
+        "kind": "reload"
+      },
+      "tick": 8,
+      "pos": [
+        -6,
+        8,
+        -3
+      ]
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "blocks": [
+    {
+      "motor": -32,
+      "pos": [
+        -6,
+        8,
+        -3
+      ],
+      "state": "create:creative_motor[facing=east]"
+    },
+    {
+      "motor": -32,
+      "pos": [
+        5,
+        7,
+        -3
+      ],
+      "state": "create:creative_motor[facing=up]"
+    },
+    {
+      "pos": [
+        5,
+        8,
+        -3
+      ],
+      "state": "create:fluid_valve[axis_along_first=true,enabled=false,facing=west,waterlogged=false]"
+    }
+  ],
+  "checkpoints": [
+    87,
+    168,
+    169,
+    170,
+    171,
+    172,
+    173
+  ],
+  "events": [
+    {
+      "motor": 32,
+      "pos": [
+        5,
+        7,
+        -3
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "tick": 98
+    },
+    {
+      "action": {
+        "kind": "reload"
+      },
+      "pos": [
+        -6,
+        8,
+        -3
+      ],
+      "tick": 168
+    }
+  ],
+  "seed": 1121,
+  "ticks": 238,
+  "version": 3
+}

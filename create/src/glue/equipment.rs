@@ -42,7 +42,7 @@ use mod_api::{
     EntityPlaceEvent, EntityRef, EquipmentSlot, Flow, GameMode, Hand, HostSide, HostTransaction,
     Identifier, ItemKey, ItemPart, ItemPlace, ItemStack, LevelHost, LivingRef, ModifierLifetime,
     PlayerRef, PlayerTickPostEvent, Registrar, RegistrationContext, ServerHost, SetPlacedByEvent,
-    SoundSource, StackError, Tag,
+    SoundSource, StackError, Tag, Transaction,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -838,30 +838,44 @@ fn breathe(host: &mut dyn ServerHost, player: PlayerRef, fire_resistant: bool) {
 /// `BacktankUtil.consumeAir` on the tank in armour slot `slot`, with its warnings.
 /// A refused write spends no air and grants no protection.
 fn consume_air(host: &mut dyn ServerHost, player: PlayerRef, slot: usize, amount: i32) -> bool {
+    let Ok(warnings) = host.transaction(|host, tx| debit_air(host, tx, player, slot, amount))
+    else {
+        return false;
+    };
+    warn_air(host, player, warnings);
+    true
+}
+
+fn debit_air(
+    host: &mut dyn ServerHost,
+    tx: &Transaction,
+    player: PlayerRef,
+    slot: usize,
+    amount: i32,
+) -> Result<Vec<eq::Warning>, ()> {
     let place = ItemPlace::PlayerSlot {
         player: player.uuid(),
         // Our armour order starts at the head; inventory slots count from the feet.
         slot: HEAD_INVENTORY_SLOT - slot as i32,
     };
-    let Ok(warnings) = host.transaction(|host, tx| {
-        let mut warnings = None;
-        place
-            .edit(host, tx, |stack| {
-                let (after, triggered) = eq::consume_air(stack_air(stack), capacity(stack), amount);
-                if set_stack_air(stack, after).is_ok() {
-                    warnings = Some(triggered);
-                }
-            })
-            .map_err(|_| ())?;
-        warnings.ok_or(())
-    }) else {
-        return false;
-    };
+    let mut warnings = None;
+    place
+        .edit(host, tx, |stack| {
+            let (after, triggered) = eq::consume_air(stack_air(stack), capacity(stack), amount);
+            if set_stack_air(stack, after).is_ok() {
+                warnings = Some(triggered);
+            }
+        })
+        .map_err(|_| ())?;
+    warnings.ok_or(())
+}
+
+pub(crate) fn warn_air(host: &mut dyn ServerHost, player: PlayerRef, warnings: Vec<eq::Warning>) {
     if warnings.is_empty() {
-        return true;
+        return;
     }
     let Some(name) = player.name(&*host) else {
-        return true;
+        return;
     };
     for w in warnings {
         // sendWarning: DENY and STEAM at the player, then a subtitle under an empty title.
@@ -898,23 +912,37 @@ fn consume_air(host: &mut dyn ServerHost, player: PlayerRef, slot: usize, amount
         ));
         commands.run_command(&format!("title {name} title \"\""));
     }
+}
+
+/// `BacktankUtil.canAbsorbDamage`: the emptiest nonempty worn tank pays for a tool use.
+fn absorb(host: &mut dyn ServerHost, player: PlayerRef, uses_per_tank: i32) -> bool {
+    let Ok(Some(warnings)) =
+        host.transaction(|host, tx| debit_backtank(host, tx, player, uses_per_tank))
+    else {
+        return false;
+    };
+    warn_air(host, player, warnings);
     true
 }
 
-/// `BacktankUtil.canAbsorbDamage`: creative players pay nothing; else the emptiest worn tank
-/// pays `cost` air, or nothing absorbs it.
-pub(crate) fn absorb(host: &mut dyn ServerHost, player: PlayerRef, uses_per_tank: i32) -> bool {
-    if uses_per_tank == 0 || player.is_creative(&*host) == Some(true) {
-        return true;
+/// Journal a use against the tank; `None` means the tool must pay wear instead.
+/// Warn only after the caller's transaction commits.
+pub(crate) fn debit_backtank(
+    host: &mut dyn ServerHost,
+    tx: &Transaction,
+    player: PlayerRef,
+    uses_per_tank: i32,
+) -> Result<Option<Vec<eq::Warning>>, ()> {
+    if uses_per_tank == 0 || player.is_creative(host) == Some(true) {
+        return Ok(Some(Vec::new()));
     }
-    let Some(living) = host.living(player.entity()) else {
-        return false;
+    let living = host.living(player.entity()).ok_or(())?;
+    let tanks = tanks(host, living);
+    let available = eq::with_air(&tanks);
+    let Some(first) = available.first() else {
+        return Ok(None);
     };
-    let tanks = tanks(&*host, living);
-    let Some(first) = eq::with_air(&tanks).first().copied() else {
-        return false;
-    };
-    consume_air(host, player, first.slot, eq::absorb_cost(uses_per_tank))
+    debit_air(host, tx, player, first.slot, eq::absorb_cost(uses_per_tank)).map(Some)
 }
 
 /// The gear in each hand.

@@ -1,0 +1,54 @@
+{
+  "blocks": [
+    {
+      "pos": [
+        0,
+        7,
+        2
+      ],
+      "state": "minecraft:stone"
+    }
+  ],
+  "checkpoints": [
+    25,
+    45,
+    70
+  ],
+  "events": [
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.1,
+          1.0,
+          0.5
+        ],
+        "item": "create:encased_chain_drive",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": true,
+        "yaw": 45.0
+      },
+      "pos": [
+        0,
+        7,
+        2
+      ],
+      "tick": 14
+    },
+    {
+      "action": {
+        "kind": "remove"
+      },
+      "pos": [
+        0,
+        8,
+        2
+      ],
+      "tick": 40
+    }
+  ],
+  "seed": 156,
+  "ticks": 80,
+  "version": 3
+}

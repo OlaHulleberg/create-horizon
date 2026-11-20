@@ -30,7 +30,7 @@ pub fn funnel(lv: &ServerLevel<'_>, pos: [i32; 3], inward: bool) {
     let Some((block, info)) = info_at(lv, pos) else {
         return;
     };
-    if !super::funnel::is_funnel(block) || info.facing.is_none_or(|f| f.axis() == Axis::Y) {
+    if !create_engine::funnel::is_funnel(block) || info.facing.is_none_or(|f| f.axis() == Axis::Y) {
         return;
     }
     let dim = lv.dim;

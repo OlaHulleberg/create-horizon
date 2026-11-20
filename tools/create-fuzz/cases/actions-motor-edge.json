@@ -1,0 +1,42 @@
+{
+  "version": 3,
+  "ticks": 80,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    }
+  ],
+  "checkpoints": [
+    5,
+    6
+  ],
+  "events": [
+    {
+      "tick": 5,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "use",
+        "item": "create:wrench",
+        "face": "south",
+        "hit": [
+          0.1,
+          0.5,
+          1.0
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,287 @@
+{
+  "version": 3,
+  "seed": 711,
+  "checkpoints": [
+    20,
+    24,
+    28,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    40,
+    44,
+    48,
+    52,
+    56,
+    60,
+    64,
+    68,
+    72,
+    76,
+    80,
+    84,
+    88,
+    92,
+    96,
+    100,
+    104,
+    108,
+    112,
+    116,
+    120,
+    124,
+    128,
+    132,
+    133,
+    134,
+    135,
+    136,
+    138,
+    139,
+    140,
+    141,
+    142,
+    143,
+    144,
+    145,
+    147,
+    148,
+    149,
+    152,
+    156,
+    160,
+    164,
+    168,
+    172,
+    176,
+    178,
+    179,
+    180,
+    181,
+    182,
+    183,
+    184,
+    185,
+    188,
+    192,
+    196,
+    200,
+    204,
+    208,
+    212,
+    216,
+    218,
+    219,
+    220,
+    221,
+    222,
+    223,
+    224,
+    225,
+    228,
+    232,
+    236,
+    240,
+    244,
+    248,
+    252,
+    256,
+    260,
+    264,
+    268,
+    272,
+    276,
+    280,
+    284,
+    288,
+    292,
+    296,
+    300,
+    304,
+    308,
+    312,
+    316,
+    320,
+    324,
+    328,
+    332,
+    336,
+    340,
+    344,
+    348,
+    352,
+    356,
+    360,
+    364,
+    368,
+    372,
+    376,
+    380,
+    384,
+    388,
+    392,
+    396
+  ],
+  "ticks": 400,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:depot[waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "state": "create:mechanical_press[facing=north]"
+    },
+    {
+      "pos": [
+        0,
+        10,
+        -1
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 128
+    },
+    {
+      "pos": [
+        0,
+        8,
+        1
+      ],
+      "state": "create:depot[waterlogged=false]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 20,
+      "pos": [
+        0,
+        9,
+        0
+      ],
+      "state": "create:andesite_belt_funnel[facing=north,powered=false,shape=pulling,waterlogged=false]"
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:iron_ingot",
+            "count": 1
+          }
+        }
+      },
+      "tick": 30,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "use",
+          "stack": null,
+          "face": "up",
+          "yaw": 0.0,
+          "sneaking": false
+        }
+      },
+      "tick": 133,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:diamond",
+            "count": 11
+          }
+        }
+      },
+      "tick": 138,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "tick": 147,
+      "pos": [
+        0,
+        10,
+        -1
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 0
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:iron_ingot",
+            "count": 5
+          }
+        }
+      },
+      "tick": 178,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:gold_ingot",
+            "count": 12
+          }
+        }
+      },
+      "tick": 218,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "tick": 221,
+      "pos": [
+        0,
+        10,
+        -1
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 128
+    }
+  ]
+}

@@ -1,0 +1,152 @@
+{
+  "seed": 20001,
+  "ticks": 504,
+  "checkpoints": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    72,
+    80,
+    81,
+    82,
+    83,
+    84,
+    85,
+    144,
+    216,
+    288,
+    360,
+    432,
+    504
+  ],
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x]"
+    },
+    {
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": 32
+    }
+  ],
+  "events": [
+    {
+      "tick": 74,
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": 16
+    },
+    {
+      "tick": 146,
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": 64
+    },
+    {
+      "tick": 218,
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": 0
+    },
+    {
+      "tick": 290,
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": 32
+    },
+    {
+      "tick": 362,
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": -32
+    },
+    {
+      "tick": 434,
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": 32
+    },
+    {
+      "tick": 1,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "reload"
+      }
+    },
+    {
+      "tick": 4,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "reload"
+      }
+    },
+    {
+      "tick": 80,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "reload"
+      }
+    }
+  ],
+  "version": 3
+}

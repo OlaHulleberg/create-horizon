@@ -204,7 +204,7 @@ pub fn update_cover(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             matches!(
                 b,
                 create_engine::Block::AndesiteTunnel | create_engine::Block::BrassTunnel
-            ) || super::funnel::is_funnel(b) && i.facing != Some(Dir::Up)
+            ) || create_engine::funnel::is_funnel(b) && i.facing != Some(Dir::Up)
         }
         None => false,
     };
@@ -572,11 +572,7 @@ pub fn direct_input_accepts(lv: &ServerLevel<'_>, pos: [i32; 3], side: Dir) -> b
         return f.belt.is_none() && !f.extracting && f.facing == Dir::Up;
     }
     if super::chute::chute_at(lv, pos).is_some() {
-        let above = [pos[0], pos[1] + 1, pos[2]];
-        let below = [pos[0], pos[1] - 1, pos[2]];
-        return super::chute::chute_at(lv, above).is_none()
-            && !(super::chute::chute_motion(lv, pos) > 0.0
-                && super::chute::chute_at(lv, below).is_none());
+        return super::chute::can_directly_insert(lv, pos);
     }
     if let Some((c, _, seg)) = belt_segment(lv, pos) {
         let dim = lv.dim;
@@ -633,8 +629,7 @@ fn funnel_direct_input(
 }
 
 /// `ChuteBlockEntity`'s `DirectBeltInputBehaviour`: while it may take items
-/// (`canDirectlyInsert`: no chute above leading down into it, not blown up without a chute
-/// feeding it) its handler takes the whole stack when empty (`ChuteItemHandler.insertItem`).
+/// (`canDirectlyInsert`) its handler takes the whole stack when empty (`ChuteItemHandler.insertItem`).
 /// The count left.
 fn chute_direct_input(
     lv: &mut ServerLevel<'_>,
@@ -644,12 +639,7 @@ fn chute_direct_input(
     item: &belt::Item,
     simulate: bool,
 ) -> u8 {
-    let above = [pos[0], pos[1] + 1, pos[2]];
-    let below = [pos[0], pos[1] - 1, pos[2]];
-    if super::chute::chute_at(lv, above).is_some()
-        || (super::chute::chute_motion(lv, pos) > 0.0
-            && super::chute::chute_at(lv, below).is_none())
-    {
+    if !super::chute::can_directly_insert(lv, pos) {
         return item.count;
     }
     let Some(stack) = belt_stack(lv, item) else {
@@ -766,11 +756,7 @@ pub fn tick_transport(lv: &mut ServerLevel<'_>) {
                 continue;
             }
             create_engine::world::TransportTick::Spout(p) => {
-                with_world(|w| {
-                    if let Some(s) = w.dims[dim].spouts.get_mut(&p) {
-                        create_engine::spout::tick(s);
-                    }
-                });
+                with_world(|w| w.tick_spout(dim, p));
                 continue;
             }
             create_engine::world::TransportTick::Drain(p) => {
@@ -792,6 +778,16 @@ pub fn tick_transport(lv: &mut ServerLevel<'_>) {
             }
             create_engine::world::TransportTick::Funnel(p) => {
                 super::funnel::tick_funnel(lv, p);
+                continue;
+            }
+            // A weighted ejector is the depot behaviour it extends, ticked with its block
+            // entity by this walk.
+            create_engine::world::TransportTick::Ejector(p) => {
+                super::arms::tick_ejector(lv, p);
+                continue;
+            }
+            create_engine::world::TransportTick::Press(p) => {
+                crate::glue::processing::tick_press(lv, p);
                 continue;
             }
             create_engine::world::TransportTick::Belt(c) => c,
@@ -1115,7 +1111,9 @@ impl belt::Surroundings for BeltSide<'_, '_> {
     }
 
     /// The machines over segment `segment` (presses, deployers, spouts) are the processing
-    /// subsystems': the first that answers acts.
+    /// subsystems': the first that answers acts. An arriving item is not offered to them when
+    /// the block over the segment is in the way (`BeltInventory`: `isBlocked`, then
+    /// `handleReceivedItem`).
     fn process(
         &mut self,
         segment: i32,
@@ -1123,6 +1121,14 @@ impl belt::Surroundings for BeltSide<'_, '_> {
         locked: bool,
     ) -> Option<belt::Process> {
         let at = self.at(segment);
+        // `getBeltProcessingAtSegment`: none, and nothing acts.
+        let above = self.lv.info([at[0], at[1] + 2, at[2]]).map(|(b, _)| b);
+        if !above.is_some_and(belt::processes_below) {
+            return None;
+        }
+        if !locked && self.lv.processing_blocked(at) {
+            return None;
+        }
         super::super::SUBSYSTEMS
             .iter()
             .find_map(|s| s.belt_process(self.lv, at, item, locked))
@@ -1311,30 +1317,22 @@ pub fn transport_passengers(lv: &mut ServerLevel<'_>) {
 /// Ground friction a walking entity's motion keeps each tick (a block's 0.6 times 0.91).
 const GROUND_FRICTION: f64 = 0.6 * 0.91;
 
-/// Keep the pre-existing sloped-belt push until the pin exposes footprint contact on slopes.
-pub fn carry_slopes(host: &mut dyn mod_api::ClientHost) {
-    let Some(player) = host.local_player() else {
-        return;
-    };
-    let e = player.entity();
-    let (Some(feet), Some(level)) = (e.position(&*host), player.level(&*host)) else {
-        return;
-    };
-    if e.is_shift_key_down(&*host) == Some(true)
-        || player.abilities(&*host).is_some_and(|a| a.flying)
-    {
-        return;
-    }
-    // `updateEntityAfterFallOn`: the segment at its feet, else the one below them (a slope's
-    // segment reaches above its block).
-    let at = feet.map(|v| v.floor() as i32);
-    let segment = |p| client_segment(&*host, level, p);
+type BeltContact = ([i32; 3], belt::Segment);
+
+/// The legacy slope path looks first in the feet cell and below it, then at the footprint edge.
+fn legacy_belt_contact(
+    host: &dyn mod_api::Host,
+    level: mod_api::LevelRef,
+    entity: mod_api::EntityRef,
+    at: [i32; 3],
+) -> Option<BeltContact> {
+    let segment = |p| client_segment(host, level, p);
     let below = [at[0], at[1] - 1, at[2]];
     // `entityInside` of the blocks its box is in (Create's `checkInsideBlocks` asks every block
     // the box reaches, whatever its shape): off the end of a belt, the segment still under the
     // box's edge carries it until it falls.
     let under_box = || {
-        let [lo, hi] = e.bounding_box(&*host)?;
+        let [lo, hi] = entity.bounding_box(host)?;
         let (x0, x1) = (
             (lo[0] + 1.0e-7).floor() as i32,
             (hi[0] - 1.0e-7).floor() as i32,
@@ -1347,16 +1345,31 @@ pub fn carry_slopes(host: &mut dyn mod_api::ClientHost) {
             .flat_map(|x| (z0..=z1).map(move |z| [x, at[1], z]))
             .find_map(|p| segment(p).map(|s| (p, s)))
     };
-    let Some((pos, seg)) = segment(at)
+    segment(at)
         .map(|s| (at, s))
         .or_else(|| segment(below).map(|s| (below, s)))
         .or_else(under_box)
-    else {
-        return;
-    };
-    if seg.slope == belt::Slope::Horizontal {
-        return;
-    }
+}
+
+/// One contact owns the whole tick: prefer confirmed flat support, unless a separate belt in
+/// the feet cell owns the handoff. The footprint fallback never moves a player on a flat belt.
+fn player_belt_contact(
+    at: [i32; 3],
+    flat: Option<BeltContact>,
+    belt_in_feet_cell: bool,
+    legacy: impl FnOnce() -> Option<BeltContact>,
+) -> Option<BeltContact> {
+    flat.filter(|(pos, _)| *pos == at || !belt_in_feet_cell)
+        .or_else(|| legacy().filter(|(_, seg)| seg.slope != belt::Slope::Horizontal))
+}
+
+/// Keep the pre-existing sloped-belt push until the pin exposes footprint contact on slopes.
+fn push_on_slope(
+    host: &mut dyn mod_api::ClientHost,
+    level: mod_api::LevelRef,
+    feet: [f64; 3],
+    (pos, seg): BeltContact,
+) {
     let rpm = super::super::kinetics::shown_speeds(&*host, level, pos)[0];
     let Some(m) = belt::passenger_motion(&seg, pos, feet, rpm, false) else {
         return;
@@ -1391,7 +1404,7 @@ fn belt_support(
     host: &dyn mod_api::Host,
     level: mod_api::LevelRef,
     feet: [f64; 3],
-) -> Option<([i32; 3], belt::Segment)> {
+) -> Option<BeltContact> {
     let [x, y, z] = feet;
     let hit = level.clip(
         host,
@@ -1412,9 +1425,8 @@ fn belt_support(
     (segment.slope == belt::Slope::Horizontal).then_some((hit.block, segment))
 }
 
-/// `BeltMovementHandler.transportEntity` for the local player after its travel, before
-/// its ordinary position report. Only carry confirmed contacts for which the client has
-/// enough information. The old sloped path is unchanged; see `API_GAPS.md`.
+/// `BeltMovementHandler.transportEntity` for the local player after travel, before its position
+/// report. Use one contact for either flat SELF movement or the legacy slope push.
 pub fn carry_local_player(host: &mut dyn mod_api::ClientHost, player: PlayerRef) {
     if host.local_player() != Some(player) {
         return;
@@ -1423,7 +1435,26 @@ pub fn carry_local_player(host: &mut dyn mod_api::ClientHost, player: PlayerRef)
     let (Some(feet), Some(level)) = (e.position(&*host), player.level(&*host)) else {
         return;
     };
-    if e.on_ground(&*host) != Some(true) || player.abilities(&*host).is_some_and(|a| a.flying) {
+    if player.abilities(&*host).is_some_and(|a| a.flying) {
+        return;
+    }
+    let at = feet.map(|v| v.floor() as i32);
+    let flat = (e.on_ground(&*host) == Some(true))
+        .then(|| belt_support(&*host, level, feet))
+        .flatten();
+    let belt_in_feet_cell = flat.is_some_and(|(pos, _)| pos != at)
+        && level
+            .block_state(&*host, at)
+            .is_some_and(|state| state.block() == states::key(create_engine::Block::Belt));
+    let Some(contact @ (pos, seg)) = player_belt_contact(at, flat, belt_in_feet_cell, || {
+        legacy_belt_contact(&*host, level, e, at)
+    }) else {
+        return;
+    };
+    if seg.slope != belt::Slope::Horizontal {
+        if e.is_shift_key_down(&*host) != Some(true) {
+            push_on_slope(host, level, feet, contact);
+        }
         return;
     }
     let boots = host
@@ -1438,18 +1469,6 @@ pub fn carry_local_player(host: &mut dyn mod_api::ClientHost, player: PlayerRef)
     if e.is_shift_key_down(&*host) == Some(true)
         && (!boots.is_some_and(|s| s.item().id(&*host) == "create:cardboard_boots")
             || !super::super::advancements::hiding_in_cardboard(&*host, player))
-    {
-        return;
-    }
-    let Some((pos, seg)) = belt_support(&*host, level, feet) else {
-        return;
-    };
-    // A different belt in the passenger's feet cell owns the handoff.
-    let at = feet.map(|v| v.floor() as i32);
-    if at != pos
-        && level
-            .block_state(&*host, at)
-            .is_some_and(|state| state.block() == states::key(create_engine::Block::Belt))
     {
         return;
     }
@@ -1488,5 +1507,44 @@ pub fn carry_local_player(host: &mut dyn mod_api::ClientHost, player: PlayerRef)
         .is_some_and(|after| belt_support(&*host, level, after).is_some())
     {
         host.set_local_player_on_ground(true);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adjacent_flat_and_sloped_belts_cannot_both_carry_a_player() {
+        let at = [0, 1, 0];
+        let horizontal = belt::Segment {
+            facing: Dir::East,
+            slope: belt::Slope::Horizontal,
+            part: belt::Part::Middle,
+        };
+        let flat = ([0, 0, 0], horizontal);
+        let slope = belt::Segment {
+            slope: belt::Slope::Upward,
+            ..horizontal
+        };
+
+        // A slope crossing the footprint's edge must not add a push to confirmed flat carry.
+        assert_eq!(
+            player_belt_contact(at, Some(flat), false, || panic!(
+                "flat already owns the tick"
+            )),
+            Some(flat),
+        );
+        // When the slope enters the feet cell it takes over, with no SELF move from below it.
+        assert_eq!(
+            player_belt_contact(at, Some(flat), true, || Some((at, slope))),
+            Some((at, slope)),
+        );
+        // Keep the legacy slope fallback, but never use its coarse footprint to carry on a flat.
+        assert_eq!(
+            player_belt_contact(at, None, false, || Some(([1, 1, 0], slope))),
+            Some(([1, 1, 0], slope)),
+        );
+        assert_eq!(player_belt_contact(at, None, false, || Some(flat)), None);
     }
 }

@@ -161,9 +161,9 @@ pub fn push(
 }
 
 /// `canSee`: `Level.clip` from the entity to the nozzle's centre (colliders, no fluids) ends at
-/// the nozzle. `solid` says whether a block stops the ray (the nozzle's own block included);
-/// a ray that hits nothing ends at its target, the nozzle; one that starts inside another
-/// solid block is stopped there.
+/// the nozzle. `solid` says whether a block stops the ray (the nozzle's own block included),
+/// at the whole-block grain this keeps; a ray that hits nothing ends at its target, the
+/// nozzle; one that starts inside another solid block is stopped there.
 pub fn sees(pos: [i32; 3], from: [f64; 3], mut solid: impl FnMut([i32; 3]) -> bool) -> bool {
     let start = from.map(|v| v.floor() as i32);
     if start == pos {
@@ -172,7 +172,12 @@ pub fn sees(pos: [i32; 3], from: [f64; 3], mut solid: impl FnMut([i32; 3]) -> bo
     if solid(start) {
         return false;
     }
-    match crate::ejector::clip_blocks(from, center(pos), |p| p == pos || solid(p)) {
+    match crate::ejector::clip(from, center(pos), |p| {
+        (p == pos || solid(p))
+            .then_some([0.0, 0.0, 0.0, 1.0, 1.0, 1.0])
+            .into_iter()
+            .collect::<Vec<[f64; 6]>>()
+    }) {
         Some((_, hit, _)) => hit == pos,
         None => true,
     }
