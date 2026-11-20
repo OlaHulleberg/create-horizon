@@ -323,6 +323,11 @@ impl Subsystem for Logistics {
         let set = |lv: &mut ServerLevel<'_>, key: &str, value: &str| {
             lv.set_property(pos, key, value, super::server::update_all());
         };
+        // `BeltTunnelBlock.onWrenched` sets the toggled window with `UPDATE_CLIENTS` alone:
+        // no neighbour hears of it, so nothing runs a shape update on the tunnel.
+        let set_clients = |lv: &mut ServerLevel<'_>, key: &str, value: &str| {
+            lv.set_property(pos, key, value, super::server::UPDATE_CLIENTS);
+        };
         match block {
             Block::Belt => {
                 belt::wrench_belt(lv, pos, player, clicked);
@@ -367,8 +372,8 @@ impl Subsystem for Logistics {
             }
             // BeltTunnelBlock.onWrenched: a straight tunnel's window opens or closes.
             Block::AndesiteTunnel | Block::BrassTunnel => match prop(lv, "shape").as_deref() {
-                Some("window") => set(lv, "shape", "closed"),
-                Some("closed") => set(lv, "shape", "window"),
+                Some("window") => set_clients(lv, "shape", "closed"),
+                Some("closed") => set_clients(lv, "shape", "window"),
                 _ => {}
             },
             _ => return false,

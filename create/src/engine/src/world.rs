@@ -1034,9 +1034,6 @@ impl CreateWorld {
             // A depot below may have work for it.
             d.depot_work.push([pos[0], pos[1] - 2, pos[2]]);
         }
-        if block == Block::AndesiteTunnel || block == Block::BrassTunnel {
-            d.tunnel_fresh.push(pos);
-        }
         if block == Block::BrassTunnel && !d.brass.contains_key(&pos) {
             // `read`: what it held and its mode, saved with the column.
             let b = d.brass_saved.remove(&pos).unwrap_or_default();
@@ -1748,6 +1745,11 @@ impl CreateWorld {
             if tunnel(new) && !tunnel(old) {
                 // `BeltTunnelItem`: the belt below is cased.
                 self.dims[dim].tunnels_new.push(pos);
+                // `BeltTunnelBlock.getStateForPlacement`: a tunnel just placed takes the shape
+                // its surroundings give at once. A later state change of its own (the wrench's
+                // window toggle sets `UPDATE_CLIENTS` only) runs no shape update at all, and
+                // `updateShape` keeps a state whose window fits, so it is not recomputed.
+                self.dims[dim].tunnel_fresh.push(pos);
             }
             if self.table.get(new).map(|(b, _)| b) == Some(Block::Millstone) {
                 self.dims[dim].millstones.entry(pos).or_default();
@@ -5379,6 +5381,39 @@ mod tests {
         states::set_range(2, names.len() as u32);
         let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
         CreateWorld::new(table)
+    }
+
+    #[test]
+    fn only_a_newly_placed_tunnel_takes_a_fresh_shape() {
+        // Java issue #134: `BeltTunnelBlock.onWrenched` sets the window with `UPDATE_CLIENTS`
+        // alone, so no shape update runs on the tunnel; `updateShape`, when a neighbour does
+        // change, keeps a state whose `hasWindow` fits (`BeltTunnelBlock.java:117-127`,
+        // `:196-204`). A fresh shape is only `getStateForPlacement`'s, for a tunnel just
+        // placed — not for a state change of its own, nor for one loaded with the world.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let shape = |s| ("create:andesite_tunnel", vec![("axis", "z"), ("shape", s)]);
+        let names = [shape("straight"), shape("window"), shape("closed")];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let at = [0, 9, 5];
+        // Placed: the placement state is computed fresh (`getStateForPlacement`).
+        w.apply_block_change(0, at, 0, 10, false);
+        assert_eq!(w.dims[0].tunnel_fresh, vec![at]);
+        assert_eq!(w.dims[0].tunnels_new, vec![at]);
+        w.dims[0].tunnel_fresh.clear();
+        // The wrench toggles the window (`UPDATE_CLIENTS`): no shape update runs at all.
+        w.apply_block_change(0, at, 10, 11, false);
+        w.apply_block_change(0, at, 11, 12, false);
+        assert!(w.dims[0].tunnel_fresh.is_empty());
+        // A neighbour's change asks `updateShape`, which keeps a window that fits: that queue
+        // (`neighbor_changed`) is not the fresh one.
+        w.neighbor_changed(0, at, 12);
+        assert!(w.dims[0].tunnel_fresh.is_empty());
+        assert_eq!(w.dims[0].tunnel_checks, vec![at]);
+        states::clear_range();
     }
 
     fn item_belt_world(rpm: f32) -> CreateWorld {
