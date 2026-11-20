@@ -47,15 +47,16 @@ pub(super) fn candidate(
     let class = |class| facts.block_class(state, class).ok().flatten();
     // `CopycatSpecialCases`: Create's `GlassPaneBlock` variants and vanilla's panes
     // inherit from `IronBarsBlock` but are not the special bar material.
-    let create_pane = matches!(
-        create,
-        Some(
-            Block::FramedGlassPane
-                | Block::HorizontalFramedGlassPane
-                | Block::VerticalFramedGlassPane
-                | Block::TiledGlassPane
-        )
-    );
+    let create_pane = create.is_some_and(|block| {
+        block.name().ends_with("_window_pane")
+            || matches!(
+                block,
+                Block::FramedGlassPane
+                    | Block::HorizontalFramedGlassPane
+                    | Block::VerticalFramedGlassPane
+                    | Block::TiledGlassPane
+            )
+    });
     Some(Candidate {
         copycat: matches!(create, Some(Block::CopycatPanel | Block::CopycatStep)),
         allow: tagged("create:copycat_allow"),
