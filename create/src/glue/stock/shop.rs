@@ -1763,39 +1763,6 @@ pub(super) fn tick(host: &dyn ClientHost) {
     }
 }
 
-/// Whether `keeper` rides something (`getVehicle() != null`) as its client sees it. A client
-/// can't ask an entity's vehicle (`EntityRef::vehicle` answers on the server only) nor list the
-/// seat's stand-in (a display, which the client's entity search leaves out), so a keeper counts
-/// as seated where a seat puts its rider: at the centre of a seat block, no higher than the
-/// stand-in (`seat::seat_at`; a rider hangs its own vehicle attachment below it), where a mob
-/// standing on the seat would be half a block up.
-fn seated(host: &dyn ClientHost, keeper: mod_api::EntityRef) -> bool {
-    if keeper.vehicle(host).is_some() {
-        return true;
-    }
-    let (Some(at), Some(level)) = (keeper.position(host), host.level(host.dimension())) else {
-        return false;
-    };
-    let kind = keeper.kind(host).map(|k| k.id(host)).unwrap_or_default();
-    let floor = at.map(|v| v.floor() as i32);
-    [floor, [floor[0], floor[1] + 1, floor[2]]]
-        .into_iter()
-        .any(|p| {
-            let seat = level
-                .block_state(host, p)
-                .and_then(states::id)
-                .and_then(|id| {
-                    super::super::client_table(host, |t| t.get(id).map(|(b, _)| b)).flatten()
-                })
-                .is_some_and(create_engine::dye::is_seat);
-            let s = create_engine::seat::seat_at(p, &kind);
-            seat && (at[0] - s[0]).abs() < 1e-3
-                && (at[2] - s[2]).abs() < 1e-3
-                && at[1] <= s[1] + 1e-3
-                && at[1] > s[1] - 1.0
-        })
-}
-
 /// `TableClothOverlayRenderer.tick` on a seated keeper with a shopping list in hand, and
 /// `BlueprintOverlayRenderer.displayShoppingList`: what the list costs (each lit while the
 /// inventory holds it, else its count in gold) and what it orders. The keeper is a riding mob
@@ -1812,7 +1779,9 @@ fn checkout_overlay(
         return;
     };
     let Some(list) = List::of(&held) else { return };
-    if !seated(host, keeper)
+    if !keeper
+        .root_vehicle(host)
+        .is_some_and(|root| root != keeper && super::keeper::seat_vehicle(host, root))
         || keeper.kind(host).map(|k| k.id(host)).as_deref() == Some("create:package")
     {
         return;

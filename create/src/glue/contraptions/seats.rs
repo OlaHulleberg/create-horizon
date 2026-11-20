@@ -4,11 +4,9 @@
 //! on it (`TurntableBlock.entityInside`, `TurntableHandler`). The rules are
 //! `create_engine::seat`'s and `create_engine::turntable`'s.
 //!
-//! Create's `SeatEntity` is a mod entity type the API has none of (its entity types are
-//! template copies), so a seat's stand-in is an empty item display (no model, no hitbox, no
-//! gravity) tagged `create.seat`, which vanilla saves with its riders as Create's seat does.
-//! One that comes back (with its chunk, or with the player whose file held it) is taken back by
-//! the seat block it stands on; any other is left for the carriages' seats (trains).
+//! The seat's own saved general entity is invisible and not pickable. Its passenger point
+//! sets the rider's height. A seat read back with its chunk or its player is claimed by the
+//! block it stands on.
 //!
 //! `entity_inside` runs inside the entity's move, where its position, ground and motion can't
 //! be read: the entity is noted there and seated or turned at the end of the level's tick.
@@ -26,15 +24,15 @@ use create_engine::Block;
 use create_engine::dye::{self, DyeColor};
 use create_engine::{seat, turntable};
 use mod_api::{
-    BlockPart, ClientHost, Compound, EntityInsideEvent, EntityJoinLevelEvent, EntityMountEvent,
-    EntityRef, FallOnEvent, Flow, InteractionResult, LeashHolder, LevelRandomHost, Registrar,
-    RegistrationContext, ServerHost, Tag, UseItemOnEvent,
+    BlockPart, ClientHost, EntityInsideEvent, EntityJoinLevelEvent, EntityMountEvent, EntityRef,
+    EntitySpawn, FallOnEvent, Flow, GeneralEntityCategory, GeneralSavePolicy, InteractionResult,
+    LeashHolder, LevelRandomHost, Registrar, RegistrationContext, RemovalReason, ServerHost,
+    SpawnBody, UseItemOnEvent,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-/// The tag on Create's seat stand-ins.
-const TAG: &str = "create.seat";
+pub(crate) const ENTITY_TYPE: &str = "create:seat";
 
 /// The game's seat stand-in on a seat block: its entity id, and whether a player sits on it.
 #[derive(Clone, Copy, Debug)]
@@ -57,6 +55,22 @@ pub struct Seats;
 
 impl Subsystem for Seats {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
+        if let Err(e) = r.declare_general_entity(
+            "seat",
+            GeneralEntityCategory::Misc,
+            0.25,
+            f64::from(seat::HEIGHT),
+            Some([0.0, seat::PASSENGER_HEIGHT, 0.0]),
+            GeneralSavePolicy::Save,
+            true,
+            false,
+            5,
+            i32::MAX,
+            1,
+            &[],
+        ) {
+            crate::create_log!("[create] seat type was refused: {e:?}");
+        }
         for b in dye::SEATS {
             r.block_part(key(b), SeatPart);
         }
@@ -73,20 +87,12 @@ impl Subsystem for Seats {
     /// A seat stand-in came back with its riders: taken back at the level's next tick.
     fn entity_join_level(
         &self,
-        host: &mut dyn ServerHost,
+        _host: &mut dyn ServerHost,
         event: &mut EntityJoinLevelEvent<'_>,
     ) -> Flow {
-        if event.kind != "minecraft:item_display" {
-            return Flow::Continue;
-        }
-        let Some(dim) = level_index(event.dimension) else {
-            return Flow::Continue;
-        };
-        let ours = host
-            .entity(event.entity)
-            .and_then(|e| e.tags(&*host))
-            .is_some_and(|t| t.iter().any(|t| t == TAG));
-        if ours {
+        if event.kind == ENTITY_TYPE
+            && let Some(dim) = level_index(event.dimension)
+        {
             LOADED.with_borrow_mut(|l| l.push((dim, event.entity)));
         }
         Flow::Continue
@@ -174,16 +180,6 @@ fn kind_of(lv: &ServerLevel<'_>, e: EntityRef) -> String {
         .unwrap_or_default()
 }
 
-/// A stand-in at `at`: an empty item display tagged as Create's seat.
-fn spawn_seat(lv: &mut ServerLevel<'_>, at: [f64; 3]) -> Option<EntityRef> {
-    let nbt = Compound::from([("Tags".into(), Tag::List(vec![Tag::String(TAG.into())]))]);
-    let dimension = lv.dimension.to_owned();
-    let id = lv
-        .host
-        .summon(&dimension, "minecraft:item_display", at, nbt)?;
-    lv.host.entity(id)
-}
-
 /// `SeatBlock.sitDown`: a seat at the block, `rider` on it (off what it rode first, as
 /// `startRiding` does). Whether it sat.
 fn sit_down(lv: &mut ServerLevel<'_>, pos: [i32; 3], rider: EntityRef) -> bool {
@@ -191,7 +187,12 @@ fn sit_down(lv: &mut ServerLevel<'_>, pos: [i32; 3], rider: EntityRef) -> bool {
         rider.stop_riding(&mut *lv.host);
     }
     let kind = kind_of(lv, rider);
-    let Some(seat) = spawn_seat(lv, seat::seat_at(pos, &kind)) else {
+    let Some(seat) = lv.level.spawn_entity(
+        &mut *lv.host,
+        ENTITY_TYPE,
+        seat::seat_anchor(pos, &kind),
+        &EntitySpawn::new(SpawnBody::General),
+    ) else {
         return false;
     };
     if !rider.start_riding(&mut *lv.host, seat, true).is_ok() {
@@ -211,8 +212,8 @@ fn sit_down(lv: &mut ServerLevel<'_>, pos: [i32; 3], rider: EntityRef) -> bool {
     true
 }
 
-/// The stand-ins that came back: one in a seat block no other stand-in holds is that seat's
-/// again (Create's `SeatEntity` is the block's by where it stands).
+/// Claim the seats whose blocks still exist (`SeatEntity.tick`). Retire unclaimed carriers
+/// and leave their riders and any already-claimed seat in the world.
 fn take_back(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let loaded: Vec<u32> = LOADED.with_borrow_mut(|l| {
@@ -233,6 +234,8 @@ fn take_back(lv: &mut ServerLevel<'_>) {
         let pos = at.map(|v| v.floor() as i32);
         let free = is_seat(lv, pos) && !SEATS.with_borrow(|s| s.contains_key(&(dim, pos)));
         if !free {
+            // Removing a general entity dismounts its passengers without removing them.
+            e.remove(&mut *lv.host, RemovalReason::Discarded);
             continue;
         }
         // A seat's riders are players or mobs.
@@ -289,7 +292,11 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
         if riding.is_some() {
             player.stop_riding(&mut *lv.host);
         }
-        stand.teleport_to(&mut *lv.host, seat::seat_at(pos, "minecraft:player"), None);
+        stand.teleport_to(
+            &mut *lv.host,
+            seat::seat_anchor(pos, "minecraft:player"),
+            None,
+        );
         if player.start_riding(&mut *lv.host, stand, true).is_ok() {
             SEATS.with_borrow_mut(|s| {
                 if let Some(s) = s.get_mut(&(dim, pos)) {
