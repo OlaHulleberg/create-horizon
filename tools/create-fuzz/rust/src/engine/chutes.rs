@@ -1,7 +1,7 @@
 //! Chutes and smart chutes at belts, mirroring glue/logistics/chute.rs: a belt's end hands a
-//! stack into an empty chute (`ChuteBlockEntity`'s `DirectBeltInputBehaviour`, refused under a
-//! chute and while fans blow up a chute with none below it); it falls (`tick`) at the column's
-//! motion (`chute_motion`: gravity, and encased fans under the lowest chute blowing up or over
+//! stack into an empty chute (`ChuteBlockEntity`'s `DirectBeltInputBehaviour`, while
+//! `canDirectlyInsert`); it falls (`tick`) at the column's motion (`chute_motion`: gravity,
+//! and encased fans under the lowest chute blowing up or over
 //! the highest blowing down) and leaves at the bottom into the belt segment below
 //! (`ItemHandlerBeltSegment`), a depot, or the chute it leads into (a diagonal chute's beside
 //! the one below), or out of the bottom (`handleDownwardOutput`, native item flight); blown up,
@@ -96,11 +96,14 @@ impl Run {
     fn chute_motion(&self, p: Pos) -> f32 {
         chute::item_motion(self.chute_push(p, 0), self.chute_pull(p, 0))
     }
-    /// `canDirectlyInsert` as the glue reads it (`direct_input_accepts`): no chute above, and not
-    /// blown up without a chute below.
+    /// The glue's `can_directly_insert` (`ChuteBlockEntity.canDirectlyInsert`).
     pub(super) fn chute_takes_from_side(&self, p: Pos) -> bool {
-        self.chute_at([p[0], p[1] + 1, p[2]]).is_none()
-            && !(self.chute_motion(p) > 0. && self.chute_at([p[0], p[1] - 1, p[2]]).is_none())
+        chute::can_directly_insert(
+            self.chute_at([p[0], p[1] + 1, p[2]]),
+            self.chute_motion(p),
+            || !self.input_chutes(p).is_empty(),
+            true,
+        )
     }
     /// `chute_direct_input` and `chute_take`: the whole stack, at the top, while it is empty and
     /// takes it.
