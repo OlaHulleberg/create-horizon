@@ -199,8 +199,6 @@ pub struct Dimension {
     chain_shapes: crate::chain::Shapes,
     /// Sequenced gearshifts and their sequence (`SequencedGearshiftBlockEntity`).
     pub sequencers: HashMap<[i32; 3], crate::sequencer::Sequencer>,
-    /// Sequenced gearshifts whose instruction runs: the only ones that tick.
-    sequencing: Vec<[i32; 3]>,
     /// `LevelChunkTicks` for Create's blocks: a neighbour change makes a block look again in
     /// the next tick's block-tick phase, before block entities tick. `GearshiftBlock`'s
     /// `detachKinetics` schedules its re-attach at `TickPriority.EXTREMELY_HIGH` and
@@ -1837,9 +1835,7 @@ impl CreateWorld {
             }
             d.fluid_transport.remove(pos);
             d.chutes.remove(&pos);
-            if d.sequencers.remove(&pos).is_some() {
-                d.sequencing.retain(|p| *p != pos);
-            }
+            d.sequencers.remove(&pos);
             if let Some(s) = d.saws.remove(&pos) {
                 d.saw_drops
                     .extend(s.slots.into_iter().map(|(item, n)| (pos, item, n)));
@@ -2160,7 +2156,6 @@ impl CreateWorld {
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.sequencers
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.sequencing.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.sequencer_steps
                 .retain(|(p, _)| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             // A gearshift's pending block tick stays: it is scheduled tick data, saved with the
@@ -2318,31 +2313,18 @@ impl CreateWorld {
         if !self.table.is_kinetic(state) {
             return;
         }
-        // A block entity's setting (a motor's speed, a crank turned) changes its parts in place:
-        // Create's block entity keeps its speed, source and network (`updateGeneratedRotation`),
-        // where a new block state starts them again (`KineticBlock.updateIndirectNeighbourShapes`).
         let d = &mut self.dims[dim];
         if d.states.get(&pos) == Some(&state)
             && let Some((block, info)) = self.table.get(state)
+            && update_parts_in_place(&mut d.kinetics, block, info, pos, &settings)
         {
-            let [a, b] = parts(block, info, &settings);
-            if a.is_some() == d.kinetics.has_part(pos, 0)
-                && b.is_some() == d.kinetics.has_part(pos, 1)
-            {
-                for (sub, part) in [(0, a), (1, b)] {
-                    if let Some(part) = part {
-                        d.kinetics.set(pos, sub, part);
-                    }
-                }
-                return;
-            }
+            return;
         }
         self.place(dim, pos, state, false);
     }
 
-    /// `SequencedGearshiftBlockEntity.tick`: the base kinetic tick attaches first;
-    /// only afterwards can the instruction advance and detach again. Commit the returned
-    /// block-state changes after this call, without another solve until the next tick.
+    /// One level tick: kinetic block entities, then the steps a sequenced gearshift's block must
+    /// show. Commit those after this call, without another solve until the next tick.
     pub fn tick(
         &mut self,
         dim: usize,
@@ -2352,11 +2334,8 @@ impl CreateWorld {
         // schedules the sequenced gearshift's next tick (`LevelTicks.tick` clears the ticks it
         // ran and the set `willTickThisTick` reads before block entities tick).
         self.dims[dim].block_ticks.phase_ended();
-        if std::mem::take(&mut self.dims[dim].cranks_due) {
-            self.run_cranks(dim);
-        }
         let stats = self.solve(dim, events);
-        let steps = self.tick_sequencers(dim);
+        let steps = std::mem::take(&mut self.dims[dim].sequencer_steps);
         (stats, steps)
     }
 
@@ -2366,7 +2345,60 @@ impl CreateWorld {
         let d = &mut self.dims[dim];
         d.kinetics.advance();
         let from = events.len();
-        let stats = d.kinetics.solve(events);
+        let cranks = std::mem::take(&mut d.cranks_due);
+        // A subclass tick that has work to do runs the walk even when the network is at rest:
+        // a running instruction (`SequencedGearshiftBlockEntity.tick`) or a crank still turning
+        // (`HandCrankBlockEntity.tick`).
+        let ticking = (cranks
+            && d.handles
+                .values()
+                .any(|h| h.saved.in_use > 0 || h.cooldown > 0))
+            || d.sequencers
+                .values()
+                .any(crate::sequencer::Sequencer::ticks);
+        let stats = {
+            let table = &self.table;
+            let Dimension {
+                kinetics,
+                sequencers,
+                sequencer_steps,
+                settings,
+                generator_changes,
+                states: block_states,
+                handles,
+                handle_changes,
+                ..
+            } = d;
+            kinetics.solve_with(events, ticking, |k, pos, _| {
+                // A block entity ticks as one: `super.tick()` (the kinetic base) has run for
+                // this entity, and its own tick follows before any entity registered after it
+                // has ticked.
+                if let Some(sequencer) = sequencers.get_mut(&pos)
+                    && let Some(step) = sequencer.tick()
+                {
+                    sequencer_steps.push((pos, step));
+                    GearshiftStep {
+                        table,
+                        block_states,
+                        settings,
+                        generator_changes,
+                        sequencers,
+                    }
+                    .apply(k, pos);
+                }
+                if cranks {
+                    HandleTick {
+                        table,
+                        block_states,
+                        settings,
+                        generator_changes,
+                        handles,
+                        changes: handle_changes,
+                    }
+                    .apply(k, pos);
+                }
+            })
+        };
         self.flush_kinetic_callbacks(dim);
         let d = &mut self.dims[dim];
         // Sequenced gearshifts follow their speed (`onSpeedChanged`).
@@ -2709,43 +2741,9 @@ impl CreateWorld {
     }
 
     /// The level's inputs were gathered: the cranks being turned tick with the level's block
-    /// entities, in `tick`. Java runs a tick's scheduled block ticks before any block entity
-    /// ticks (`ServerLevel` ticks `blockTicks` first), so a sequenced gearshift's block tick,
-    /// which starts an instruction and re-attaches its entity, precedes the crank pass that
-    /// walks the entities registered before it.
+    /// entities, in `tick`, where `HandleTick` runs each one in level order.
     pub fn tick_cranks(&mut self, dim: usize) {
         self.dims[dim].cranks_due = true;
-    }
-
-    /// One tick of the cranks being turned: those whose time ran out stop; valve handles that
-    /// stopped count their cooldown down (`ValveHandleBlockEntity.tick`, after the crank's).
-    fn run_cranks(&mut self, dim: usize) {
-        let mut stopped = Vec::new();
-        let d = &mut self.dims[dim];
-        let mut positions: Vec<_> = d.handles.keys().copied().collect();
-        positions.sort_by_key(|&pos| d.block_entities.registration_order(pos).unwrap_or(u64::MAX));
-        for pos in &positions {
-            let handle = d.handles.get_mut(pos).unwrap();
-            d.kinetics.tick_base_through(*pos);
-            if handle.saved.in_use > 0 {
-                handle.saved.in_use -= 1;
-                d.handle_changes.insert(*pos);
-                if handle.saved.in_use == 0 {
-                    stopped.push(*pos);
-                }
-            }
-            if handle.saved.in_use == 0 && handle.cooldown > 0 {
-                handle.cooldown -= 1;
-            }
-        }
-        for pos in stopped {
-            let d = &mut self.dims[dim];
-            if let (Some(&state), Some(old)) = (d.states.get(&pos), d.settings.get(&pos).copied()) {
-                // `HandCrankBlockEntity.tick`: the context goes when it stops.
-                d.kinetics.set_sequence_context(pos, 0, None);
-                self.set_settings(dim, pos, state, Settings { crank: 0, ..old });
-            }
-        }
     }
 
     /// Loaded crank/valve positions whose use data the host writes each tick.
@@ -3269,12 +3267,7 @@ impl CreateWorld {
         s.overstressed = overstressed;
         // read restores fields; it does not run an instruction or detach kinetics.
         let modifier = s.modifier() as i8;
-        let ticks = s.ticks();
         let d = &mut self.dims[dim];
-        d.sequencing.retain(|p| *p != pos);
-        if ticks {
-            d.sequencing.push(pos);
-        }
         let settings = d.settings.entry(pos).or_default();
         settings.sequence = modifier;
         if let Some((block, info)) = d.states.get(&pos).and_then(|state| self.table.get(*state)) {
@@ -3320,27 +3313,6 @@ impl CreateWorld {
         step
     }
 
-    /// One tick of the sequenced gearshifts whose instruction runs (`tick`), and the steps they
-    /// took as their speed changed: what their blocks' `state` becomes. Nothing without one.
-    fn tick_sequencers(&mut self, dim: usize) -> Vec<([i32; 3], crate::sequencer::Step)> {
-        let d = &mut self.dims[dim];
-        if d.sequencing.is_empty() && d.sequencer_steps.is_empty() {
-            return Vec::new();
-        }
-        let mut steps = std::mem::take(&mut d.sequencer_steps);
-        for pos in d.sequencing.clone() {
-            let step = self.dims[dim]
-                .sequencers
-                .get_mut(&pos)
-                .and_then(|s| s.tick());
-            if let Some(step) = step {
-                self.sequencer_stepped(dim, pos);
-                steps.push((pos, step));
-            }
-        }
-        steps
-    }
-
     /// The speed the sequenced gearshift at `pos` is turned at (its block entity's theoretical
     /// `speed`: the half turned, which the other turns at the modifier times) and whether it is
     /// overstressed, after a solve changed either.
@@ -3367,45 +3339,27 @@ impl CreateWorld {
         }
     }
 
-    /// After a sequenced gearshift's step: it ticks while an instruction runs, and its far half
-    /// turns at the instruction's modifier (`detachKinetics`, then `attachKinetics`).
+    /// After a sequenced gearshift's step: its far half turns at the instruction's modifier
+    /// (`run`, `getRotationSpeedModifier`).
     fn sequencer_stepped(&mut self, dim: usize, pos: [i32; 3]) {
+        let table = &self.table;
         let d = &mut self.dims[dim];
-        let Some(s) = d.sequencers.get(&pos) else {
-            return;
-        };
-        let (modifier, ticks, context) = (s.modifier() as i8, s.ticks(), s.context());
-        d.sequencing.retain(|p| *p != pos);
-        if ticks {
-            d.sequencing.push(pos);
+        let Dimension {
+            kinetics,
+            sequencers,
+            settings,
+            generator_changes,
+            states: block_states,
+            ..
+        } = d;
+        GearshiftStep {
+            table,
+            block_states,
+            settings,
+            generator_changes,
+            sequencers,
         }
-        let old = d.settings.get(&pos).copied().unwrap_or_default();
-        let previous = d
-            .kinetics
-            .saved_state(pos, 1)
-            .and_then(|s| s.sequence)
-            .map(|s| s.0);
-        if (old.sequence != modifier || previous != context)
-            && let Some(&state) = d.states.get(&pos)
-        {
-            let speed = d.kinetics.theoretical(pos, 0).map_or(0.0, |s| s.0) * f32::from(modifier);
-            let sequence = context.map(|c| (c, if speed == 0.0 { 0.0 } else { c.value / speed }));
-            if old.sequence == modifier {
-                d.kinetics.restart_sequence_output(pos);
-            }
-            self.set_settings(
-                dim,
-                pos,
-                state,
-                Settings {
-                    sequence: modifier,
-                    ..old
-                },
-            );
-            self.dims[dim]
-                .kinetics
-                .set_sequence_context(pos, 1, sequence);
-        }
+        .apply(kinetics, pos);
     }
 
     /// `DepotBehaviour.write`: slots retain item identity; this saves its transport state.
@@ -5138,6 +5092,113 @@ impl CreateWorld {
             return crate::tank::blocks(c, m.width, m.height).collect();
         }
         vec![pos]
+    }
+}
+
+/// A block entity's setting changed in place: Create's block entity keeps its speed, source and
+/// network (`updateGeneratedRotation`, `run`), where a new block state starts them again
+/// (`KineticBlock.updateIndirectNeighbourShapes`). False when it has other parts now.
+fn update_parts_in_place(
+    k: &mut Kinetics,
+    block: Block,
+    info: &StateInfo,
+    pos: [i32; 3],
+    settings: &Settings,
+) -> bool {
+    let [a, b] = parts(block, info, settings);
+    if a.is_some() != k.has_part(pos, 0) || b.is_some() != k.has_part(pos, 1) {
+        return false;
+    }
+    for (sub, part) in [(0, a), (1, b)] {
+        if let Some(part) = part {
+            k.set(pos, sub, part);
+        }
+    }
+    true
+}
+
+/// The state a sequenced gearshift's step reads and changes besides its own kinetic entity:
+/// `SequencedGearshiftBlockEntity.run`/`onSpeedChanged` make its far half turn at the running
+/// instruction's modifier (`getRotationSpeedModifier`, a `SplitShaftBlockEntity`).
+struct GearshiftStep<'a> {
+    table: &'a StateTable,
+    block_states: &'a HashMap<[i32; 3], u32>,
+    settings: &'a mut HashMap<[i32; 3], Settings>,
+    generator_changes: &'a mut Vec<[i32; 3]>,
+    sequencers: &'a HashMap<[i32; 3], crate::sequencer::Sequencer>,
+}
+impl GearshiftStep<'_> {
+    /// A new instruction (or none) changed what the far half turns at; `run` detaches its
+    /// output and re-attaches it at that modifier.
+    fn apply(&mut self, k: &mut Kinetics, pos: [i32; 3]) {
+        let Some(s) = self.sequencers.get(&pos) else {
+            return;
+        };
+        let (modifier, context) = (s.modifier() as i8, s.context());
+        let old = self.settings.get(&pos).copied().unwrap_or_default();
+        let previous = k.saved_state(pos, 1).and_then(|s| s.sequence).map(|s| s.0);
+        if (old.sequence != modifier || previous != context)
+            && let Some(&state) = self.block_states.get(&pos)
+        {
+            let speed = k.theoretical(pos, 0).map_or(0.0, |s| s.0) * f32::from(modifier);
+            let sequence = context.map(|c| (c, if speed == 0.0 { 0.0 } else { c.value / speed }));
+            // A step that only restarts the same instruction still detaches its output.
+            if old.sequence == modifier {
+                k.restart_sequence_output(pos);
+            }
+            let settings = Settings {
+                sequence: modifier,
+                ..old
+            };
+            self.settings.insert(pos, settings);
+            self.generator_changes.push(pos);
+            if let Some((block, info)) = self.table.get(state) {
+                update_parts_in_place(k, block, info, pos, &settings);
+            }
+            k.set_sequence_context(pos, 1, sequence);
+        }
+    }
+}
+
+/// `HandCrankBlockEntity.tick` and `ValveHandleBlockEntity.tick`: the use a turned handle
+/// counts down, and the crank it stops turning (`updateGeneratedRotation`).
+struct HandleTick<'a> {
+    table: &'a StateTable,
+    block_states: &'a HashMap<[i32; 3], u32>,
+    settings: &'a mut HashMap<[i32; 3], Settings>,
+    generator_changes: &'a mut Vec<[i32; 3]>,
+    handles: &'a mut HashMap<[i32; 3], crate::valve::Handle>,
+    changes: &'a mut HashSet<[i32; 3]>,
+}
+impl HandleTick<'_> {
+    fn apply(&mut self, k: &mut Kinetics, pos: [i32; 3]) {
+        let Some(handle) = self.handles.get_mut(&pos) else {
+            return;
+        };
+        let mut stopped = false;
+        if handle.saved.in_use > 0 {
+            handle.saved.in_use -= 1;
+            self.changes.insert(pos);
+            stopped = handle.saved.in_use == 0;
+        }
+        // ValveHandleBlockEntity.tick, after the crank's: the cooldown runs once it stopped.
+        if handle.saved.in_use == 0 && handle.cooldown > 0 {
+            handle.cooldown -= 1;
+        }
+        if !stopped {
+            return;
+        }
+        // HandCrankBlockEntity.tick: the sequence context goes and the crank stops turning.
+        k.set_sequence_context(pos, 0, None);
+        let old = self.settings.get(&pos).copied().unwrap_or_default();
+        let settings = Settings { crank: 0, ..old };
+        self.settings.insert(pos, settings);
+        self.generator_changes.push(pos);
+        if let Some(&state) = self.block_states.get(&pos)
+            && let Some((block, info)) = self.table.get(state)
+        {
+            update_parts_in_place(k, block, info, pos, &settings);
+        }
     }
 }
 
@@ -9288,6 +9349,133 @@ mod tests {
                 .is_some()
         );
         assert_eq!(w.sequencer_run(0, pos).unwrap().progress, 1.0);
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_reloaded_network_keeps_the_capacity_a_sequencer_had_when_its_run_ends() {
+        // Java issue #173 (fuzz seed 2356): a hand crank driving a shaft, two sequenced
+        // gearshifts in a row, the first powered and running its 90° turn, the crank turned
+        // again, then a save and a reload. The reloaded first gearshift ends its run on its
+        // first tick (`run(1)`, END: `getModifier()` is still 1, so `detachKinetics` takes its
+        // output apart). The second gearshift, registered after it, has not ticked yet, so it is
+        // not one of the reloaded network's members and `KineticNetwork.remove` leaves the
+        // capacity its save restored: Java reports 256 there, with stress 0, speed 0 and no
+        // network.
+        use crate::sequencer::Step;
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
+        let names = [
+            ("create:shaft", vec![("axis", "x")]),
+            ("create:sequenced_gearshift", seq("0")),
+            ("create:sequenced_gearshift", seq("1")),
+            ("create:hand_crank", vec![("facing", "west")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let (shaft, idle, running, crank) = (10, 11, 12, 13);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        fn level_tick(w: &mut CreateWorld) -> Vec<([i32; 3], Step)> {
+            w.tick_cranks(0);
+            w.tick(0, &mut Vec::new()).1
+        }
+        let (shaft_pos, gearshift, output, crank_pos) =
+            ([-1, 8, 0], [0, 8, 0], [1, 8, 0], [-2, 8, 0]);
+        // A player places the shaft and the two gearshifts one per tick; the crank goes on the
+        // shaft's west face on tick 4.
+        w.block_changed(0, shaft_pos, 0, shaft);
+        level_tick(&mut w);
+        w.block_changed(0, gearshift, 0, idle);
+        level_tick(&mut w);
+        w.block_changed(0, output, 0, idle);
+        for _ in 0..2 {
+            level_tick(&mut w);
+        }
+        w.block_changed(0, crank_pos, 0, crank);
+        level_tick(&mut w);
+        // Tick 35: the crank is turned.
+        assert!(w.turn_crank(0, crank_pos, false));
+        level_tick(&mut w);
+        assert_eq!(w.speed(0, gearshift), Some(-32.0));
+        level_tick(&mut w);
+        // Tick 37: powered from above, its program starts.
+        assert_eq!(
+            w.sequencer_redstone(0, gearshift, true, false),
+            Some(Step::Run(1))
+        );
+        w.block_changed(0, gearshift, idle, running);
+        // The 90° turn is 12 ticks long at 32 RPM: ticks 37 to 48.
+        for _ in 0..7 {
+            level_tick(&mut w);
+        }
+        // Tick 44: the crank is turned again, as a player keeps it going.
+        assert!(w.turn_crank(0, crank_pos, false));
+        for _ in 0..5 {
+            level_tick(&mut w);
+        }
+        let run = w.sequencer_run(0, gearshift).unwrap();
+        assert_eq!((run.current, run.timer, run.duration), (0, 12, 12));
+        // The save, then a cold load: an empty network space, every entity initializing on its
+        // first tick, in the order it was registered.
+        let positions = [shaft_pos, gearshift, output, crank_pos];
+        let state_of: Vec<u32> = positions
+            .iter()
+            .map(|&p| w.state_at(0, p).unwrap())
+            .collect();
+        let kinetic: Vec<_> = positions
+            .iter()
+            .map(|&p| {
+                [
+                    w.dims[0].kinetics.saved_state(p, 0),
+                    w.dims[0].kinetics.saved_state(p, 1),
+                ]
+            })
+            .collect();
+        let handle = w.saved_handle(0, crank_pos).unwrap();
+        w.column_unloaded(0, 0, 0);
+        w.column_unloaded(0, -1, 0);
+        w.dims[0].kinetics = Kinetics::new();
+        for (i, &p) in positions.iter().enumerate() {
+            w.block_loaded(0, p, state_of[i]);
+            if p == crank_pos {
+                w.restore_handle(0, p, handle);
+            }
+            for (sub, saved) in kinetic[i].iter().enumerate() {
+                if let Some(saved) = *saved {
+                    assert!(w.dims[0].kinetics.restore_state(p, sub as u8, saved));
+                }
+            }
+            if p == gearshift {
+                w.restore_sequencer(0, p, run);
+            }
+        }
+        let steps = level_tick(&mut w);
+        assert_eq!(steps, [(gearshift, Step::Ended)]);
+        // Java at the reloaded tick: the crank and what it turns still run at 32 RPM and report
+        // the 256 SU the save restored. The gearshift that just ended its run was never
+        // enrolled in that network: it keeps its saved capacity and loses its speed.
+        assert_eq!(w.speed(0, crank_pos), Some(-32.0));
+        assert_eq!(
+            w.dims[0].kinetics.network(crank_pos, 0),
+            Some((-32.0, 0.0, 256.0, false))
+        );
+        assert_eq!(w.speed(0, gearshift), Some(-32.0));
+        assert_eq!(
+            w.dims[0].kinetics.network(gearshift, 0),
+            Some((-32.0, 0.0, 0.0, false))
+        );
+        assert_eq!(w.speed(0, output), Some(0.0));
+        assert_eq!(
+            w.dims[0].kinetics.network(output, 0),
+            Some((0.0, 0.0, 256.0, false))
+        );
+        let saved = w.dims[0].kinetics.saved_state(output, 0).unwrap();
+        assert_eq!(
+            (saved.speed, saved.source, saved.network),
+            (0.0, None, None)
+        );
         states::clear_range();
     }
 

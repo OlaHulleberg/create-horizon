@@ -1521,7 +1521,23 @@ impl Kinetics {
 
     /// Runs queued block entity attachments and generator updates, then syncs network stress.
     pub fn solve(&mut self, events: &mut Vec<Event>) -> SolveStats {
-        if !self.has_dirty() {
+        self.solve_with(events, false, |_, _, _| {})
+    }
+
+    /// KineticBlockEntity.tick for every registered entity in level order, with `subclass_tick`
+    /// between two entities: after the earlier one's base tick and before the later one's. A
+    /// block entity ticks as one, so a sequenced gearshift's instruction
+    /// (`SequencedGearshiftBlockEntity.tick`) runs right after its own `super.tick()` and before
+    /// any entity registered after it has ticked, while its `attachKinetics` still runs first.
+    /// `ticking` runs that walk even when nothing was queued: a subclass that ticks every tick
+    /// (a running instruction) needs it.
+    pub fn solve_with(
+        &mut self,
+        events: &mut Vec<Event>,
+        ticking: bool,
+        mut subclass_tick: impl FnMut(&mut Self, [i32; 3], &mut Vec<Event>),
+    ) -> SolveStats {
+        if !ticking && !self.has_dirty() {
             self.base_pass += 1;
             return SolveStats::default();
         }
@@ -1536,6 +1552,7 @@ impl Kinetics {
             for id in self.ordered_ports(pos).into_iter().filter(|&id| id != NONE) {
                 self.tick_base(id, self.now, events);
             }
+            subclass_tick(self, pos, events);
         }
         // Keep only outstanding tickets, without allocating or visiting other nodes.
         // A source dirtied after tick_base_through must keep the next pass active:
