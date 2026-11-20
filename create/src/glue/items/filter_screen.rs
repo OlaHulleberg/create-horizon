@@ -927,7 +927,7 @@ fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f32
             if o.cursor.is_none()
                 && let Some(s) = o.stack(slot)
             {
-                hover = Some(vec![Text::literal(host.hover_name(s))]);
+                hover = Some(vec![host.hover_name(s).unwrap_or_default()]);
             }
         }
     }
@@ -944,7 +944,7 @@ fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f32
                 if o.cursor.is_none()
                     && let Some((_, s)) = g
                 {
-                    hover = Some(vec![Text::literal(host.hover_name(s))]);
+                    hover = Some(vec![host.hover_name(s).unwrap_or_default()]);
                 }
             }
         }
@@ -1008,7 +1008,7 @@ fn draw_attribute(
         if o.cursor.is_none()
             && let Some(s) = reference_stack
         {
-            *hover = Some(vec![Text::literal(host.hover_name(s))]);
+            *hover = Some(vec![host.hover_name(s).unwrap_or_default()]);
         }
     }
     // `renderForeground`: a name tag with the number of attributes chosen.
@@ -1065,7 +1065,12 @@ fn draw_attribute(
                 SELECTOR[3],
             ];
             if inside(r, mouse) {
-                *hover = Some(selector_tip(host, &host.hover_name(s), options, o.option));
+                *hover = Some(selector_tip(
+                    host,
+                    host.hover_name(s).unwrap_or_default(),
+                    options,
+                    o.option,
+                ));
             }
         }
     }
@@ -1074,11 +1079,15 @@ fn draw_attribute(
 /// `SelectionScrollInput.updateTooltip`.
 fn selector_tip(
     host: &dyn ClientHost,
-    name: &str,
+    name: Text,
     options: &[AttrLine],
     state: usize,
 ) -> Vec<Text> {
-    let mut lines = vec![styled(format!("{name}..."), "#5391E1", false)];
+    let mut lines = vec![
+        styled("", "#5391E1", false)
+            .append(name)
+            .append(Text::literal("...")),
+    ];
     let (lo, hi) = window(options.len(), state);
     if lo > 0 {
         lines.push(styled("> ...", "gray", false));

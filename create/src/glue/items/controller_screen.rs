@@ -348,7 +348,7 @@ fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f32
     // The title (the controller's name) at (15, 4).
     let title = main_hand(host).map_or_else(
         || tr(host, "item.create.linked_controller"),
-        |s| host.hover_name(&s),
+        |s| crate::glue::item_name(host, &s),
     );
     draw.text(&title, [c[0] + 15.0, c[1] + 4.0], 0xFF59_2424, false);
     // The held controller, five times its size.
@@ -390,7 +390,7 @@ fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f32
             if o.cursor.is_none()
                 && let Some(s) = o.stack(slot)
             {
-                hover = Some(vec![Text::literal(host.hover_name(s))]);
+                hover = Some(vec![host.hover_name(s).unwrap_or_default()]);
             }
         }
     }
@@ -406,7 +406,7 @@ fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f32
                 // `addToTooltip`: the frequency slot and its button's key, in gold.
                 let mut lines = Vec::new();
                 if let Some((_, s)) = s {
-                    lines.push(Text::literal(host.hover_name(s)));
+                    lines.push(host.hover_name(s).unwrap_or_default());
                 }
                 let key = host
                     .mapping(MAPPINGS[i / 2])

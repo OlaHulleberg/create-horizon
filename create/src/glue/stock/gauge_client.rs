@@ -963,7 +963,7 @@ pub(crate) fn hover_lines(host: &dyn ClientHost) -> Option<Vec<(String, u32)>> {
     let name = p
         .filter
         .as_ref()
-        .map(|f| host.hover_name(f))
+        .map(|f| crate::glue::item_name(host, f))
         .unwrap_or_default();
     let gold = 0xFBDC7D;
     let (label, color) = if !p.inputs.is_empty() && p.count == 0 {

@@ -422,7 +422,7 @@ pub(super) fn tick(host: &mut dyn ClientHost) {
             && let Some(Some(s)) = usize::try_from(i).ok().and_then(|i| o.cards.get(i))
             && has_name(s)
         {
-            o.name = host.hover_name(s);
+            o.name = crate::glue::item_name(host, s);
         }
     });
 }
@@ -523,7 +523,7 @@ fn action(o: &Open, x: f32, y: f32, mouse: [f32; 2]) -> Option<Action> {
 
 fn card_name(host: &dyn ClientHost, card: &Option<ItemStack>) -> String {
     match card {
-        Some(s) => host.hover_name(s),
+        Some(s) => crate::glue::item_name(host, s),
         None => tr(
             host,
             "create.gui.stock_ticker.empty_category_name_placeholder",
@@ -776,7 +776,7 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
             // `getTooltipFromContainerItem`: the slot's stack under "Category Filter".
             Some(s) => vec![
                 header("create.gui.stock_ticker.category_filter", "Category Filter"),
-                Text::literal(host.hover_name(s)),
+                host.hover_name(s).unwrap_or_default(),
             ],
             None => vec![
                 header("create.gui.stock_ticker.category_filter", "Category Filter"),
@@ -804,7 +804,7 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
             .into_iter()
             .find(|(_, r)| inside(*r, mouse))
             .and_then(|(i, _)| o.inventory.iter().find(|(k, _)| *k == i))
-            .map(|(_, s)| vec![Text::literal(host.hover_name(s))])
+            .map(|(_, s)| vec![host.hover_name(s).unwrap_or_default()])
     };
     if let Some(lines) = tip {
         let _ = draw.gui_tooltip(&lines, mouse);
@@ -828,7 +828,7 @@ fn start_editing(host: &dyn ClientHost, o: &mut Open, i: i32) {
     o.editing = Some(i);
     o.focus = false;
     o.name = match usize::try_from(i).ok().and_then(|i| o.cards.get(i)) {
-        Some(Some(s)) => host.hover_name(s),
+        Some(Some(s)) => crate::glue::item_name(host, s),
         _ => new_category(host),
     };
     let mut m = message(b'S', o.pos);

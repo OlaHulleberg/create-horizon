@@ -375,7 +375,7 @@ pub(super) fn screen_render_post(host: &dyn ClientHost, event: &mut ScreenRender
             .find(|&i| inside(slot_rect(x, y, i), mouse))
             .and_then(|i| o.slots[i].as_ref().map(|s| (i, s)))
             .map(|(i, s)| {
-                let name = format!("{} x{}", host.hover_name(s), o.amounts[i]);
+                let name = format!("{} x{}", crate::glue::item_name(host, s), o.amounts[i]);
                 let send = tr(host, "create.gui.factory_panel.send_item", "Send %1$s")
                     .replace("%1$s", &name)
                     .replace("%s", &name);

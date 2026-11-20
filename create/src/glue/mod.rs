@@ -36,11 +36,18 @@ pub mod transmission;
 pub mod world;
 
 use create_engine::world::StateTable;
-use mod_api::{ClientHost, Host, ServerHost};
+use mod_api::{ClientHost, Host, ItemStack, ServerHost};
 use server::ServerLevel;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use subsystem::Subsystem;
+
+/// Resolve a stack's hover name in the caller's language for plain labels and search.
+pub(crate) fn item_name(host: &dyn Host, stack: &ItemStack) -> String {
+    host.hover_name(stack)
+        .and_then(|name| host.text_string(&name))
+        .unwrap_or_default()
+}
 
 /// Every subsystem, in the order their level ticks run.
 ///

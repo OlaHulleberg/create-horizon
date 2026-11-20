@@ -361,7 +361,7 @@ fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f32
         [x, y, SIZE[0], SIZE[1]],
         None,
     );
-    let title = host.hover_name(&o.shaper);
+    let title = crate::glue::item_name(host, &o.shaper);
     let w = draw.text_width(&title) as i32;
     draw.text(
         &title,

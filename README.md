@@ -132,15 +132,14 @@ Every capture is in game on Sunrise, with every machine running. Nothing is pain
 
 ## Build from source
 
-You need Rust 1.99.1 with the `wasm32-unknown-unknown` target (the SDK's toolchain), and Sunrise's
-`cargo sunrise-mod` tool:
+Install Rust 1.99.1 with the `wasm32-unknown-unknown` target and the signed `cargo sunrise-mod` tool from the
+SDK release for `[native] sunrise` in [create/sunrise-mod.toml](create/sunrise-mod.toml). Follow Sunrise's
+[tool installation guide](https://github.com/sunrise-org/sunrise/blob/94256510f74e6843754e0a93fd9e4da7e45b1056/docs/modding/src/start/install-tool.md),
+setting `RELEASE=sdk-94256510f74e6843754e0a93fd9e4da7e45b1056` to install and verify that release's tool.
 
 ```sh
 rustup toolchain install 1.99.1 --target wasm32-unknown-unknown
-cargo install --locked --git https://github.com/sunrise-org/sunrise --rev <the pin> cargo-sunrise-mod
 ```
-
-`<the pin>` is `[native] sunrise` in [create/sunrise-mod.toml](create/sunrise-mod.toml).
 
 ```sh
 cd create && cargo sunrise-mod check        # fetches the pinned SDK into create/.sunrise/, then checks

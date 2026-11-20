@@ -171,7 +171,7 @@ fn draw(host: &dyn ClientHost, draw: &mut dyn mod_api::DrawContext, o: &Open, mo
         [x, y, SIZE[0], SIZE[1]],
         None,
     );
-    let name = host.hover_name(&o.wand);
+    let name = crate::glue::item_name(host, &o.wand);
     let w = draw.text_width(&name) as i32;
     draw.text(
         &name,

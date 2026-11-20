@@ -903,7 +903,7 @@ fn render_config(
                         ),
                     ],
                     Some(s) => {
-                        let name = format!("{} x{amount}", host.hover_name(s));
+                        let name = format!("{} x{amount}", crate::glue::item_name(host, s));
                         let sending = tr(
                             host,
                             "create.gui.factory_panel.sending_item",
@@ -960,7 +960,7 @@ fn render_config(
                 "create.gui.factory_panel.sending_item",
                 "Sending %1$s",
             )
-            .replace("%1$s", &host.hover_name(f));
+            .replace("%1$s", &crate::glue::item_name(host, f));
             tip = Some(vec![
                 styled(sending, HEADER, false),
                 gray(
@@ -979,7 +979,7 @@ fn render_config(
         if let Some(f) = &c.panel.filter {
             draw.gui_draw_item_with(f, [r.output[0], r.output[1]], Some(&c.output.to_string()));
             if inside([r.output[0] - 1.0, r.output[1] - 1.0, 18.0, 18.0], mouse) {
-                let name = format!("{} x{}", host.hover_name(f), c.output);
+                let name = format!("{} x{}", crate::glue::item_name(host, f), c.output);
                 let expecting = tr(
                     host,
                     "create.gui.factory_panel.expected_output",
@@ -1234,11 +1234,11 @@ fn render_config(
                 .panel
                 .filter
                 .as_ref()
-                .map(|f| host.hover_name(f))
+                .and_then(|f| host.hover_name(f).ok())
                 .unwrap_or_default();
             vec![
                 head("create.gui.factory_panel.promised_items", "Promised items"),
-                Text::literal(format!("{name} x{}", c.panel.promised)),
+                name.append(Text::literal(format!(" x{}", c.panel.promised))),
                 hint(
                     "create.gui.factory_panel.left_click_reset",
                     "Left-Click to reset",

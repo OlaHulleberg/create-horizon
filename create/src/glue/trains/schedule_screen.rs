@@ -1170,7 +1170,7 @@ fn title_lines(host: &dyn ClientHost, c: &Condition) -> Vec<String> {
                         &[],
                     )
                 } else {
-                    host.hover_name(&st)
+                    crate::glue::item_name(host, &st)
                 }
             },
         )
@@ -1232,7 +1232,7 @@ fn title_lines(host: &dyn ClientHost, c: &Condition) -> Vec<String> {
             let freq_name = |s: &Stack| {
                 ghost(host, s).map_or_else(
                     || tr(host, "block.minecraft.air", &[]),
-                    |st| host.hover_name(&st),
+                    |st| crate::glue::item_name(host, &st),
                 )
             };
             vec![
@@ -1748,7 +1748,7 @@ fn draw_slots(
             if o.cursor.is_none()
                 && let Some(s) = o.stack(slot)
             {
-                tips.push(host.hover_name(s));
+                tips.push(crate::glue::item_name(host, s));
             }
         }
     }
@@ -1761,7 +1761,7 @@ fn draw_slots(
         if over_slot(p, mouse) {
             draw.fill([p[0], p[1], 16.0, 16.0], 0x80FF_FFFF);
             match (&ed.ghosts[i], &ed.field) {
-                (Some(s), _) if o.cursor.is_none() => tips.push(host.hover_name(s)),
+                (Some(s), _) if o.cursor.is_none() => tips.push(crate::glue::item_name(host, s)),
                 (None, Field::Condition(c)) => tips.extend(slot_tip(host, c, i)),
                 _ => {}
             }
