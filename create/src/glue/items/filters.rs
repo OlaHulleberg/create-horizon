@@ -16,8 +16,8 @@
 //!
 //! `fluid_container` and `has_fluid` know the buckets (the items the game gives a fluid
 //! handler), `has_color` dyes, fireworks and colour-named items, and
-//! `shulker_fill_level` a shulker box's `container`. Left out: `in_item_group`, as no API reads
-//! the creative tabs (`API_GAPS.md`).
+//! `shulker_fill_level` a shulker box's `container`. `in_item_group` checks the creative
+//! catalog; the picker still needs the SDK to expose each tab's display name (`API_GAPS.md`).
 //!
 //! `max_enchanted` reads each enchantment's maximum level from the server's data
 //! (`enchantment/*.json`'s `max_level`, listed by a data reload listener), as the host answers
@@ -34,12 +34,30 @@ use create_engine::filter::{
     Passes, Probe, RESPECT_NBT_KEY, Spec,
 };
 use mod_api::{
-    CommandArgumentValue, CommandSource, Compound, Hand, Host, HostSide, Identifier,
-    InteractionResult, ItemPart, ItemStack, PlayerRef, RunModCommandEvent, ServerHost, SoundSource,
-    Tag, UseItemEvent, UseOnEvent,
+    CommandArgumentValue, CommandSource, Compound, CreativeModeTabs, CreativeTabPermissions, Hand,
+    Host, HostSide, Identifier, InteractionResult, ItemPart, ItemStack, PlayerRef,
+    RunModCommandEvent, ServerHost, SoundSource, Tag, UseItemEvent, UseOnEvent,
 };
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::sync::Arc;
+
+thread_local! {
+    /// An immutable snapshot for the server's read-only filter probes. The SDK builds it
+    /// through a mutable host; a probe may run inside another mod's capability query.
+    static ITEM_GROUPS: RefCell<Option<Arc<CreativeModeTabs>>> = const { RefCell::new(None) };
+}
+
+pub(super) fn refresh_item_groups(host: &mut dyn ServerHost) {
+    if ITEM_GROUPS.with_borrow(Option::is_none) {
+        ITEM_GROUPS.set(host.creative_tabs(CreativeTabPermissions::Normal).ok());
+    }
+}
+
+pub(super) fn clear_item_groups() {
+    ITEM_GROUPS.set(None);
+}
 
 fn flag(t: Option<&Tag>) -> bool {
     matches!(t, Some(Tag::Byte(b)) if *b != 0)
@@ -436,6 +454,18 @@ impl Probe for Looked<'_> {
                 .and_then(|id| host.tags().key(&id))
                 .and_then(|k| host.tags().is_in_tag(item, k))
                 .unwrap_or(false),
+            Attribute::InItemGroup(group) => {
+                let Ok(id) = Identifier::parse(group) else {
+                    return false;
+                };
+                ITEM_GROUPS.with_borrow(|tabs| {
+                    tabs.as_ref()
+                        .and_then(|tabs| tabs.tab(&id.to_string()))
+                        .is_some_and(|tab| {
+                            tab.contains(host, stack) || tab.contains(host, &ItemStack::of(item))
+                        })
+                })
+            }
             Attribute::AddedBy(m) => self.id.split_once(':').map_or("minecraft", |s| s.0) == m,
             // `getEnchantmentsForCrafting`: a book's stored ones.
             Attribute::HasEnchant(e) => {
@@ -726,9 +756,6 @@ pub(super) fn command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>)
                 };
                 match Attribute::parse(kind, value) {
                     Ok(at) => tests.push((at, inverted)),
-                    Err(filter::Refused::NotPorted(n)) => {
-                        return format!("filter: the {n} attribute is not ported");
-                    }
                     Err(filter::Refused::Unknown(n)) => return format!("filter: {n}?"),
                 }
             }
@@ -927,6 +954,8 @@ fn attr_line(kind: &str, value: Option<String>) -> filter_screen::AttrLine {
                 .map(|v| format!("#{}", v.trim_start_matches('#'))),
             false,
         ),
+        // Keep the saved predicate without claiming the registry id is its display name.
+        "in_item_group" => (name.to_owned(), None, false),
         // `ModInfo.getDisplayName`, else the id capitalised.
         "added_by" => (
             name.to_owned(),

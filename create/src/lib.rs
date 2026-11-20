@@ -92,9 +92,12 @@ impl Hooks for Create {
         world::level_index(event.dimension);
     }
 
-    fn server_tick(&self, _host: &mut dyn ServerHost, event: &mut mod_api::ServerTickEvent<'_>) {
+    fn server_tick(&self, host: &mut dyn ServerHost, event: &mut mod_api::ServerTickEvent<'_>) {
         if let mod_api::ServerTickPhase::ServerTickStart { world_running } = event.phase {
             world::set_running(world_running);
+            if world::is_open() {
+                glue::items::refresh_item_groups(host);
+            }
         }
     }
 
