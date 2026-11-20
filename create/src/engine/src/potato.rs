@@ -170,15 +170,15 @@ pub fn motion(look: [f64; 3], correction: [f64; 3], t: &Type) -> [f64; 3] {
 /// `from`; where the line enters it.
 pub const HIT_MARGIN: f64 = 0.3;
 
-pub fn entity_hit(
+pub fn entity_hit<T>(
     from: [f64; 3],
     to: [f64; 3],
-    boxes: &[(u32, [[f64; 3]; 2])],
+    boxes: impl IntoIterator<Item = (T, [[f64; 3]; 2])>,
     margin: f64,
-) -> Option<(u32, [f64; 3])> {
+) -> Option<(T, [f64; 3])> {
     let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
-    let mut best: Option<(f64, u32, [f64; 3])> = None;
-    for &(id, [lo, hi]) in boxes {
+    let mut best: Option<(f64, T, [f64; 3])> = None;
+    for (id, [lo, hi]) in boxes {
         let lo = lo.map(|v| v - margin);
         let hi = hi.map(|v| v + margin);
         let inside = (0..3).all(|i| from[i] >= lo[i] && from[i] <= hi[i]);
@@ -208,7 +208,7 @@ pub fn entity_hit(
             meets.then_some(t0)
         };
         if let Some(t) = t
-            && best.is_none_or(|(bt, ..)| t < bt)
+            && best.as_ref().is_none_or(|(bt, ..)| t < *bt)
         {
             best = Some((t, id, [0, 1, 2].map(|i| from[i] + d[i] * t)));
         }
@@ -271,42 +271,26 @@ pub fn fly(motion: [f64; 3], t: &Type) -> [f64; 3] {
 /// `setEnchantmentEffectsFromCannon`: the chance a landed shot gives its item back.
 pub fn recovery_chance(level: i32) -> f32 {
     if level > 0 {
-        0.125 + level as f32 * 0.125
+        // A chance of one or more always succeeds, even at command-applied levels.
+        (0.125 + level as f32 * 0.125).min(1.0)
     } else {
         0.0
     }
 }
 
-/// `onHitEntity`: the damage and knockback a hit deals, and the target's invulnerability after
-/// it when the cannon reloads faster than 10 ticks.
-pub fn hit(t: &Type) -> (f32, f32, Option<i32>) {
-    let invulnerable = (t.reload_ticks < 10).then_some(t.reload_ticks + 10);
-    (t.damage as f32, t.knockback, invulnerable)
+/// Create compares a double to the chance inclusively. Zero is not an entitlement,
+/// even if the random draw is zero.
+pub fn recovers(chance: f32, roll: f64) -> bool {
+    chance > 0.0 && roll <= f64::from(chance)
 }
 
-/// `onHitEntity`'s `knockback(knockback * 0.6, -motion.x, -motion.z)` on a target moving at
-/// `velocity` (`LivingEntity.knockback`, knockback resistance left out): half its horizontal
-/// motion plus the push along the shot's, and a hop when it stands on the ground. None when
-/// the shot has no horizontal motion or the strength is none.
-pub fn knockback(
-    velocity: [f64; 3],
-    shot: [f64; 3],
-    knockback: f32,
-    on_ground: bool,
-) -> Option<[f64; 3]> {
-    let strength = f64::from(knockback * 0.6);
-    let l = (shot[0] * shot[0] + shot[2] * shot[2]).sqrt();
-    if strength <= 0.0 || l < 1e-4 {
-        return None;
-    }
-    // `new Vec3(-motion.x, 0, -motion.z).normalize().scale(strength)`, subtracted.
-    let push = [shot[0] / l * strength, shot[2] / l * strength];
-    let y = if on_ground {
-        (velocity[1] / 2.0 + strength).min(0.4)
-    } else {
-        velocity[1]
-    };
-    Some([velocity[0] / 2.0 + push[0], y, velocity[2] / 2.0 + push[1]])
+/// `onHitEntity`: the damage a hit deals, and the target's invulnerability afterward when
+/// the cannon reloads faster than 10 ticks.
+pub fn hit(t: &Type) -> (f32, Option<i32>) {
+    (
+        t.damage as f32,
+        (t.reload_ticks < 10).then_some(t.reload_ticks + 10),
+    )
 }
 
 /// `ShootableGadgetItemMethods.applyCooldown`: a cannon in the other hand too shortens it.
@@ -350,20 +334,18 @@ mod tests {
         // hit with Create's 0.3.
         let chicken = (7, [[0.3, 0.0, 4.8], [0.7, 0.7, 5.2]]);
         let (from, to) = ([0.05, 0.3, 3.0], [0.05, 0.3, 5.5]);
-        assert_eq!(entity_hit(from, to, &[chicken], 0.0), None);
-        let (id, at) = entity_hit(from, to, &[chicken], HIT_MARGIN).unwrap();
+        assert_eq!(entity_hit(from, to, [chicken], 0.0), None);
+        let (id, at) = entity_hit(from, to, [chicken], HIT_MARGIN).unwrap();
         assert_eq!(id, 7);
         assert!((at[2] - 4.5).abs() < 1e-9);
         // The nearer of two; one holding the start is hit at once.
         let near = (8, [[-0.2, 0.0, 3.9], [0.2, 0.7, 4.1]]);
         assert_eq!(
-            entity_hit(from, to, &[chicken, near], HIT_MARGIN)
-                .unwrap()
-                .0,
+            entity_hit(from, to, [chicken, near], HIT_MARGIN).unwrap().0,
             8
         );
         let around = (9, [[-0.5, 0.0, 2.5], [0.5, 1.0, 3.5]]);
-        assert_eq!(entity_hit(from, to, &[around], 0.0), Some((9, from)));
+        assert_eq!(entity_hit(from, to, [around], 0.0), Some((9, from)));
     }
 
     #[test]
@@ -391,17 +373,21 @@ mod tests {
         assert_eq!(recovery_chance(3), 0.5);
         assert_eq!(
             hit(type_for("minecraft:beetroot").unwrap()),
-            (2.0, 0.1, Some(15))
+            (2.0, Some(15))
         );
-        assert_eq!(hit(potato).2, None);
+        assert_eq!(hit(potato).1, None);
     }
 
     #[test]
-    fn hits_push_along_the_shot() {
-        // A potato (1.5) flying east at a standing target: half its motion plus 0.9 east, a hop.
-        let v = knockback([0.2, 0.0, 0.0], [2.5, -0.1, 0.0], 1.5, true).unwrap();
-        assert!((v[0] - 1.0).abs() < 1e-6 && (v[1] - 0.4).abs() < 1e-6 && v[2].abs() < 1e-9);
-        assert!(knockback([0.0; 3], [0.0, -1.0, 0.0], 1.5, true).is_none());
+    fn recovery_is_inclusive_only_for_an_eligible_round() {
+        assert!(!recovers(0.0, 0.0));
+        assert!(recovers(0.5, 0.5));
+        assert!(!recovers(0.5, 0.5_f64.next_up()));
+        assert_eq!(recovery_chance(i32::MAX), 1.0);
+    }
+
+    #[test]
+    fn two_cannons_shorten_reload() {
         let berry = type_for("minecraft:sweet_berries").unwrap();
         assert_eq!((cooldown(berry, false), cooldown(berry, true)), (10, 6));
     }

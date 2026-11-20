@@ -1,139 +1,149 @@
 --- a/create/src/glue/items/potato.rs
 +++ b/create/src/glue/items/potato.rs
-@@ -293,6 +293,18 @@
- }
+@@ -301,6 +301,24 @@
 
  struct Projectile;
-+static DRAWN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-+static PREV_CLIENT: std::sync::Mutex<Option<(u32, [f64; 3])>> = std::sync::Mutex::new(None);
+
++thread_local! {
++    static TEST_AGES: RefCell<HashMap<u32, u32>> = RefCell::new(HashMap::new());
++    static DRAWN: Cell<Option<u32>> = const { Cell::new(None) };
++    static LAST_DRAWN_AT: Cell<Option<[f64; 3]>> = const { Cell::new(None) };
++}
++
 +pub(crate) fn flight_probe(host: &dyn ClientHost) {
-+    let id = DRAWN.load(std::sync::atomic::Ordering::Relaxed);
-+    if let Some(p) = host.entity(id).and_then(|e| e.position(host)) {
-+        let mut prev = PREV_CLIENT.lock().unwrap();
-+        if Some((id, p)) != *prev {
-+            eprintln!("[flight] client {id} {p:?}");
-+            *prev = Some((id, p));
-+        }
++    if let Some(at) = DRAWN.get().and_then(|id| host.entity(id)).and_then(|e| e.position(host))
++        && LAST_DRAWN_AT.replace(Some(at)) != Some(at)
++    {
++        eprintln!("[flight] client position {at:?}");
 +    }
 +}
-
++
++pub(crate) fn ammo_probe(host: &mut dyn ServerHost, id: u32) -> Option<&'static str> {
++    Some(AMMO.get_existing(host, Holder::Entity(id)).ok()?.flatten()?.kind.id)
++}
++
  #[mod_api::sunrise_part]
  impl EntityPart for Projectile {
-@@ -326,6 +338,9 @@
-         else {
+     fn general_entity_tick(
+@@ -330,6 +348,13 @@
              return Ok(());
          };
-+        if DRAWN.swap(entity.id, std::sync::atomic::Ordering::Relaxed) != entity.id {
-+            eprintln!("[flight] renderer id {} ammo {}", entity.id, ammo.kind.id);
-+        }
          let [yaw, pitch] = CAMERA.get();
-         draw.rotate_about([0.0, 1.0, 0.0], -yaw, [0.0; 3]);
-         draw.rotate_about([1.0, 0.0, 0.0], pitch, [0.0; 3]);
-@@ -478,6 +493,7 @@
-     let side = potato::barrel(eye, yaw, pitch, right_side, [-0.05, 0.0, 0.0]);
-     let correction = [side[0] - eye[0], side[1] - eye[1], side[2] - eye[2]];
-     let motion = potato::motion(look, correction, t);
-+    eprintln!("[flight] fire {}", t.id);
-     let Some(mut lv) = ServerLevel::new(host, &dimension) else {
-         return false;
-     };
-@@ -522,6 +538,7 @@
-                     ..Flight::default()
-                 },
-             )?;
-+            eprintln!("[flight] spawned {} {:?}", e.id(), e.uuid(host));
-             shots.push(e);
-         }
-         Ok::<_, AttachmentError>(shots)
-@@ -564,6 +581,7 @@
-                     .set_inventory_slot(lv.host, slot, stack.shrink(1))
-                     .is_ok(),
-             });
-+        eprintln!("[flight] paid {paid}");
-         if !paid {
-             for shot in shots {
-                 shot.remove(lv.host, mod_api::RemovalReason::Discarded);
-@@ -640,6 +658,17 @@
++        if std::env::var("POTATO_TEST").as_deref() == Ok("flight") {
++            DRAWN.set(Some(entity.id));
++            thread_local! { static LAST_POSE: Cell<Option<[f32; 2]>> = const { Cell::new(None) }; }
++            if LAST_POSE.replace(Some([yaw, pitch])) != Some([yaw, pitch]) {
++                eprintln!("[flight] drawing {} as {} yaw={yaw} pitch={pitch}", entity.id, ammo.kind.id);
++            }
++        }
+         draw.rotate_about([0.0, 1.0, 0.0], 180.0 - yaw, [0.0; 3]);
+         draw.rotate_about([1.0, 0.0, 0.0], -pitch, [0.0; 3]);
+         draw.item(&ammo.stack, ItemDisplayContext::Ground, None, 0);
+@@ -671,6 +696,17 @@
+     let (Some(from), Some(velocity)) = (e.position(host), e.velocity(host)) else {
          return;
      };
-     flight.age = flight.age.wrapping_add(1);
-+    if flight.age <= 50 {
-+        let uuid = e.uuid(&mut *lv.host);
-+        let owner = e.owner(&*lv.host).and_then(|owner| owner.uuid(lv.host));
-+        eprintln!(
-+            "[flight] server {} {:?} from={from:?} velocity={velocity:?} owner={owner:?} age {} stuck {:?}",
-+            e.id(),
-+            uuid,
-+            flight.age,
-+            flight.stuck
-+        );
++    let age = TEST_AGES.with_borrow_mut(|ages| {
++        let age = ages.entry(e.id()).or_default();
++        *age += 1;
++        *age
++    });
++    if age <= 90 {
++        let uuid = e.uuid(host).unwrap_or_default();
++        let owner = e.owner(host).and_then(|owner| owner.uuid(host)).unwrap_or_default();
++        let stuck = STUCK.get_existing(host, holder).ok().flatten().is_some_and(|s| s.lock().unwrap().is_some());
++        eprintln!("[flight] tick {} {uuid} age={age} from={from:?} velocity={velocity:?} owner={owner} stuck={stuck} recovery={}", e.id(), flight.recovery);
 +    }
-     let mut shot = Shot {
-         stack: ammo.stack,
-         kind: ammo.kind,
-@@ -677,11 +706,23 @@
+     if let Ok(Some(stuck)) = STUCK.get_existing(host, holder) {
+         let follow = *stuck.lock().unwrap_or_else(|err| err.into_inner());
+         if let Some(mut follow) = follow {
+@@ -719,6 +755,7 @@
              return;
-         };
-         if let Some((target, at)) = ahead(lv, e, from, block.location, &mut shot) {
-+            eprintln!(
-+                "[flight] hit entity {} target {} age {} at {at:?}",
-+                e.id(),
-+                target.id(),
-+                shot.flight.age
-+            );
-             if !hit_entity(lv, e, target, at, &mut shot) {
-                 e.remove(lv.host, mod_api::RemovalReason::Discarded);
-                 return;
+         }
+         if let Some(hit) = candidate {
++            eprintln!("[flight] hit entity {} age={age}", e.id());
+             match hit_entity(host, level, e, hit, owner, &ammo, flight) {
+                 Impact::Gone => {
+                     e.remove(host, mod_api::RemovalReason::Discarded);
+@@ -734,6 +771,7 @@
+                 Impact::Continue => {}
              }
          } else if !block.miss {
-+            eprintln!(
-+                "[flight] hit block {} age {} at {:?}",
-+                e.id(),
-+                shot.flight.age,
-+                block.location
-+            );
-             pop(lv, &shot, block.location);
-             if !block_hit(lv, &shot, block) {
-                 leave_item(lv, e, &shot);
-@@ -1168,3 +1209,8 @@
-         assert_eq!(action_arg(potato::fallback(), "set_on_fire"), None);
++            eprintln!("[flight] hit block {} age={age}", e.id());
+             pop(host, level, &ammo, block.location);
+             if !block_hit(host, level, &ammo, block) {
+                 leave_item(host, level, e, &ammo, flight);
+@@ -741,6 +779,8 @@
+             e.remove(host, mod_api::RemovalReason::Discarded);
+             return;
+         }
++    } else {
++        eprintln!("[flight] unanswered clip {} age={age} from={from:?} to={to:?}", e.id());
      }
- }
-+
-+pub(crate) fn ammo_probe(host: &mut dyn ServerHost, id: u32) -> bool {
-+    AMMO.get_existing(host, Holder::Entity(id))
-+        .is_ok_and(|ammo| ammo.flatten().is_some())
-+}
+     // An unanswered clip isn't evidence of either kind of hit. Keep flying, including
+     // above the build ceiling; don't publish any impact on an unanswered segment.
 --- a/create/src/lib.rs
 +++ b/create/src/lib.rs
 @@ -214,6 +214,7 @@
      }
 
      fn client_tick_post(&self, host: &mut dyn ClientHost, _event: &mut ClientTickPostEvent) {
-+        glue::items::potato::flight_probe(&*host);
++        glue::items::potato::flight_probe(host);
          for s in SUBSYSTEMS {
              s.client_tick(host);
          }
-@@ -377,5 +378,22 @@
+@@ -377,7 +378,45 @@
          host: &mut dyn ServerHost,
          event: &mut EntityJoinLevelEvent<'_>,
      ) -> Flow {
 +        if event.kind == "create:potato_projectile" {
-+            eprintln!(
-+                "[flight] join {} has ammo {}",
-+                event.entity,
-+                glue::items::potato::ammo_probe(host, event.entity)
-+            );
-+            if !event.loaded_from_disk && std::env::var_os("POTATO_TEST_REFUSAL").is_some() {
-+                eprintln!("[potato check] join refused");
-+                return Flow::Cancel;
-+            }
-+            if !event.loaded_from_disk && std::env::var_os("POTATO_TEST_SWAP").is_some() {
-+                let players = host.players().server_players();
-+                assert_eq!(players.len(), 1);
-+                assert!(players[0].set_selected_slot(host, 2));
-+                eprintln!("[potato check] selected slot changed");
++            use std::sync::atomic::{AtomicUsize, Ordering};
++            static JOINS: AtomicUsize = AtomicUsize::new(0);
++            let ammo = glue::items::potato::ammo_probe(host, event.entity);
++            eprintln!("[flight] join {} saved={} ammo={ammo:?}", event.entity, event.loaded_from_disk);
++            if !event.loaded_from_disk {
++                let index = JOINS.fetch_add(1, Ordering::Relaxed);
++                match std::env::var("POTATO_TEST").as_deref() {
++                    Ok("veto") | Ok("partial") if index == 0 => {
++                        eprintln!("[potato check] join refused {}", event.entity);
++                        return Flow::Cancel;
++                    }
++                    Ok("swap" | "ammo_swap") => {
++                        let players = host.players().server_players();
++                        if let [player] = players.as_slice() {
++                            assert!(player.set_selected_slot(host, 2));
++                            eprintln!("[potato check] selected slot changed at join");
++                        }
++                    }
++                    _ => {}
++                }
 +            }
 +        }
          until_cancel(|s| s.entity_join_level(host, event))
++    }
++
++    fn player_inventory_changed(&self, host: &mut dyn ServerHost, event: &mut mod_api::PlayerInventoryChangedEvent<'_>) {
++        if std::env::var("POTATO_TEST").as_deref() == Ok("pay_switch")
++            && let Some(Some(stack)) = event.stacks.get(1)
++            && stack.count() == 9
++            && stack.item().id(host) == "minecraft:potato"
++            && let Some(player) = host.player(event.player)
++            && player.selected_slot(host) == Some(0)
++        {
++            assert_eq!(glue::items::custom(event.stacks[0].as_ref().unwrap()).get(&"create:shaper_swap".into()), Some(&mod_api::Tag::Byte(1)));
++            assert_eq!(glue::items::custom(event.stacks[38].as_ref().unwrap()).get(&"create:backtank_air".into()), Some(&mod_api::Tag::Int(26)));
++            assert!(player.set_selected_slot(host, 2));
++            eprintln!("[potato check] selected slot changed on ammo debit");
++        }
+     }
+
+     fn key_mapping_pre(
+@@ -405,5 +444,8 @@
+         level: &mut dyn mod_api::HitHost,
+         event: &mut mod_api::LivingIncomingDamageEvent<'_>,
+     ) -> Flow {
++        if event.source.damage_type == "create:potato_cannon" {
++            eprintln!("[flight] damage source direct={} causing={}", event.source.direct, event.source.causing);
++        }
+         until_cancel(|s| s.living_incoming_damage(level, event))
      }

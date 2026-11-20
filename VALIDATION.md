@@ -226,9 +226,9 @@ none reproduced.
 
 ## Potato projectile on `9425651`
 
-`tools/check-potato-projectile.py` ran with a native package staged from the signed SDK, the pinned jar, and a new world. The first shot took a pig from 10 to 5 health, consumed one inventory potato and wore the cannon by one point. A shallow shot planted one potato crop. A cake from the off hand took a pig to 2 health, consumed the cake and left the potatoes alone.
+`tools/check-potato-projectile.py` passed with the stock native package, the signed SDK, and the verified Create jar. A potato took a pig from 10 to 5 health and consumed one round; with no backtank, the cannon's existing wear stayed unchanged (see `API_GAPS.md`). A shallow shot planted one crop. An offhand cake took a pig to 2 health and used only the cake.
 
-The disposable fixture rejects a join, switches to an iron pickaxe from a join callback, and switches between identical main-hand ammo stacks while an off-hand cannon fires. None spends ammo, wears either item, or hits the target. The first position and velocity after reopen equal one flight step from the final pre-save sample, with identical projectile and owner UUIDs. The client renderer reads the synced ammunition. A stuck cake follows its target exactly one block sideways. All three sweet-berry projectiles hit the same wall on their first step and spend one berry and one durability point in total.
+The disposable fixture checks ten cases. The join callback sees initialized ammo. A join veto keeps the dual-wield turn, and changing the selected slot at join leaves both the cannon and main-hand ammo unspent. Changing it on the ammo debit leaves the pickaxe alone; that callback sees the turn marker on the original cannon and four air already taken from the backtank. A sky shot keeps flying when `clip` gives no answer. A hit from an absent shooter has the shot's direct source but no causing entity; a second shot whose shooter returns before impact has both. Flight keeps the same shot and owner UUIDs on reopen and resumes at the independently calculated next position and velocity. Two in-game screenshots from opposite oblique angles show the face of the synced potato, rather than its edge. A sticky cake drops one round into the world with the inventory full, follows its target one block sideways and hits a second pig after reopen without recovering another round. Both the full and partially vetoed sweet-berry volleys hit on their first step, spend one berry and recover at most one, on the first admitted shot.
 
 To reproduce on Linux, set `GAME`, `CTL`, `RESOURCES` and `JARS` to absolute paths for the signed Nightly client and matching control tool, a private prepared resource tree, and the verified jar directory. From the repository root:
 
@@ -239,7 +239,7 @@ xvfb-run -a python3 tools/check-potato-projectile.py --ctl "$CTL" \
   --jars "$JARS" --scratch target/potato-smoke
 ```
 
-In a **disposable checkout**, apply `git apply tools/fixtures/potato-projectile.patch`, repeat the staging command with that checkout, and append `--fixture` to the test. Do not ship the instrumented build. Client prediction and Create's ammo-specific render poses are not implemented.
+In a **disposable checkout**, apply `git apply tools/fixtures/potato-projectile.patch`, repeat the staging command with that checkout, and append `--fixture` to the test (or `--fixture --case flight` for the two billboard screenshots). Do not ship the instrumented build or publish the screenshots. Dedicated multiplayer, a free camera and flight prediction were not checked.
 
 ## In-game smoke test on `9425651` (main `684e89b`)
 

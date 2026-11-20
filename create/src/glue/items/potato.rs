@@ -4,41 +4,26 @@
 //! split shots fanned round the aim, with the type's reload as the item's cooldown, the
 //! cannon's durability or a backtank's air paid, and `FWOOMP`. A saved `create:potato_projectile`
 //! owns its ammunition and flight state. Its tick sweeps for blocks and entities before moving,
-//! with Create's gravity, drag and hit margin. Hits apply damage from the shot and its owner,
-//! knockback, sticking, the ammo's actions, its recovery or leftover, and the sound and crumbs.
-//! A golden apple cures a weakened
-//! zombie villager (`CureZombieVillager`, through its saved `ConversionTime` as `mobInteract`'s
-//! `startConverting` sets it).
-//!
-//! Left out, for want of API:
-//! - Prediction and Create's per-ammunition pose. The client draws the synced stack, facing
-//!   the camera, at the tracked position.
-//! - The cannon's recoil in the hand (`PotatoCannonRenderHandler`: a special item model is
-//!   asked once per stack, `API_GAPS.md`) and the `potato_cannon_collide` advancement (shots of two types meeting), not wired. A monster killed or another player hit gives `potato_cannon`.
-//!
-//! A powered wither (at half health or less) takes no hit, knockback is lessened by the
-//! target's resistance, the barrel is on the side of the hand that holds the cannon (the
-//! player's main arm, from their client's information), two cannons take turns
-//! (`SHAPER_SWAP`), and a shot throws two crumbs of its ammunition and two puffs of air
-//! (`create:air`) from the barrel. Create's air-flow trail (`getTrailParticle`) spawns with no
-//! motion and so removes itself at once: nothing to draw.
+//! with Create's gravity, drag and hit margin. Hits apply damage, sticking, ammo actions,
+//! recovery or leftovers, and sound and crumbs. See `API_GAPS.md` for missing native projectile
+//! movement, impact, rendering, and damage operations.
 
-use super::super::server::ServerLevel;
+use super::super::equipment;
 use super::super::subsystem::Subsystem;
-use super::{creative, custom, held, set_custom, set_held};
+use super::{creative, custom, held, set_custom};
 use create_engine::potato::{self, Type};
 use mod_api::{
     ActiveEffect, AttachmentCodec, AttachmentError, AttachmentType, BlockEntityDrawContext,
     BlockFace, ClientHost, ClipHit, Compound, EntityPart, EntityRef, EntityRenderState,
-    EntityRenderer, EntitySpawn, EquipmentSlot, GeneralEntityCategory, GeneralEntityTickEvent,
-    GeneralSavePolicy, Hand, Holder, Host, HostSide, HostTransaction, Identifier,
-    InteractionResult, ItemDisplayContext, ItemKey, ItemPart, ItemStack, ParticleKey,
+    EntityRenderer, EntitySpawn, GeneralEntityCategory, GeneralEntityTickEvent, GeneralSavePolicy,
+    Hand, Holder, Host, HostSide, HostTransaction, Identifier, InteractionResult,
+    ItemDisplayContext, ItemKey, ItemPart, ItemPlace, ItemStack, LevelRef, ParticleKey,
     ParticleOptions, PlayerRef, Registrar, RegistrationContext, ServerHost, SoundSource, SpawnBody,
     Tag, Text, TooltipEvent, UseItemEvent,
 };
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, OnceLock};
 
 const CANNON: &str = "create:potato_cannon";
 const SHOT: &str = "create:potato_projectile";
@@ -47,15 +32,15 @@ const MAX_USES: i32 = potato::MAX_SHOTS;
 
 /// Load-resolved ammo keys for decoding the saved stack in the renderer, which has no Host.
 static AMMO_KEYS: OnceLock<HashMap<&'static str, ItemKey>> = OnceLock::new();
+static PICKABLE_TYPES: OnceLock<HashSet<mod_api::EntityTypeKey>> = OnceLock::new();
 
-#[derive(Clone)]
 struct Ammo {
     saved: Compound,
     stack: ItemStack,
     kind: &'static Type,
 }
 
-static AMMO: AttachmentType<Option<Ammo>> = AttachmentType {
+static AMMO: AttachmentType<Option<Arc<Ammo>>> = AttachmentType {
     namespace: "create",
     name: "potato_ammo",
     default: || None,
@@ -65,6 +50,12 @@ static AMMO: AttachmentType<Option<Ammo>> = AttachmentType {
             let Some(Tag::String(id)) = saved.get(&"id".into()) else {
                 return Err(AttachmentError::Decode);
             };
+            if !matches!(
+                saved.get(&"count".into()),
+                None | Some(Tag::Byte(1) | Tag::Short(1) | Tag::Int(1) | Tag::Long(1))
+            ) {
+                return Err(AttachmentError::Decode);
+            }
             let id = id.to_string_lossy();
             let item = AMMO_KEYS
                 .get()
@@ -79,25 +70,41 @@ static AMMO: AttachmentType<Option<Ammo>> = AttachmentType {
                 None => {}
                 _ => return Err(AttachmentError::Decode),
             }
-            Ok(Some(Ammo {
+            Ok(Some(Arc::new(Ammo {
                 saved: saved.clone(),
                 stack,
                 kind,
-            }))
+            })))
         },
     }),
     copy_on_death: false,
     sync: true,
 };
 
-#[derive(Clone, Default)]
+#[derive(Clone, Copy, Default)]
 struct Flight {
+    // Zero means ineligible or spent. Save the change before spawning any recovery drop.
     recovery: f32,
     left_owner: bool,
-    age: i32,
-    // Java saves neither the stuck target nor the shot's tick count.
-    stuck: Option<(EntityRef, [f64; 3], f64)>,
 }
+
+#[derive(Clone, Copy)]
+struct Stuck {
+    target: EntityRef,
+    offset: [f64; 3],
+    fall: f64,
+}
+
+// The target and follow offsets are transient in Create as well. Read and update them in
+// place rather than re-encoding the saved flight every tick.
+static STUCK: AttachmentType<Arc<Mutex<Option<Stuck>>>> = AttachmentType {
+    namespace: "create",
+    name: "potato_stuck",
+    default: Default::default,
+    codec: None,
+    copy_on_death: false,
+    sync: false,
+};
 
 static FLIGHT: AttachmentType<Flight> = AttachmentType {
     namespace: "create",
@@ -117,10 +124,13 @@ static FLIGHT: AttachmentType<Flight> = AttachmentType {
             ) else {
                 return Err(AttachmentError::Decode);
             };
+            let recovery = f32::from_bits(*recovery);
+            if !(0.0..=1.0).contains(&recovery) || !matches!(left_owner, 0 | 1) {
+                return Err(AttachmentError::Decode);
+            }
             Ok(Flight {
-                recovery: f32::from_bits(*recovery),
-                left_owner: *left_owner != 0,
-                ..Flight::default()
+                recovery,
+                left_owner: *left_owner == 1,
             })
         },
     }),
@@ -133,14 +143,6 @@ static AIR_PARTICLE: OnceLock<ParticleKey> = OnceLock::new();
 /// `AllDataComponents.SHAPER_SWAP`: the main hand's cannon lets the off hand's fire next.
 const SWAP: &str = "create:shaper_swap";
 
-struct Shot {
-    kind: &'static Type,
-    stack: ItemStack,
-    owner: Option<EntityRef>,
-    motion: [f64; 3],
-    flight: Flight,
-}
-
 thread_local! {
     static CAMERA: Cell<[f32; 2]> = const { Cell::new([0.0; 2]) };
     /// The players whose main arm is the left (`Player.getMainArm`, from their client's
@@ -149,36 +151,12 @@ thread_local! {
         RefCell::new(std::collections::HashSet::new());
 }
 
-/// `ShootableGadgetItemMethods.shouldSwap`: with a cannon in each hand they take turns; true
-/// when this hand's cannon passes the shot to the other.
-fn should_swap(host: &mut dyn ServerHost, player: PlayerRef, hand: Hand) -> bool {
-    let main = hand == Hand::Main;
-    let other = if main { Hand::Off } else { Hand::Main };
-    let Some(mut stack) = held(&*host, player, hand) else {
-        return false;
-    };
-    let gun_in_other_hand =
-        held(&*host, player, other).is_some_and(|s| s.item().id(&*host) == CANNON);
-    let swap = matches!(custom(&stack).get(&SWAP.into()), Some(Tag::Byte(b)) if *b != 0);
-    if main && swap && gun_in_other_hand {
-        return true;
-    }
-    if main && !swap && gun_in_other_hand {
-        set_custom(&mut stack, &[(SWAP, Some(Tag::Byte(1)))]);
-        set_held(host, player, hand, Some(stack));
-    } else if !main && swap {
-        set_custom(&mut stack, &[(SWAP, None)]);
-        set_held(host, player, hand, Some(stack));
-    }
-    if !main
-        && gun_in_other_hand
-        && let Some(mut m) = held(&*host, player, Hand::Main)
-        && custom(&m).contains_key(&SWAP.into())
-    {
-        set_custom(&mut m, &[(SWAP, None)]);
-        set_held(host, player, Hand::Main, Some(m));
-    }
-    false
+/// `Inventory.EQUIPMENT_SLOT_MAPPING`: this is the physical offhand slot in the
+/// player's inventory view, not `ItemPlace`'s slot number.
+const OFFHAND_SLOT: u32 = 40;
+
+fn marked_for_swap(stack: &ItemStack) -> bool {
+    matches!(custom(stack).get(&SWAP.into()), Some(Tag::Byte(b)) if *b != 0)
 }
 
 /// The air particle (`AirParticle` with `AirParticleData(1, 1/4)`): from where it spawns to its
@@ -240,9 +218,38 @@ impl Subsystem for PotatoCannon {
                 .map(|id| (id, r.item_key(id)))
                 .collect(),
         );
+        // Nonliving, non-minecart targets of the sweep. Resolve names at registration,
+        // not for every nearby entity on every flying tick. General shots aren't damageable.
+        let _ = PICKABLE_TYPES.set(
+            [
+                "acacia", "birch", "cherry", "dark_oak", "jungle", "mangrove", "oak", "pale_oak",
+                "spruce",
+            ]
+            .into_iter()
+            .flat_map(|wood| {
+                [
+                    format!("minecraft:{wood}_boat"),
+                    format!("minecraft:{wood}_chest_boat"),
+                ]
+            })
+            .chain(
+                [
+                    "bamboo_raft",
+                    "bamboo_chest_raft",
+                    "end_crystal",
+                    "item_frame",
+                    "glow_item_frame",
+                    "painting",
+                ]
+                .map(|id| format!("minecraft:{id}")),
+            )
+            .map(|id| r.entity_type_key(&id))
+            .collect(),
+        );
         for (id, sync) in [
             ("create:potato_ammo", true),
             ("create:potato_flight", false),
+            ("create:potato_stuck", false),
         ] {
             if let Err(e) = r.register_attachment_type(id, sync) {
                 crate::create_log!("[create] declaring potato projectile data: {e:?}");
@@ -302,13 +309,9 @@ impl EntityPart for Projectile {
         event: &mut GeneralEntityTickEvent<'_>,
     ) {
         let e = event.entity;
-        let Some(dimension) = e.level(&*host).and_then(|l| l.dimension().id(&*host)) else {
-            return;
-        };
-        let Some(mut lv) = ServerLevel::new(host, &dimension) else {
-            return;
-        };
-        fly(&mut lv, e);
+        if let Some(level) = e.level(host) {
+            fly(host, level, e);
+        }
     }
 }
 
@@ -327,8 +330,8 @@ impl EntityRenderer for Projectile {
             return Ok(());
         };
         let [yaw, pitch] = CAMERA.get();
-        draw.rotate_about([0.0, 1.0, 0.0], -yaw, [0.0; 3]);
-        draw.rotate_about([1.0, 0.0, 0.0], pitch, [0.0; 3]);
+        draw.rotate_about([0.0, 1.0, 0.0], 180.0 - yaw, [0.0; 3]);
+        draw.rotate_about([1.0, 0.0, 0.0], -pitch, [0.0; 3]);
         draw.item(&ammo.stack, ItemDisplayContext::Ground, None, 0);
         Ok(())
     }
@@ -344,7 +347,13 @@ impl ItemPart for CannonPart {
             HostSide::Server(host) => fire(host, event).then_some(InteractionResult::Success),
             HostSide::Client(host) => {
                 let player = host.player(event.player)?;
-                ammo(&*host, player).map(|_| InteractionResult::Success)
+                if event.hand == Hand::Main
+                    && marked_for_swap(event.stack)
+                    && held(host, player, Hand::Off).is_some_and(|s| s.item() == event.stack.item())
+                {
+                    return None;
+                }
+                ammo(host, player).map(|_| InteractionResult::Success)
             }
         }
     }
@@ -429,10 +438,8 @@ fn one(stack: &ItemStack) -> ItemStack {
 }
 
 /// `Create.RANDOM.nextFloat()`, from the level's random.
-fn random(lv: &mut ServerLevel<'_>) -> f32 {
-    lv.level
-        .with_random(&mut *lv.host, |r| r.next_float())
-        .unwrap_or(0.5)
+fn random(host: &mut dyn ServerHost, level: LevelRef) -> f32 {
+    level.with_random(host, |r| r.next_float()).unwrap_or(0.5)
 }
 
 /// The cannon's `potato_recovery` enchantment level.
@@ -453,139 +460,168 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
     let Some(player) = host.player(event.player) else {
         return false;
     };
-    if should_swap(host, player, event.hand) {
+    let main = event.hand == Hand::Main;
+    let other_hand = if main { Hand::Off } else { Hand::Main };
+    let cannon = event.stack;
+    let other_cannon = held(host, player, other_hand).filter(|stack| stack.same_item(cannon));
+    if main && other_cannon.is_some() && marked_for_swap(cannon) {
         return false;
     }
-    let Some((source, ammo_stack, t)) = ammo(&*host, player) else {
+    let Some(selected_slot) = player.selected_slot(host).map(|slot| slot as u32) else {
         return false;
     };
+    let cannon_slot = if main { selected_slot } else { OFFHAND_SLOT };
+    let Some((source, ammo_stack, t)) = ammo(host, player) else {
+        return false;
+    };
+    let ammo_slot = match source {
+        Source::Hand(Hand::Main) => selected_slot,
+        Source::Hand(Hand::Off) => OFFHAND_SLOT,
+        Source::Slot(slot) => slot,
+    };
     let entity = player.entity();
-    let (Some(living), Some(eye), Some([yaw, pitch]), Some(look)) = (
-        host.living(entity),
+    let (Some(eye), Some([yaw, pitch]), Some(look)) = (
         entity.eye_position(&*host),
         entity.rotation(&*host),
         entity.view_vector(&*host),
     ) else {
         return false;
     };
-    let Some(dimension) = player.dimension(&*host).map(|d| d.to_string()) else {
+    let Some(level) = entity.level(host) else {
         return false;
     };
-    let main = event.hand == Hand::Main;
     // `mainHand == (getMainArm() == RIGHT)`: the barrel on the side of the hand holding it.
     let right_side = main != LEFT_HANDED.with_borrow(|l| l.contains(&player.uuid()));
     let barrel = potato::barrel(eye, yaw, pitch, right_side, [0.75, -0.15, 1.5]);
     let side = potato::barrel(eye, yaw, pitch, right_side, [-0.05, 0.0, 0.0]);
     let correction = [side[0] - eye[0], side[1] - eye[1], side[2] - eye[2]];
     let motion = potato::motion(look, correction, t);
-    let Some(mut lv) = ServerLevel::new(host, &dimension) else {
-        return false;
-    };
-    let pitch_shift = t.sound_pitch + (random(&mut lv) - 0.5) / 4.0;
-    let base = 360.0 * random(&mut lv);
+    let pitch_shift = t.sound_pitch + (random(host, level) - 0.5) / 4.0;
+    let base = 360.0 * random(host, level);
     let imperfections: Vec<f32> = (0..t.split)
-        .map(|_| 40.0 * (random(&mut lv) - 0.5))
+        .map(|_| 40.0 * (random(host, level) - 0.5))
         .collect();
     let motions = potato::spray(motion, t, base, &imperfections);
-    let Some(cannon) = held(&*lv.host, player, event.hand) else {
-        return false;
-    };
-    let selected_slot = player.selected_slot(&*lv.host);
-    let recovery = potato::recovery_chance(recovery_level(&cannon));
+    let recovery = potato::recovery_chance(recovery_level(cannon));
     let shot_stack = one(&ammo_stack);
-    let Some(item) = shot_stack.to_nbt(&*lv.host) else {
+    let Some(item) = shot_stack.to_nbt(host) else {
         return false;
     };
-    let ammo = Some(Ammo {
+    let ammo = Some(Arc::new(Ammo {
         saved: item,
         stack: shot_stack.clone(),
         kind: t,
-    });
+    }));
     // The use callback is outside a transaction. Stage initialized shots together so the
     // join hook and first tracking snapshot see their ammo; check admission after commit.
-    let Ok(mut shots) = lv.host.transaction(|host, _| {
+    let Ok(mut shots) = host.transaction(|host, _| {
         let mut shots = Vec::with_capacity(motions.len());
-        for (i, motion) in motions.into_iter().enumerate() {
+        for motion in motions {
             let mut spawn = EntitySpawn::new(SpawnBody::General);
             spawn.owner = Some(entity);
             spawn.velocity = motion;
-            let Some(e) = lv.level.spawn_entity(host, SHOT, barrel, &spawn) else {
+            let Some(e) = level.spawn_entity(host, SHOT, barrel, &spawn) else {
                 continue;
             };
             let holder = Holder::Entity(e.id());
             AMMO.set(host, holder, ammo.clone())?;
-            FLIGHT.set(
-                host,
-                holder,
-                Flight {
-                    recovery: if i == 0 { recovery } else { 0.0 },
-                    ..Flight::default()
-                },
-            )?;
+            FLIGHT.set(host, holder, Flight::default())?;
             shots.push(e);
         }
         Ok::<_, AttachmentError>(shots)
     }) else {
         return false;
     };
-    shots.retain(|e| e.added_to_level(&*lv.host));
-    if shots.is_empty() {
+    shots.retain(|e| e.added_to_level(host));
+    let Some(first) = shots.first() else {
         return false;
-    }
-    // A join listener may change either input. Do not charge a different stack or hotbar slot.
-    if ((main || source == Source::Hand(Hand::Main))
-        && player.selected_slot(&*lv.host) != selected_slot)
-        || !held(&*lv.host, player, event.hand).is_some_and(|stack| {
-            stack.is_stackable_with(&cannon) && stack.count() == cannon.count()
-        })
+    };
+    if recovery > 0.0
+        && FLIGHT
+            .set(
+                host,
+                Holder::Entity(first.id()),
+                Flight {
+                    recovery,
+                    left_owner: false,
+                },
+            )
+            .is_err()
     {
         for shot in shots {
-            shot.remove(lv.host, mod_api::RemovalReason::Discarded);
+            shot.remove(host, mod_api::RemovalReason::Discarded);
         }
         return false;
     }
-    if !creative(&*lv.host, player) {
-        let current = match source {
-            Source::Hand(hand) => held(&*lv.host, player, hand),
-            Source::Slot(slot) => player.inventory_slots(&*lv.host).and_then(|slots| {
-                slots
-                    .into_iter()
-                    .find_map(|(i, stack)| (i == slot).then_some(stack))
-            }),
-        };
-        let paid = current
-            .filter(|stack| {
-                stack.count() == ammo_stack.count() && stack.is_stackable_with(&ammo_stack)
-            })
-            .is_some_and(|stack| match source {
-                Source::Hand(hand) => {
-                    living.set_hand_item(lv.host, hand, stack.shrink(1)) == Ok(true)
-                }
-                Source::Slot(slot) => player
-                    .set_inventory_slot(lv.host, slot, stack.shrink(1))
-                    .is_ok(),
-            });
-        if !paid {
-            for shot in shots {
-                shot.remove(lv.host, mod_api::RemovalReason::Discarded);
-            }
-            return false;
+    // Join listeners can change the held items. Check the captured stacks and selection
+    // before debiting, then use only physical slots, even if an inventory listener changes
+    // the selection during payment. Inventory and marker edits are journaled with tank air.
+    let payment = host.transaction(|host, tx| {
+        let slots = player.inventory_slots(host).ok_or(())?;
+        let at = |slot| slots.iter().find(|(i, _)| *i == slot).map(|(_, s)| s);
+        let other_slot = if main { OFFHAND_SLOT } else { selected_slot };
+        if ((cannon_slot == selected_slot || ammo_slot == selected_slot || other_cannon.is_some())
+            && player.selected_slot(host) != Some(selected_slot as usize))
+            || at(cannon_slot) != Some(cannon)
+            || at(ammo_slot) != Some(&ammo_stack)
+            || other_cannon
+                .as_ref()
+                .is_some_and(|other| at(other_slot) != Some(other))
+        {
+            return Err(());
         }
-    }
-    if !super::super::equipment::absorb(lv.host, player, MAX_USES) {
-        let slot = if main {
-            EquipmentSlot::MainHand
-        } else {
-            EquipmentSlot::OffHand
+        // With no worn air, the pin has no native damage operation for the captured slot.
+        // Don't apply wear to a potentially different item in the currently selected hand.
+        let warnings = equipment::debit_backtank(host, tx, player, MAX_USES)?;
+        let marker = |host: &mut dyn ServerHost, slot, expected: &ItemStack, value| {
+            let place = ItemPlace::PlayerSlot {
+                player: player.uuid(),
+                slot,
+            };
+            let mut matched = false;
+            place
+                .edit(host, tx, |stack| {
+                    if stack == expected {
+                        matched = true;
+                        set_custom(stack, &[(SWAP, value)]);
+                    }
+                })
+                .map_err(|_| ())?;
+            matched.then_some(()).ok_or(())
         };
-        let _ = living.hurt_and_break(lv.host, slot, 1);
+        if main && other_cannon.is_some() {
+            marker(host, selected_slot as i32, cannon, Some(Tag::Byte(1)))?;
+        } else if !main {
+            if custom(cannon).contains_key(&SWAP.into()) {
+                marker(host, -106, cannon, None)?;
+            }
+            if let Some(other) = other_cannon.as_ref()
+                && custom(other).contains_key(&SWAP.into())
+            {
+                marker(host, selected_slot as i32, other, None)?;
+            }
+        }
+        if !creative(host, player) {
+            // This write can notify synchronously on the pin. Make it the last journal
+            // write so that listener sees the completed payment, not just the ammo debit.
+            player
+                .set_inventory_slot(host, ammo_slot, ammo_stack.shrink(1))
+                .map_err(|_| ())?;
+        }
+        Ok(warnings)
+    });
+    let Ok(warnings) = payment else {
+        for shot in shots {
+            shot.remove(host, mod_api::RemovalReason::Discarded);
+        }
+        return false;
+    };
+    if let Some(warnings) = warnings {
+        equipment::warn_air(host, player, warnings);
     }
-    let other = if main { Hand::Off } else { Hand::Main };
-    let gun_in_other_hand =
-        held(&*lv.host, player, other).is_some_and(|s| s.item().id(&*lv.host) == CANNON);
-    let cooldown = potato::cooldown(t, gun_in_other_hand);
+    let cooldown = potato::cooldown(t, other_cannon.is_some());
     if cooldown > 0 {
-        player.set_item_cooldown(lv.host, CANNON, cooldown);
+        player.set_item_cooldown(host, CANNON, cooldown);
     }
     // `PotatoCannonPacket` (`beforeShoot`): two crumbs of the ammunition and two puffs of air
     // from the barrel along the look.
@@ -596,26 +632,22 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
         look.map(|v| v / l)
     };
     for _ in 0..2 {
-        let r: [f32; 6] = std::array::from_fn(|_| random(&mut lv));
+        let r: [f32; 6] = std::array::from_fn(|_| random(host, level));
         let off = |i: usize, radius: f64| (f64::from(r[i]) - 0.5) * 2.0 * radius;
         if let Some(key) = ITEM_PARTICLE.get() {
             let v = [0, 1, 2].map(|i| look_n[i] * 0.1 + off(i, 0.025));
             let options = mod_api::ParticleOptions::item_stack(*key, shot_stack.clone());
-            let _ = lv
-                .level
-                .send_particles(&mut *lv.host, &options, None, barrel, v, 1.0, 0);
+            let _ = level.send_particles(host, &options, None, barrel, v, 1.0, 0);
         }
         if let Some(key) = AIR_PARTICLE.get() {
             let v = [0, 1, 2].map(|i| look_n[i] * 2.0 + off(i + 3, 0.5));
             let options = mod_api::ParticleOptions::simple(*key);
-            let _ = lv
-                .level
-                .send_particles(&mut *lv.host, &options, None, barrel, v, 1.0, 0);
+            let _ = level.send_particles(host, &options, None, barrel, v, 1.0, 0);
         }
     }
     // `PotatoCannonPacket`: `FWOOMP` at the barrel for everyone.
-    lv.level.play_sound(
-        &mut *lv.host,
+    level.play_sound(
+        host,
         "create:fwoomp",
         barrel,
         SoundSource::Players,
@@ -626,159 +658,160 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
     true
 }
 
-/// `PotatoProjectileEntity.tick`: either follow a stuck target or sweep once along the
-/// flight vector, then update the row's position and saved velocity.
-fn fly(lv: &mut ServerLevel<'_>, e: EntityRef) {
+/// `PotatoProjectileEntity.tick`: follow a stuck target or sweep the flight vector.
+fn fly(host: &mut dyn ServerHost, level: LevelRef, e: EntityRef) {
     let holder = Holder::Entity(e.id());
     let (Ok(Some(Some(ammo))), Ok(Some(mut flight))) = (
-        AMMO.get_existing(&mut *lv.host, holder),
-        FLIGHT.get_existing(&mut *lv.host, holder),
+        AMMO.get_existing(host, holder),
+        FLIGHT.get_existing(host, holder),
     ) else {
-        e.remove(lv.host, mod_api::RemovalReason::Discarded);
+        e.remove(host, mod_api::RemovalReason::Discarded);
         return;
     };
-    let (Some(from), Some(velocity)) = (e.position(&*lv.host), e.velocity(&*lv.host)) else {
+    let (Some(from), Some(velocity)) = (e.position(host), e.velocity(host)) else {
         return;
     };
-    flight.age = flight.age.wrapping_add(1);
-    let mut shot = Shot {
-        stack: ammo.stack,
-        kind: ammo.kind,
-        owner: e.owner(&*lv.host),
-        motion: potato::fly(velocity, ammo.kind),
-        flight,
-    };
-    if let Some((target, mut offset, mut fall)) = shot
-        .flight
-        .stuck
-        .filter(|(target, ..)| alive(&*lv.host, *target))
-        && let Some(at) = target.position(&*lv.host)
-    {
-        if from[1] < at[1] - 0.1 {
-            pop(lv, &shot, from);
-            e.remove(lv.host, mod_api::RemovalReason::Discarded);
-            return;
-        }
-        fall += 0.007 * f64::from(shot.kind.gravity);
-        offset[1] -= fall;
-        e.teleport_to(lv.host, std::array::from_fn(|i| at[i] + offset[i]), None);
-        shot.flight.stuck = Some((target, offset, fall));
-    } else {
-        shot.flight.stuck = None;
-        let to = std::array::from_fn(|i| from[i] + shot.motion[i]);
-        let Some(block) = lv.level.clip(
-            &*lv.host,
-            from,
-            to,
-            mod_api::ClipBlock::Collider,
-            mod_api::ClipFluid::None,
-        ) else {
-            // An unanswered sweep is not a clear path. Do not strand a saved shot at its edge.
-            e.remove(lv.host, mod_api::RemovalReason::Discarded);
-            return;
-        };
-        if let Some((target, at)) = ahead(lv, e, from, block.location, &mut shot) {
-            if !hit_entity(lv, e, target, at, &mut shot) {
-                e.remove(lv.host, mod_api::RemovalReason::Discarded);
+    if let Ok(Some(stuck)) = STUCK.get_existing(host, holder) {
+        let follow = *stuck.lock().unwrap_or_else(|err| err.into_inner());
+        if let Some(mut follow) = follow {
+            if alive(host, follow.target)
+                && let Some(at) = follow.target.position(host)
+            {
+                if from[1] < at[1] - 0.1 {
+                    pop(host, level, &ammo, from);
+                    e.remove(host, mod_api::RemovalReason::Discarded);
+                    return;
+                }
+                follow.fall += 0.007 * f64::from(ammo.kind.gravity);
+                follow.offset[1] -= follow.fall;
+                let to = std::array::from_fn(|i| at[i] + follow.offset[i]);
+                // A refused follow leaves the last successful offset in place; retry next tick.
+                if e.teleport_to(host, to, None) {
+                    *stuck.lock().unwrap_or_else(|err| err.into_inner()) = Some(follow);
+                }
                 return;
             }
-        } else if !block.miss {
-            pop(lv, &shot, block.location);
-            if !block_hit(lv, &shot, block) {
-                leave_item(lv, e, &shot);
-            }
-            e.remove(lv.host, mod_api::RemovalReason::Discarded);
+            *stuck.lock().unwrap_or_else(|err| err.into_inner()) = None;
+        }
+    }
+
+    let motion = potato::fly(velocity, ammo.kind);
+    let to = std::array::from_fn(|i| from[i] + motion[i]);
+    if let Some(block) = level.clip(
+        host,
+        from,
+        to,
+        mod_api::ClipBlock::Collider,
+        mod_api::ClipFluid::None,
+    ) {
+        let owner = e.owner(host);
+        let had_left = flight.left_owner;
+        let candidate = ahead(
+            host,
+            level,
+            e,
+            [from, block.location],
+            motion,
+            owner,
+            &mut flight.left_owner,
+        );
+        if flight.left_owner != had_left && FLIGHT.set(host, holder, flight).is_err() {
             return;
         }
-        if shot.flight.stuck.is_some() {
-            e.set_velocity(lv.host, [0.0; 3]);
-        } else if e.teleport_to(lv.host, to, None) {
-            e.set_velocity(lv.host, shot.motion);
-        } else {
-            e.remove(lv.host, mod_api::RemovalReason::Discarded);
+        if let Some(hit) = candidate {
+            match hit_entity(host, level, e, hit, owner, &ammo, flight) {
+                Impact::Gone => {
+                    e.remove(host, mod_api::RemovalReason::Discarded);
+                    return;
+                }
+                Impact::Stick(follow) => {
+                    if let Ok(stuck) = STUCK.get(host, holder) {
+                        *stuck.lock().unwrap_or_else(|err| err.into_inner()) = Some(follow);
+                        e.set_velocity(host, [0.0; 3]);
+                        return;
+                    }
+                }
+                Impact::Continue => {}
+            }
+        } else if !block.miss {
+            pop(host, level, &ammo, block.location);
+            if !block_hit(host, level, &ammo, block) {
+                leave_item(host, level, e, &ammo, flight);
+            }
+            e.remove(host, mod_api::RemovalReason::Discarded);
             return;
         }
     }
-    let _ = FLIGHT.set(&mut *lv.host, holder, shot.flight);
+    // An unanswered clip isn't evidence of either kind of hit. Keep flying, including
+    // above the build ceiling; don't publish any impact on an unanswered segment.
+    let _ = e.teleport_to(host, to, None);
+    e.set_velocity(host, motion);
 }
 
 /// `AbstractHurtingProjectile.tick`'s entity hit, with the ray already clipped against blocks.
 fn ahead(
-    lv: &mut ServerLevel<'_>,
+    host: &dyn ServerHost,
+    level: LevelRef,
     e: EntityRef,
-    from: [f64; 3],
-    to: [f64; 3],
-    shot: &mut Shot,
+    [from, to]: [[f64; 3]; 2],
+    motion: [f64; 3],
+    owner: Option<EntityRef>,
+    left_owner: &mut bool,
 ) -> Option<(EntityRef, [f64; 3])> {
-    let host: &dyn Host = &*lv.host;
-    let m = shot.motion;
     // `getBoundingBox().expandTowards(motion).inflate(1.0)`: the shot's box is 0.25 a side.
     let mut lo = [from[0] - 0.125, from[1], from[2] - 0.125];
     let mut hi = [from[0] + 0.125, from[1] + 0.25, from[2] + 0.125];
     for i in 0..3 {
-        if m[i] < 0.0 {
-            lo[i] += m[i];
+        if motion[i] < 0.0 {
+            lo[i] += motion[i];
         } else {
-            hi[i] += m[i];
+            hi[i] += motion[i];
         }
         lo[i] -= 1.0;
         hi[i] += 1.0;
     }
-    let mut found = lv.level.entities_in(host, lo, hi)?;
-    found.retain(|o| {
-        *o != e && pickable(&*lv.host, *o)
-            // Ignore young shots before picking the nearest hit, not after: the split
-            // projectiles start inside one another and must not mask a real hit.
-            && !(shot.flight.age < 10
-                && o.kind(&*lv.host).is_some_and(|k| k.id(&*lv.host) == SHOT)
-                && FLIGHT.get_existing(lv.host, Holder::Entity(o.id()))
-                    .is_ok_and(|other| other.is_some_and(|flight| flight.age < 10)))
-    });
-    let host: &dyn Host = &*lv.host;
-    let owner_root = shot.owner.map(|o| o.root_vehicle(host).unwrap_or(o));
-    let same_root =
-        |o: EntityRef| owner_root.is_some_and(|r| o.root_vehicle(host).unwrap_or(o) == r);
-    if !shot.flight.left_owner {
-        shot.flight.left_owner = !found.iter().any(|o| same_root(*o));
-    }
-    let boxes: Vec<(u32, [[f64; 3]; 2])> = found
-        .iter()
-        .filter(|o| shot.flight.left_owner || !same_root(**o))
-        .filter_map(|o| Some((o.id(), o.bounding_box(host)?)))
-        .collect();
-    let (id, at) = potato::entity_hit(from, to, &boxes, potato::HIT_MARGIN)?;
-    Some((found.into_iter().find(|o| o.id() == id)?, at))
+    let owner_root = owner
+        .filter(|_| !*left_owner)
+        .map(|o| o.root_vehicle(host).unwrap_or(o));
+    let mut near_owner = false;
+    let candidates = level
+        .entities_in(host, lo, hi)?
+        .into_iter()
+        .filter_map(|o| {
+            if o == e || !pickable(host, o) {
+                return None;
+            }
+            if owner_root.is_some_and(|r| o.root_vehicle(host).unwrap_or(o) == r) {
+                near_owner = true;
+                return None;
+            }
+            Some((o, o.bounding_box(host)?))
+        });
+    let hit = potato::entity_hit(from, to, candidates, potato::HIT_MARGIN);
+    *left_owner = *left_owner || !near_owner;
+    hit
 }
 
-/// `Entity.canBeHitByProjectile`: alive and `isPickable` (living things but spectators, carts,
-/// boats, frames, paintings, end crystals and Create's other shots).
-fn pickable(host: &dyn Host, e: EntityRef) -> bool {
-    if host.living(e).is_some() {
-        return alive(host, e) && e.spectator(host) != Some(true);
+fn pickable(host: &dyn ServerHost, e: EntityRef) -> bool {
+    if let Some(living) = host.living(e) {
+        return living.alive(host) == Some(true) && e.spectator(host) != Some(true);
     }
-    let Some(kind) = e.kind(host).map(|k| k.id(host).to_string()) else {
-        return false;
-    };
-    let id = kind.trim_start_matches("minecraft:");
-    kind == SHOT
-        || id.ends_with("minecart")
-        || id.ends_with("boat")
-        || id.ends_with("raft")
-        || matches!(
-            id,
-            "item_frame" | "glow_item_frame" | "painting" | "end_crystal"
-        )
+    host.minecart(e).is_some()
+        || e.kind(host).is_some_and(|kind| {
+            PICKABLE_TYPES
+                .get()
+                .is_some_and(|kinds| kinds.contains(&kind))
+        })
 }
 
 /// `pop`: the item's crumbs and `POTATO_HIT` where it hit.
-fn pop(lv: &mut ServerLevel<'_>, shot: &Shot, at: [f64; 3]) {
+fn pop(host: &mut dyn ServerHost, level: LevelRef, ammo: &Ammo, at: [f64; 3]) {
     if let Some(key) = ITEM_PARTICLE.get() {
-        let options = ParticleOptions::item_stack(*key, shot.stack.clone());
-        lv.level
-            .send_particles(&mut *lv.host, &options, None, at, [0.0; 3], 0.25, 7);
+        let options = ParticleOptions::item_stack(*key, ammo.stack.clone());
+        level.send_particles(host, &options, None, at, [0.0; 3], 0.25, 7);
     }
-    lv.level.play_sound(
-        &mut *lv.host,
+    level.play_sound(
+        host,
         "create:potato_hit",
         at,
         SoundSource::Neutral,
@@ -789,106 +822,104 @@ fn pop(lv: &mut ServerLevel<'_>, shot: &Shot, at: [f64; 3]) {
 }
 
 /// `recoverItem` or `spawnAtLocation(type.dropStack())` where the shot is.
-fn leave_item(lv: &mut ServerLevel<'_>, projectile: EntityRef, shot: &Shot) {
-    let stack = if f64::from(random(lv)) <= f64::from(shot.flight.recovery) {
-        Some(shot.stack.clone())
+fn leave_item(
+    host: &mut dyn ServerHost,
+    level: LevelRef,
+    projectile: EntityRef,
+    ammo: &Ammo,
+    mut flight: Flight,
+) {
+    let chance = std::mem::take(&mut flight.recovery);
+    let recovered = chance > 0.0
+        && FLIGHT
+            .set(host, Holder::Entity(projectile.id()), flight)
+            .is_ok()
+        && level
+            .with_random(host, |r| r.next_double())
+            .is_some_and(|roll| potato::recovers(chance, roll));
+    let stack = if recovered {
+        Some(ammo.stack.clone())
     } else {
-        shot.kind.drop.and_then(|id| {
-            let key = lv.host.item_key(&Identifier::parse(id).ok()?)?;
+        ammo.kind.drop.and_then(|id| {
+            let key = host.item_key(&Identifier::parse(id).ok()?)?;
             ItemStack::new(key, 1)
         })
     };
     if let Some(stack) = stack {
-        let _ = projectile.spawn_at_location(lv.host, stack, 0.0);
+        let _ = projectile.spawn_at_location(host, stack, 0.0);
     }
 }
 
-/// `onHitEntity`: true when the shot flies on or sticks.
+enum Impact {
+    Gone,
+    Continue,
+    Stick(Stuck),
+}
+
 fn hit_entity(
-    lv: &mut ServerLevel<'_>,
+    host: &mut dyn ServerHost,
+    level: LevelRef,
     projectile: EntityRef,
-    target: EntityRef,
-    at: [f64; 3],
-    shot: &mut Shot,
-) -> bool {
-    if !alive(&*lv.host, target) {
-        return true;
+    (target, at): (EntityRef, [f64; 3]),
+    owner: Option<EntityRef>,
+    ammo: &Ammo,
+    flight: Flight,
+) -> Impact {
+    if !alive(host, target) {
+        return Impact::Continue;
     }
-    let kind = target.kind(&*lv.host).map(|k| k.id(&*lv.host));
-    pop(lv, shot, at);
+    let kind = target.kind(host).map(|k| k.id(host));
+    pop(host, level, ammo, at);
     // A powered wither (at half its health or less) takes nothing.
     if kind.as_deref() == Some("minecraft:wither")
-        && let Some(l) = lv.host.living(target)
-        && let (Some(h), Some(max)) = (l.health(&*lv.host), l.max_health(&*lv.host))
+        && let Some(l) = host.living(target)
+        && let (Some(h), Some(max)) = (l.health(host), l.max_health(host))
         && h <= max / 2.0
     {
-        return false;
+        return Impact::Gone;
     }
-    if let Some(ticks) = action_arg(shot.kind, "set_on_fire").and_then(|a| a.parse().ok()) {
-        target.set_remaining_fire_ticks(lv.host, ticks);
+    if let Some(ticks) = action_arg(ammo.kind, "set_on_fire").and_then(|a| a.parse().ok()) {
+        target.set_remaining_fire_ticks(host, ticks);
     }
-    let (damage, knockback, invulnerable) = potato::hit(shot.kind);
-    if target.hurt(lv.host, CANNON, damage, Some(projectile), shot.owner) != Some(true) {
-        return false;
+    let (damage, invulnerable) = potato::hit(ammo.kind);
+    if target.hurt(host, CANNON, damage, Some(projectile), owner) != Some(true) {
+        return Impact::Gone;
     }
     if kind.as_deref() == Some("minecraft:enderman") {
-        return true;
+        return Impact::Continue;
     }
-    if !entity_hit(lv, shot, target) {
-        leave_item(lv, projectile, shot);
+    if !entity_hit(host, level, ammo, target) {
+        leave_item(host, level, projectile, ammo, flight);
     }
-    if lv.host.living(target).is_none() {
-        return false;
+    if host.living(target).is_none() {
+        return Impact::Gone;
     }
     if let Some(ticks) = invulnerable {
-        target.set_invulnerable_time(lv.host, ticks);
+        target.set_invulnerable_time(host, ticks);
     }
     // `AllAdvancements.POTATO_CANNON`: a monster killed, or another player hit.
-    let owner = shot.owner.and_then(|o| {
-        lv.host
-            .players()
-            .server_players()
-            .into_iter()
-            .find(|p| p.entity() == o)
-    });
-    if let Some(owner) = owner {
-        let monster = !alive(&*lv.host, target)
-            && target.classification(&*lv.host) == Some(mod_api::MobCategory::Monster);
-        let other_player =
-            kind.as_deref() == Some("minecraft:player") && Some(target) != shot.owner;
-        if monster || other_player {
-            super::super::advancements::award(lv.host, owner, "potato_cannon");
-        }
-    }
-    let velocity = target.velocity(&*lv.host).unwrap_or([0.0; 3]);
-    let ground = target.on_ground(&*lv.host) == Some(true);
-    // `LivingEntity.knockback`: less the target's resistance.
-    let resistance = lv
-        .host
-        .living(target)
-        .and_then(|l| l.attribute_value(&*lv.host, "minecraft:knockback_resistance"))
-        .unwrap_or(0.0) as f32;
-    if let Some(v) = potato::knockback(
-        velocity,
-        shot.motion,
-        knockback * (1.0 - resistance),
-        ground,
-    ) {
-        target.set_velocity(lv.host, v);
-    }
-    if shot.kind.sticky
-        && alive(&*lv.host, target)
-        && let (Some(target_position), Some(position)) =
-            (target.position(&*lv.host), projectile.position(&*lv.host))
+    let monster =
+        !alive(host, target) && target.classification(host) == Some(mod_api::MobCategory::Monster);
+    let other_player = kind.as_deref() == Some("minecraft:player") && Some(target) != owner;
+    if (monster || other_player)
+        && let Some(owner) = owner
+            .and_then(|o| o.uuid(host))
+            .and_then(|uuid| host.player(uuid))
     {
-        shot.flight.stuck = Some((
-            target,
-            std::array::from_fn(|i| position[i] - target_position[i]),
-            0.0,
-        ));
-        return true;
+        super::super::advancements::award(host, owner, "potato_cannon");
     }
-    false
+    if ammo.kind.sticky
+        && alive(host, target)
+        && let (Some(target_position), Some(position)) =
+            (target.position(host), projectile.position(host))
+    {
+        return Impact::Stick(Stuck {
+            target,
+            offset: std::array::from_fn(|i| position[i] - target_position[i]),
+            fall: 0.0,
+        });
+    }
+    Impact::Gone
 }
 
 /// The argument of the type's action named `name` (`"set_on_fire 60"` gives `"60"`).
@@ -899,19 +930,19 @@ fn action_arg(t: &Type, name: &str) -> Option<&'static str> {
 }
 
 /// `MobEffectInstance(effect, ticks, amplifier)` on `target`.
-fn give(lv: &mut ServerLevel<'_>, target: EntityRef, effect: &str, ticks: i32, amplifier: i32) {
-    let (Some(living), Some(key)) = (lv.host.living(target), lv.host.effect_key(effect)) else {
+fn give(host: &mut dyn ServerHost, target: EntityRef, effect: &str, ticks: i32, amplifier: i32) {
+    let (Some(living), Some(key)) = (host.living(target), host.effect_key(effect)) else {
         return;
     };
     living.add_effect(
-        lv.host,
+        host,
         &ActiveEffect::new(key, ticks, amplifier, false, true, true),
     );
 }
 
 /// `onEntityHit`: true when the type took care of the item (nothing recovered or dropped).
-fn entity_hit(lv: &mut ServerLevel<'_>, shot: &Shot, target: EntityRef) -> bool {
-    let t = shot.kind;
+fn entity_hit(host: &mut dyn ServerHost, level: LevelRef, ammo: &Ammo, target: EntityRef) -> bool {
+    let t = ammo.kind;
     let Some(action) = t.action else {
         return false;
     };
@@ -926,7 +957,7 @@ fn entity_hit(lv: &mut ServerLevel<'_>, shot: &Shot, target: EntityRef) -> bool 
             ) else {
                 return false;
             };
-            give(lv, target, effect, ticks, level - 1);
+            give(host, target, effect, ticks, level - 1);
             t.id == "glow_berry"
         }
         // `FoodEffects` of the food, not recoverable.
@@ -946,43 +977,25 @@ fn entity_hit(lv: &mut ServerLevel<'_>, shot: &Shot, target: EntityRef) -> bool 
                 _ => &[],
             };
             for (effect, ticks, amplifier) in effects {
-                give(lv, target, effect, *ticks, *amplifier);
+                give(host, target, effect, *ticks, *amplifier);
             }
             true
         }
-        // `CureZombieVillager`: a weakened zombie villager is given the golden apple by Create's
-        // converter (`mobInteract`: `startConverting(converter, nextInt(2401) + 3600)`, which its
-        // saved data's `ConversionTime` runs: weakness off, strength on, the cure's sound);
-        // anything else gets a golden apple's own effects (`Foods.GOLDEN_APPLE`).
+        // The regular golden-apple effects are available. The weakened villager's live
+        // conversion is not; don't replace it by rewriting a live mob's saved data.
         Some("cure_zombie_villager") => {
-            let weak = lv.host.effect_key("minecraft:weakness").is_some_and(|k| {
-                lv.host
-                    .living(target)
-                    .is_some_and(|l| l.effect(&*lv.host, k).is_some())
+            let weak = host.effect_key("minecraft:weakness").is_some_and(|k| {
+                host.living(target)
+                    .is_some_and(|l| l.effect(host, k).is_some())
             });
-            let zombie = target.kind(&*lv.host).map(|k| k.id(&*lv.host)).as_deref()
-                == Some("minecraft:zombie_villager");
+            let zombie = target
+                .kind(host)
+                .is_some_and(|k| k.id(host) == "minecraft:zombie_villager");
             if zombie && weak {
-                let time = lv
-                    .level
-                    .with_random(&mut *lv.host, |r| r.next_int_bound(2401))
-                    .unwrap_or(1200)
-                    + 3600;
-                // `ZOMBIE_CONVERTER_NAME`'s UUID, be12d3dc-27d3-4992-8c97-66be53fd49c5.
-                let converter =
-                    [0xbe12d3dc_u32, 0x27d34992, 0x8c9766be, 0x53fd49c5].map(|v| v as i32);
-                let data = mod_api::Compound::from([
-                    ("ConversionTime".into(), mod_api::Tag::Int(time)),
-                    (
-                        "ConversionPlayer".into(),
-                        mod_api::Tag::IntArray(converter.to_vec()),
-                    ),
-                ]);
-                target.merge_nbt(&mut *lv.host, data);
-                return true;
+                return false;
             }
-            give(lv, target, "minecraft:regeneration", 100, 1);
-            give(lv, target, "minecraft:absorption", 2400, 0);
+            give(host, target, "minecraft:regeneration", 100, 1);
+            give(host, target, "minecraft:absorption", 2400, 0);
             true
         }
         Some("chorus_teleport") => {
@@ -990,11 +1003,11 @@ fn entity_hit(lv: &mut ServerLevel<'_>, shot: &Shot, target: EntityRef) -> bool 
                 .next()
                 .and_then(|w| w.parse::<f64>().ok())
                 .unwrap_or(20.0);
-            chorus(lv, target, diameter)
+            chorus(host, level, target, diameter)
         }
         Some("suspicious_stew") => {
-            for (effect, ticks) in stew_effects(&shot.stack) {
-                give(lv, target, &effect, ticks, 0);
+            for (effect, ticks) in stew_effects(&ammo.stack) {
+                give(host, target, &effect, ticks, 0);
             }
             false
         }
@@ -1032,11 +1045,11 @@ fn stew_effects(stack: &ItemStack) -> Vec<(String, i32)> {
 }
 
 /// `ChorusTeleport`: up to sixteen tries of `randomTeleport` within `diameter`.
-fn chorus(lv: &mut ServerLevel<'_>, target: EntityRef, diameter: f64) -> bool {
-    let (Some(living), Some(at)) = (lv.host.living(target), target.position(&*lv.host)) else {
+fn chorus(host: &mut dyn ServerHost, level: LevelRef, target: EntityRef, diameter: f64) -> bool {
+    let (Some(living), Some(at)) = (host.living(target), target.position(host)) else {
         return false;
     };
-    let fox = target.kind(&*lv.host).map(|k| k.id(&*lv.host)).as_deref() == Some("minecraft:fox");
+    let fox = target.kind(host).map(|k| k.id(host)).as_deref() == Some("minecraft:fox");
     let sound = if fox {
         "minecraft:entity.fox.teleport"
     } else {
@@ -1044,24 +1057,19 @@ fn chorus(lv: &mut ServerLevel<'_>, target: EntityRef, diameter: f64) -> bool {
     };
     let span = diameter as i32;
     for _ in 0..16 {
-        let (rx, rz) = (f64::from(random(lv)), f64::from(random(lv)));
-        let ry = f64::from((random(lv) * span.max(1) as f32) as i32);
+        let (rx, rz) = (
+            f64::from(random(host, level)),
+            f64::from(random(host, level)),
+        );
+        let ry = f64::from((random(host, level) * span.max(1) as f32) as i32);
         let to = [
             at[0] + (rx - 0.5) * diameter,
             (at[1] + ry - f64::from(span / 2)).max(0.0),
             at[2] + (rz - 0.5) * diameter,
         ];
-        if living.random_teleport(lv.host, to, None) {
-            lv.level.play_sound(
-                &mut *lv.host,
-                sound,
-                at,
-                SoundSource::Players,
-                1.0,
-                1.0,
-                None,
-            );
-            target.set_velocity(lv.host, [0.0; 3]);
+        if living.random_teleport(host, to, None) {
+            level.play_sound(host, sound, at, SoundSource::Players, 1.0, 1.0, None);
+            target.set_velocity(host, [0.0; 3]);
             return true;
         }
     }
@@ -1069,8 +1077,8 @@ fn chorus(lv: &mut ServerLevel<'_>, target: EntityRef, diameter: f64) -> bool {
 }
 
 /// `onBlockHit`: true when the type took care of the item.
-fn block_hit(lv: &mut ServerLevel<'_>, shot: &Shot, hit: ClipHit) -> bool {
-    let Some(action) = shot.kind.action else {
+fn block_hit(host: &mut dyn ServerHost, level: LevelRef, ammo: &Ammo, hit: ClipHit) -> bool {
+    let Some(action) = ammo.kind.action else {
         return false;
     };
     let mut words = action.split_whitespace();
@@ -1087,21 +1095,29 @@ fn block_hit(lv: &mut ServerLevel<'_>, shot: &Shot, hit: ClipHit) -> bool {
         _ => return false,
     };
     let place = std::array::from_fn(|i| hit.block[i] + face[i]);
-    let replaceable = lv.is_air(place)
-        || lv.block_state(place).is_some_and(|s| {
-            lv.host.block_in_tag(s.block(), "minecraft:replaceable") == Some(true)
-        });
+    let is_air = |host: &dyn Host, pos| {
+        level.block(host, pos).is_none_or(|b| {
+            matches!(
+                b.id(host).as_str(),
+                "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+            )
+        })
+    };
+    let replaceable = is_air(host, place)
+        || level
+            .block(host, place)
+            .is_some_and(|b| host.block_in_tag(b, "minecraft:replaceable") == Some(true));
     match kind {
         // `PlantCrop`: on top of farmland.
         "plant_crop" => {
             if face != [0, 1, 0] || !replaceable {
                 return false;
             }
-            let farmland = lv
-                .block_state(hit.block)
-                .is_some_and(|s| s.block().id(&*lv.host) == "minecraft:farmland");
-            if farmland && let Some(state) = lv.host.block_state_id(block) {
-                lv.set_state(place, state, super::super::server::update_all());
+            let farmland = level
+                .block(host, hit.block)
+                .is_some_and(|b| b.id(host) == "minecraft:farmland");
+            if farmland && let Some(state) = host.block_state_id(block) {
+                let _ = level.set_block(host, place, state, super::super::server::update_all());
             }
             true
         }
@@ -1111,16 +1127,15 @@ fn block_hit(lv: &mut ServerLevel<'_>, shot: &Shot, hit: ClipHit) -> bool {
                 return false;
             }
             if face == [0, 1, 0] {
-                if let Some(state) = lv.host.block_state_id(block) {
-                    lv.set_state(place, state, super::super::server::update_all());
+                if let Some(state) = host.block_state_id(block) {
+                    let _ = level.set_block(host, place, state, super::super::server::update_all());
                 }
             } else {
-                let empty = |lv: &ServerLevel<'_>, p: [i32; 3]| lv.is_air(p);
                 let mut y = hit.location[1] - 0.5;
-                if !empty(lv, [place[0], place[1] + 1, place[2]]) {
+                if !is_air(host, [place[0], place[1] + 1, place[2]]) {
                     y = y.min(f64::from(place[1]));
                 }
-                if !empty(lv, [place[0], place[1] - 1, place[2]]) {
+                if !is_air(host, [place[0], place[1] - 1, place[2]]) {
                     y = y.max(f64::from(place[1]));
                 }
                 let nbt = Compound::from([
@@ -1131,9 +1146,9 @@ fn block_hit(lv: &mut ServerLevel<'_>, shot: &Shot, hit: ClipHit) -> bool {
                     ("Time".into(), Tag::Int(1)),
                 ]);
                 let at = [f64::from(place[0]) + 0.5, y, f64::from(place[2]) + 0.5];
-                let dimension = lv.dimension.to_owned();
-                lv.host
-                    .summon(&dimension, "minecraft:falling_block", at, nbt);
+                if let Some(dimension) = level.dimension().id(host) {
+                    host.summon(&dimension, "minecraft:falling_block", at, nbt);
+                }
             }
             true
         }
@@ -1144,21 +1159,69 @@ fn block_hit(lv: &mut ServerLevel<'_>, shot: &Shot, hit: ClipHit) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mod_api::prelude::ItemsHost;
 
     #[test]
     fn a_saved_flight_keeps_recovery_and_the_owner_exit_flag() {
         let flight = Flight {
             recovery: 0.375,
             left_owner: true,
-            age: 14,
-            stuck: None,
         };
         let codec = FLIGHT.codec.as_ref().unwrap();
         let saved = (codec.encode)(&flight).unwrap();
         let loaded = (codec.decode)(&saved).unwrap();
         assert_eq!(loaded.recovery, 0.375);
         assert!(loaded.left_owner);
-        assert_eq!(loaded.age, 0);
+        let spent = (codec.encode)(&Flight {
+            recovery: 0.0,
+            ..loaded
+        })
+        .unwrap();
+        assert_eq!((codec.decode)(&spent).unwrap().recovery, 0.0);
+    }
+
+    #[test]
+    fn saved_ammo_must_be_a_known_single_round() {
+        let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+        let mut host = mod_api::testing::FakeHost::new();
+        let id = Identifier::parse("minecraft:potato").unwrap();
+        host.registries.resolve_items([id.clone()]).unwrap();
+        let key = host.item_key(&id).unwrap();
+        AMMO_KEYS.get_or_init(|| HashMap::from([("minecraft:potato", key)]));
+        let codec = AMMO.codec.as_ref().unwrap();
+        assert!((codec.decode)(&Compound::new()).is_err());
+        let saved = ItemStack::of(key).to_nbt(&host).unwrap();
+        let decoded = (codec.decode)(&saved).unwrap().unwrap();
+        assert_eq!(decoded.stack, ItemStack::of(key));
+        assert_eq!((codec.encode)(&Some(decoded)).unwrap(), saved);
+        for bad in [
+            Tag::Int(0),
+            Tag::Int(-1),
+            Tag::Int(2),
+            Tag::String("1".into()),
+        ] {
+            let mut invalid = saved.clone();
+            invalid.insert("count".into(), bad);
+            assert!((codec.decode)(&invalid).is_err());
+        }
+        let mut unknown = saved;
+        unknown.insert("id".into(), Tag::String("minecraft:stone".into()));
+        assert!((codec.decode)(&unknown).is_err());
+    }
+
+    #[test]
+    fn saved_flight_refuses_bad_recovery_and_owner_exit() {
+        let codec = FLIGHT.codec.as_ref().unwrap();
+        for chance in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.1, 1.1] {
+            let mut saved = (codec.encode)(&Flight::default()).unwrap();
+            saved.insert("Recovery".into(), Tag::Float(chance.to_bits()));
+            assert!((codec.decode)(&saved).is_err());
+        }
+        for invalid in [Tag::Byte(2), Tag::Byte(-1), Tag::Int(1)] {
+            let mut saved = (codec.encode)(&Flight::default()).unwrap();
+            saved.insert("LeftOwner".into(), invalid);
+            assert!((codec.decode)(&saved).is_err());
+        }
     }
 
     #[test]
