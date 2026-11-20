@@ -1,0 +1,181 @@
+{
+  "version": 3,
+  "seed": 0,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        8
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    }
+  ],
+  "checkpoints": [
+    30,
+    39,
+    40,
+    41,
+    49,
+    50,
+    51
+  ],
+  "events": [
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "item": "create:belt_connector",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "tick": 8
+    },
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "item": "create:belt_connector",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        8,
+        8
+      ],
+      "tick": 14
+    },
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "item": "create:brass_tunnel",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        8,
+        3
+      ],
+      "tick": 24
+    },
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "item": "create:brass_tunnel",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        8,
+        4
+      ],
+      "tick": 25
+    },
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "item": "create:brass_tunnel",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        8,
+        5
+      ],
+      "tick": 26
+    },
+    {
+      "action": {
+        "face": "south",
+        "hit": [
+          0.5,
+          0.8125,
+          0.96875
+        ],
+        "item": "create:wrench",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        9,
+        4
+      ],
+      "tick": 40
+    },
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.1,
+          1.0,
+          0.1
+        ],
+        "item": "create:wrench",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        9,
+        4
+      ],
+      "tick": 50
+    }
+  ],
+  "ticks": 70
+}

@@ -193,7 +193,10 @@ impl Run {
         {
             return true;
         }
-        if item == "minecraft:air" && !sneaking && self.brass_grab(p) {
+        // `useItemOn`, which neither tunnel overrides, passes on to `useWithoutItem` for the main
+        // hand; a sneaking player's item skips the block. The brass tunnel's takes its group's
+        // stacks; what passes goes on to the item's `useOn` (below, or `use_item`'s).
+        if (item == "minecraft:air" || !sneaking) && self.brass_grab(p) {
             return true;
         }
         if item == "create:wrench"

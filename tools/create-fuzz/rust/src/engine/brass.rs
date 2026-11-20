@@ -369,9 +369,10 @@ impl Run {
             self.set_brass_mode(p, mode);
         }
     }
-    /// A use on a brass tunnel the glue handles before the block's: a click on a side filter
-    /// slot (`use_tunnel_filter`), not sneaking, with neither a wrench nor an arm, sets that
-    /// side's filter to the held item (an empty hand clears it). True when it was the slot's.
+    /// A use on a brass tunnel the glue handles before the block's (`use_tunnel_filter`): not
+    /// sneaking, a click on a side's filter slot sets that side's filter to the held item (an
+    /// empty hand clears it), or with a wrench or an arm leaves it (`tunnel::filter_click`).
+    /// True when it was the slot's.
     pub(super) fn brass_filter_use(
         &mut self,
         p: Pos,
@@ -386,25 +387,22 @@ impl Run {
         if self.brass_axis(p).is_none() || sneaking {
             return false;
         }
-        if matches!(item, "create:wrench" | "create:mechanical_arm") {
-            return false;
+        let held = (item != "minecraft:air").then_some(item);
+        match tunnel::filter_click(axis, shape, face, hit, held) {
+            tunnel::FilterClick::Miss => return false,
+            tunnel::FilterClick::Keep => return true,
+            tunnel::FilterClick::Set => {}
         }
-        let Some(slot) = tunnel::filter_slot(axis, shape, face) else {
-            return false;
+        match held {
+            Some(item) => self.tunnel_filters.insert((p, face), item.to_string()),
+            None => self.tunnel_filters.remove(&(p, face)),
         };
-        if !create_engine::board::hits_box(slot, hit) {
-            return false;
-        }
-        if item == "minecraft:air" {
-            self.tunnel_filters.remove(&(p, face));
-        } else {
-            self.tunnel_filters.insert((p, face), item.to_string());
-        }
         self.w.mark_unsaved(0, p);
         true
     }
-    /// `grab_stacks` (`BrassTunnelBlock.useWithoutItem`): an empty hand takes the stacks of the
-    /// tunnel at `p` and its group (into the player's inventory). True when there were any.
+    /// `grab_stacks` (`BrassTunnelBlock.useWithoutItem`): the main hand, whatever it holds, takes
+    /// the stacks of the tunnel at `p` and its group (into the player's inventory). True when
+    /// there were any.
     pub(super) fn brass_grab(&mut self, p: Pos) -> bool {
         let Some(axis) = self.brass_axis(p) else {
             return false;

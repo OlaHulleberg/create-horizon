@@ -1,0 +1,255 @@
+{
+  "version": 3,
+  "seed": 0,
+  "blocks": [
+    {
+      "motor": 32,
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        7
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        1,
+        8,
+        7
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        2,
+        8,
+        3
+      ],
+      "state": "create:depot[waterlogged=false]"
+    }
+  ],
+  "checkpoints": [
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    66,
+    67,
+    68,
+    69,
+    70,
+    71
+  ],
+  "events": [
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "item": "create:belt_connector",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "tick": 8
+    },
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "item": "create:belt_connector",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        8,
+        7
+      ],
+      "tick": 14
+    },
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "item": "create:belt_connector",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "tick": 20
+    },
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "item": "create:belt_connector",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        1,
+        8,
+        7
+      ],
+      "tick": 26
+    },
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "item": "create:brass_tunnel",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        8,
+        3
+      ],
+      "tick": 36
+    },
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "item": "create:brass_tunnel",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        1,
+        8,
+        3
+      ],
+      "tick": 37
+    },
+    {
+      "action": {
+        "kind": "scroll_setting",
+        "row": 0,
+        "value": 1
+      },
+      "pos": [
+        0,
+        9,
+        3
+      ],
+      "tick": 44
+    },
+    {
+      "action": {
+        "extract": null,
+        "insert": {
+          "count": 10,
+          "item": "minecraft:diamond"
+        },
+        "kind": "capability",
+        "side": null,
+        "simulate": false,
+        "slot": 0
+      },
+      "pos": [
+        0,
+        9,
+        3
+      ],
+      "tick": 60
+    },
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.1,
+          1.0,
+          0.1
+        ],
+        "item": "minecraft:diamond",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        9,
+        3
+      ],
+      "tick": 61
+    }
+  ],
+  "ticks": 100
+}
