@@ -283,6 +283,10 @@ impl Subsystem for Logistics {
         // Java, before every block entity tick, and `BeltTunnelBlock.neighborChanged` breaks
         // a tunnel over a segment it removes in the same tick.
         belt::break_pass(lv);
+        // Ejectors placed this tick turn to face their target, and read their redstone
+        // (`updateSignal`, Java's `neighborChanged`), before the walk ticks them.
+        arms::turn_placed_ejectors(lv);
+        arms::ejector_signals(lv);
         placement::tick_vault_layers(lv);
         chute::tick_vaults(lv);
         chute::tick_chute_shapes(lv);
@@ -807,7 +811,6 @@ fn contents_changed(lv: &ServerLevel<'_>, pos: [i32; 3]) {
         w.detectors_contents_changed(dim, pos);
         w.dims[dim].arms.touched(pos);
     });
-    arms::wake_ejectors(dim, &[pos]);
     match block {
         Block::Chute | Block::SmartChute => {
             if chute::chute_stack(lv, pos).is_some() {

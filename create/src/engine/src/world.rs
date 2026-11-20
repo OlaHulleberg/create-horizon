@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 fn entity_view(block: Block) -> Option<View> {
     match block {
         Block::Depot
+        | Block::WeightedEjector
         | Block::Belt
         | Block::Spout
         | Block::ItemDrain
@@ -468,10 +469,10 @@ pub struct Dimension {
     /// changed: `redstoneUpdate`, `updateSignal`).
     pub arm_signals: Vec<[i32; 3]>,
     /// Weighted ejectors (their launcher, plate and stacks in flight; the stacks on them are
-    /// their depot's), those that tick, what was saved for those not placed yet, those clients
-    /// must see again, and stacks in flight of removed ones to drop (position, motion, item).
+    /// their depot's), ticked with their block entity by the shared transport walk, what was
+    /// saved for those not placed yet, those clients must see again, and stacks in flight of
+    /// removed ones to drop (position, motion, item).
     pub ejectors: HashMap<[i32; 3], crate::ejector::Ejector>,
-    pub ejecting: Vec<[i32; 3]>,
     pub ejector_saved: HashMap<[i32; 3], crate::ejector::Ejector>,
     pub ejector_changes: Vec<[i32; 3]>,
     pub ejector_drops: Vec<([f64; 3], [f64; 3], String, u8)>,
@@ -798,6 +799,9 @@ pub enum TransportTick {
     Pump([i32; 3]),
     Pipe([i32; 3]),
     Depot([i32; 3]),
+    /// A weighted ejector: its `DepotBehaviour` and its own tick, one entity turn
+    /// (`EjectorBlockEntity.tick` runs the behaviour through `super.tick()` first).
+    Ejector([i32; 3]),
     Belt([i32; 3]),
     /// `BrassTunnelBlockEntity.tick`: one holding a stack, synchronized with its group or still
     /// counting `distributionProgress` down.
@@ -845,8 +849,12 @@ impl TransportTicks {
                 ) => return Some(TransportTick::Pipe(p)),
                 _ => {}
             }
-            if world.block_at(self.dim, p) == Some(Block::Depot) {
-                return Some(TransportTick::Depot(p));
+            match world.block_at(self.dim, p) {
+                Some(Block::Depot) => return Some(TransportTick::Depot(p)),
+                // The ejector is the depot behaviour it extends (`addBehaviours`), ticked
+                // with its block entity.
+                Some(Block::WeightedEjector) => return Some(TransportTick::Ejector(p)),
+                _ => {}
             }
             let d = &world.dims[self.dim];
             if d.brass
@@ -1207,9 +1215,6 @@ impl CreateWorld {
                 d.ejector_changes.push(pos);
                 // `initialize`: `updateSignal`.
                 d.arm_signals.push(pos);
-            }
-            if !d.ejecting.contains(&pos) {
-                d.ejecting.push(pos);
             }
             // Its stacks are a depot's.
             if let std::collections::hash_map::Entry::Vacant(v) = d.depots.entry(pos) {
@@ -1874,7 +1879,6 @@ impl CreateWorld {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
             if let Some(mut e) = d.ejectors.remove(&pos) {
-                d.ejecting.retain(|p| *p != pos);
                 d.ejector_changes.push(pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
                 // `destroy` -> `dropFlyingItems`.
@@ -2156,7 +2160,6 @@ impl CreateWorld {
             d.funnels.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.arms.column_unloaded(cx, cz);
             d.ejectors.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.ejecting.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.chute_pulls.column_unloaded(cx, cz);
             d.chute_filters
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -5336,6 +5339,13 @@ impl CreateWorld {
         }
     }
 
+    /// `KineticBlockEntity.tick` precedes the ejector's `DepotBehaviour` at its registration
+    /// turn (`attachKinetics` on the first: a block placed since the last solve joins its
+    /// network now, as Java's block entity does at its own tick).
+    pub fn ejector_base_tick(&mut self, dim: usize, pos: [i32; 3]) {
+        self.dims[dim].kinetics.tick_registered_base(pos);
+    }
+
     /// Pipe behaviours tick in Level.blockEntityTickers registration order.
     pub fn fluid_transport_positions(&self, dim: usize) -> Vec<[i32; 3]> {
         let d = &self.dims[dim];
@@ -6117,6 +6127,48 @@ mod tests {
                 if depot_first { 0.0 } else { 0.125 }
             );
         }
+    }
+
+    #[test]
+    fn ejectors_tick_as_the_depots_they_are_in_the_shared_walk() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // e3-ejector-depot-never-slides: an ejector's stacks are a depot's, and its
+        // `DepotBehaviour` ticks with its block entity — the shared walk reaches it.
+        let names = [
+            (
+                "create:weighted_ejector",
+                vec![("facing", "east"), ("waterlogged", "false")],
+            ),
+            ("create:depot", vec![("waterlogged", "false")]),
+        ];
+        states::set_range(10, 2);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let e = [0, 8, 0];
+        w.block_loaded(0, e, 10);
+        w.block_loaded(0, [0, 8, 1], 11);
+        assert!(w.dims[0].ejectors.contains_key(&e));
+        // A stack entering at the edge (`new TransportedItemStack`): position 0.
+        let mut h = crate::depot::Held::new(0, false);
+        h.position = 0.0;
+        w.depot_put(0, e, Some(h));
+        let mut turns = w.transport_ticks(0);
+        assert_eq!(turns.next(&mut w), Some(TransportTick::Ejector(e)));
+        // `DepotBehaviour.tick` inside `EjectorBlockEntity.tick`'s `super.tick()`: the
+        // stack slides a quarter of the way left (0.125 after one tick, as Java's tick 41).
+        w.tick_depot(0, e, false);
+        assert_eq!(w.dims[0].depots[&e].unwrap().position, 0.125);
+        assert_eq!(turns.next(&mut w), Some(TransportTick::Depot([0, 8, 1])));
+        assert_eq!(turns.next(&mut w), None);
+        // e2-ejector-idle-wind-up: the walk reaches it every tick, idle or not — an ejector
+        // that began retracting while its shaft stood still still ticks, so it winds down
+        // once its shaft turns.
+        assert_eq!(
+            w.transport_ticks(0).next(&mut w),
+            Some(TransportTick::Ejector(e))
+        );
     }
 
     struct ItemBeltSide;

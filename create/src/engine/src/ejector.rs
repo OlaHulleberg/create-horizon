@@ -2,8 +2,8 @@
 //! on a hinged plate that, once charged, throws what it holds along an arc to a target block, the
 //! items flying a few ticks and landing in what is there (a depot, a belt) or as items at the
 //! end of the arc. Its stacks are a depot's (the block entity's slots, `depot.rs`); this keeps
-//! the launcher, the plate and the items in flight. An ejector that is charged and empty, or
-//! winding up without speed, does nothing per tick.
+//! the launcher, the plate and the items in flight. As the depot behaviour it extends, the
+//! shared transport walk ticks it with its block entity, whether or not anything moves.
 
 use crate::kinetics::{Axis, Dir};
 use crate::place::{mth_cos, mth_sin};
@@ -348,20 +348,6 @@ impl Ejector {
         self.launcher
             .global_velocity(f64::from(time), facing.opposite())
             .map(|v| v * 0.5)
-    }
-
-    /// Whether its tick does anything: a launch pending, stacks in flight, the plate moving
-    /// (launching, or winding up with speed), or charged with something to throw (asked again
-    /// when its depot changes or it starts turning).
-    pub fn busy(&self, speed: f32, has_items: bool) -> bool {
-        self.launch
-            || !self.flying.is_empty()
-            || self.scan_cooldown > 0
-            || match self.state {
-                State::Launching => true,
-                State::Retracting => speed != 0.0 || !self.lid.settled(),
-                State::Charged => has_items && !self.powered,
-            }
     }
 
     /// `activate` (`ejectIfTriggered`, or something landing on it): it launches next tick.
@@ -920,7 +906,6 @@ mod tests {
             ticks += 1;
         }
         assert_eq!(ticks, 65);
-        assert!(!e.busy(speed, false), "charged and empty: idle");
         // A stack arrives but is still sliding: it waits.
         w.held = Some(("minecraft:iron_ingot".into(), 3, 0.3));
         e.tick(pos, Dir::North, speed, &mut w);
@@ -1004,6 +989,31 @@ mod tests {
         assert_eq!(w.dropped.len(), 1);
         // Dropped a quarter block out of the face it hit.
         assert!(w.dropped[0].0[2] > -2.0 + 0.2, "{:?}", w.dropped[0].0);
+    }
+
+    #[test]
+    fn an_idle_ejector_winds_down_once_its_shaft_turns() {
+        // e2-ejector-idle-wind-up: placed with the plate open (lid 1) it retracts at
+        // `getWindUpSpeed` — 16 rpm over one block: 16/256 a tick. Java's tick 10 shows the
+        // lid at 0.4375: nine ticks of winding once the motor turns.
+        let mut e = Ejector::default();
+        assert_eq!(e.state, State::Retracting);
+        let pos = [0, 8, 0];
+        let mut w = Spot::default();
+        // Its shaft has not been set going yet: the plate holds where it is.
+        e.tick(pos, Dir::East, 0.0, &mut w);
+        assert_eq!(e.lid.value, 1.0);
+        for _ in 0..9 {
+            e.tick(pos, Dir::East, 16.0, &mut w);
+        }
+        assert_eq!(e.lid.value, 0.4375);
+        // 16 ticks of winding bring it down (tick 17 sees 0 and charges it).
+        for _ in 9..16 {
+            e.tick(pos, Dir::East, 16.0, &mut w);
+        }
+        assert_eq!(e.lid.value, 0.0);
+        e.tick(pos, Dir::East, 16.0, &mut w);
+        assert_eq!(e.state, State::Charged);
     }
 
     #[test]

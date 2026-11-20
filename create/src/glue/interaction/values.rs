@@ -520,8 +520,6 @@ pub(crate) fn settings_at(
             if let Some(pick) = pick {
                 e.max_stack = pick.value.clamp(0, 64) as u8;
                 w.mark_unsaved(dim, pos);
-                w.dims[dim].ejecting.retain(|p| *p != pos);
-                w.dims[dim].ejecting.push(pos);
             }
             w.dims[dim]
                 .ejectors

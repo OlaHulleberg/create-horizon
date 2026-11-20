@@ -26,8 +26,8 @@ use super::belt::{belt_segment, put_on_from_above};
 use super::chute::{chute_accepts, chute_at, chute_stack, set_chute_stack};
 use super::depot::depot_items;
 use super::funnel::funnel_at;
-use super::items::{self, face, random_angle, stack_limit, upright};
 use super::{has_collision, info_at};
+use super::items::{self, face, random_angle, stack_limit, upright};
 use create_engine::Block;
 use create_engine::arm::{self, Kind, Point, Stack};
 use create_engine::depot;
@@ -134,10 +134,9 @@ impl Subsystem for Arms {
     }
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
-        turn_placed_ejectors(lv);
         tick_arms(lv);
         entities_on_ejectors(lv);
-        tick_ejectors(lv);
+        flush_ejectors(lv);
     }
 
     fn right_click_block(
@@ -982,7 +981,33 @@ pub(super) fn depot_insert(
 }
 
 /// Arms and ejectors whose redstone input may have changed read it (`redstoneUpdate`: a newly
-/// freed arm looks for items at once; `updateSignal`).
+/// freed arm looks for items at once; `updateSignal`). The ejectors run before the transport
+/// walk ticks them; the arms stay with their own phase.
+pub(super) fn ejector_signals(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let checks = with_world(|w| std::mem::take(&mut w.dims[dim].arm_signals)).unwrap_or_default();
+    for pos in checks {
+        let powered = lv.has_neighbor_signal(pos);
+        let arm = with_world(|w| w.dims[dim].arms.arms.contains_key(&pos)).unwrap_or(false);
+        if arm {
+            // `tick_arm_signals` reads it at the arms' phase.
+            with_world(|w| w.dims[dim].arm_signals.push(pos));
+            continue;
+        }
+        with_world(|w| {
+            let d = &mut w.dims[dim];
+            if let Some(e) = d.ejectors.get_mut(&pos)
+                && e.powered != powered
+            {
+                e.powered = powered;
+                d.ejector_changes.push(pos);
+            }
+        });
+    }
+}
+
+/// `tick_arm_signals` for arms: those whose redstone input may have changed read it (a newly
+/// freed arm looks for items at once).
 fn tick_arm_signals(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let checks = with_world(|w| std::mem::take(&mut w.dims[dim].arm_signals)).unwrap_or_default();
@@ -999,19 +1024,7 @@ fn tick_arm_signals(lv: &mut ServerLevel<'_>) {
                     arms.changes.push(pos);
                 }
             });
-            continue;
         }
-        with_world(|w| {
-            let d = &mut w.dims[dim];
-            if let Some(e) = d.ejectors.get_mut(&pos)
-                && e.powered != powered
-            {
-                e.powered = powered;
-                if !d.ejecting.contains(&pos) {
-                    d.ejecting.push(pos);
-                }
-            }
-        });
     }
 }
 
@@ -1108,9 +1121,7 @@ fn wake_on_speed(dim: usize, pos: [i32; 3]) {
             d.arms.changes.push(pos);
         }
         if d.ejectors.contains_key(&pos) {
-            if !d.ejecting.contains(&pos) {
-                d.ejecting.push(pos);
-            }
+            // Clients redraw the plate's wind-up at its new speed (`Shown::of`).
             d.ejector_changes.push(pos);
         }
     });
@@ -1346,43 +1357,46 @@ impl ejector::World for EjectorWorld<'_, '_> {
     }
 }
 
-/// Weighted ejectors that have something to do (`EjectorBlockEntity.tick`): winding up,
-/// launching, stacks in flight, or charged with something on them; the rest cost nothing.
-/// Stacks of removed ejectors drop; clients see the ejectors whose plate or flight changed.
-fn tick_ejectors(lv: &mut ServerLevel<'_>) {
+/// One weighted ejector's turn in the shared transport walk (`EjectorBlockEntity.tick`, with
+/// the `DepotBehaviour` it extends ticked first through `super.tick()`): its held stack
+/// slides, then its own tick. Stacks of removed ejectors drop; clients see the ejectors whose
+/// plate or flight changed.
+pub(crate) fn tick_ejector(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let dim = lv.dim;
-    let list = with_world(|w| w.dims[dim].ejecting.clone()).unwrap_or_default();
-    for pos in list {
-        let Some(facing) = info_at(lv, pos).and_then(|(_, i)| i.facing) else {
-            continue;
-        };
-        let Some(mut e) = with_world(|w| w.dims[dim].ejectors.remove(&pos)).flatten() else {
-            continue;
-        };
-        let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
-        let flying = e.flying.len();
-        let before = e.state;
-        let changed = e.tick(pos, facing, speed, &mut EjectorWorld { lv: &mut *lv, pos });
-        if before == ejector::State::Charged && e.state == ejector::State::Launching {
-            launch_entities(lv, pos, e.launcher.entity_motion(facing));
-        }
-        let has_items = !depot_items(lv, pos).is_empty();
-        let busy = e.busy(speed, has_items);
-        with_world(|w| {
-            let d = &mut w.dims[dim];
-            d.ejectors.insert(pos, e);
-            if changed {
-                d.ejector_changes.push(pos);
-                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
-            } else if flying > 0 {
-                // Stacks still in flight are saved with it.
-                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
-            }
-            if !busy {
-                d.ejecting.retain(|p| *p != pos);
-            }
-        });
+    let Some(facing) = info_at(lv, pos).and_then(|(_, i)| i.facing) else {
+        return;
+    };
+    let Some(mut e) = with_world(|w| w.dims[dim].ejectors.remove(&pos)).flatten() else {
+        return;
+    };
+    // `KineticBlockEntity.tick` first (`attachKinetics`), then `DepotBehaviour.tick` inside
+    // `super.tick()`: the slide, then what its arrival asks.
+    with_world(|w| w.ejector_base_tick(dim, pos));
+    super::depot::tick_depot(lv, pos);
+    let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
+    let before = e.state;
+    let flying = e.flying.len();
+    let changed = e.tick(pos, facing, speed, &mut EjectorWorld { lv: &mut *lv, pos });
+    if before == ejector::State::Charged && e.state == ejector::State::Launching {
+        launch_entities(lv, pos, e.launcher.entity_motion(facing));
     }
+    with_world(|w| {
+        let d = &mut w.dims[dim];
+        d.ejectors.insert(pos, e);
+        if changed {
+            d.ejector_changes.push(pos);
+            d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        } else if flying > 0 {
+            // Stacks still in flight are saved with it.
+            d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        }
+    });
+}
+
+/// Ejectors after the walk: stacks of removed ones drop, clients see those whose plate or
+/// flight changed.
+pub(super) fn flush_ejectors(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
     let (drops, changes) = with_world(|w| {
         let d = &mut w.dims[dim];
         let mut c = std::mem::take(&mut d.ejector_changes);
@@ -1466,7 +1480,7 @@ fn entities_on_ejectors(lv: &mut ServerLevel<'_>) {
 }
 
 /// `EjectorBlockEntity.activate` (`EjectorTriggerPacket` from a player's client, or something
-/// landing on it).
+/// landing on it): its block entity's next turn launches.
 pub fn trigger_ejector(dim: usize, pos: [i32; 3]) {
     with_world(|w| {
         let d = &mut w.dims[dim];
@@ -1477,9 +1491,6 @@ pub fn trigger_ejector(dim: usize, pos: [i32; 3]) {
             return;
         }
         e.activate();
-        if !d.ejecting.contains(&pos) {
-            d.ejecting.push(pos);
-        }
     });
 }
 
@@ -1517,21 +1528,6 @@ fn launch_entities(lv: &mut ServerLevel<'_>, pos: [i32; 3], motion: [f64; 3]) {
         e.teleport_to(&mut *lv.host, at, None);
         e.set_velocity(&mut *lv.host, motion);
     }
-}
-
-/// An ejector starts ticking: its depot changed, it started turning.
-pub fn wake_ejectors(dim: usize, list: &[[i32; 3]]) {
-    with_world(|w| {
-        let d = &mut w.dims[dim];
-        if d.ejectors.is_empty() {
-            return;
-        }
-        for p in list {
-            if d.ejectors.contains_key(p) && !d.ejecting.contains(p) {
-                d.ejecting.push(*p);
-            }
-        }
-    });
 }
 
 /// Ejectors to `players`.
@@ -2227,7 +2223,7 @@ pub fn ejector_placed(host: &mut dyn ServerHost, event: &mod_api::EntityPlaceEve
 }
 
 /// Ejectors placed this tick turn to face their target.
-fn turn_placed_ejectors(lv: &mut ServerLevel<'_>) {
+pub(super) fn turn_placed_ejectors(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let due: Vec<([i32; 3], Dir)> = EJECTOR_FACING.with_borrow_mut(|f| {
         let (mine, rest): (Vec<_>, Vec<_>) = f.drain(..).partition(|(d, _, _)| *d == dim);

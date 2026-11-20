@@ -5,7 +5,7 @@
 use super::super::net;
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
-use super::arms::{arms_touched, wake_ejectors};
+use super::arms::arms_touched;
 use super::items::{self, random_angle, upright};
 use create_engine::depot;
 use mod_api::PlayerRef;
@@ -168,9 +168,8 @@ pub fn send_changed_depots(lv: &mut ServerLevel<'_>) {
     if changed.is_empty() {
         return;
     }
-    // Arms using these depots and ejectors holding a new stack look again.
+    // Arms using these depots look again.
     arms_touched(dim, &changed, &[]);
-    wake_ejectors(dim, &changed);
     // A depot that joined holding a stack (a saved world, a block placed with its items) has
     // it at rest only for legacy saves without transport state.
     for &pos in &changed {
