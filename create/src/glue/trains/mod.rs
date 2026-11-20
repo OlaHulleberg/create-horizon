@@ -63,7 +63,7 @@ mod carts;
 mod client;
 mod conductor;
 mod contents;
-mod controls;
+pub(super) mod controls;
 mod coupling_draw;
 mod doors;
 pub(crate) mod gui;

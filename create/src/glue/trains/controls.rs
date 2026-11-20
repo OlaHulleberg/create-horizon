@@ -1,14 +1,14 @@
 //! Driving Create's trains: the rules are `create_engine::train_controls`'s and the railway's
 //! (`Railway::control`). The client half sees a use click aimed at a carriage it knows
-//! (`ContraptionHandlerClient`) and sends it; while its player controls a train it keeps W, S,
-//! A, D, space and left shift from moving the player and sends them as Create's
+//! (`ContraptionHandlerClient`) and sends it; while its player controls a train it captures the
+//! movement bindings and sends their physical state as Create's
 //! `ControlsHandler` does, and draws Create's `TrainHUD` (speed, throttle set by the wheel, the
 //! prompt box, the direction arrow). The server half gives players a carriage's controls
 //! (`ControlsInteractionBehaviour`), keeps their keys alive (`ControlsServerHandler`) and
 //! drives the train by them. Nothing runs without a controlling player's word or a click
 //! waiting: each hook's miss is one emptiness check. Carriage seats are `riding`'s.
 
-use super::super::contraptions::controller::release_movement_mappings;
+use super::super::contraptions::controller::{movement_buttons, sync_movement_capture};
 use super::super::net;
 use super::super::server::ServerLevel;
 use super::super::states;
@@ -29,6 +29,10 @@ use mod_api::{
 use std::cell::{Cell, RefCell};
 
 pub struct TrainControls;
+
+pub(crate) fn is_driving() -> bool {
+    DRIVING.get()
+}
 
 /// A carriage's controls held (`AbstractContraptionEntity.controllingPlayer`): by whom, whether
 /// they face the train's back, what `control` keeps between ticks, and the ticks to the
@@ -264,8 +268,8 @@ fn net_from_server(host: &mut dyn ClientHost, data: &[u8]) {
     });
     send_server(host, packets);
     let driving = DRIVER.with_borrow(|d| d.controls.is_some());
-    if !DRIVING.replace(driving) && driving {
-        release_movement_mappings(host);
+    if DRIVING.replace(driving) != driving {
+        sync_movement_capture(host);
     }
 }
 
@@ -304,18 +308,22 @@ fn client_tick(host: &mut dyn ClientHost) {
     if !DRIVING.get() {
         return;
     }
-    if !host.playing() {
+    if host.local_player().is_none() {
         DRIVER.with_borrow_mut(|d| *d = Driver::default());
         DRIVING.set(false);
         return;
     }
-    let down = create_engine::controller::KEYS
-        .iter()
-        .enumerate()
-        .filter(|(_, k)| host.is_key_down(k))
-        .fold(0u8, |m, (i, _)| m | (1 << i));
-    let escape = host.is_key_down("key.keyboard.escape");
-    let mut packets = DRIVER.with_borrow_mut(|d| d.tick(down, escape));
+    if !host.playing() || host.is_key_down("key.keyboard.escape") {
+        // With the world still open, release held train keys and stop on the server
+        // before handing movement back to the game.
+        let packets = DRIVER.with_borrow_mut(|d| d.tick(0, true));
+        send_server(host, packets);
+        DRIVING.set(false);
+        sync_movement_capture(host);
+        return;
+    }
+    let down = movement_buttons(host);
+    let mut packets = DRIVER.with_borrow_mut(|d| d.tick(down, false));
     // `TrainHUD.tick`: the bars chase the train, the prompt lives 30 ticks, and a throttle set
     // by the wheel goes to the server until it agrees.
     let width = PROMPT.with_borrow(|p| {
@@ -333,13 +341,13 @@ fn client_tick(host: &mut dyn ClientHost) {
     if let (Some(steps), Some(target)) = (throttle, DRIVER.with_borrow(|d| d.controls)) {
         packets.push(ToServer::Throttle { target, steps });
     }
-    if let Some(target) = DRIVER.with_borrow(|d| d.controls) {
-        // `ControlsHandler.tick`: these are train controls, not player movement.
-        release_movement_mappings(host);
+    let controls = DRIVER.with_borrow(|d| d.controls);
+    if let Some(target) = controls {
         super::horn::driving_tick(host, target.train);
     }
     send_server(host, packets);
-    DRIVING.set(DRIVER.with_borrow(|d| d.controls.is_some()));
+    DRIVING.set(controls.is_some());
+    sync_movement_capture(host);
 }
 
 /// `TrainHUD.renderOverlay`, only while controlling: the speed and throttle bars over the
