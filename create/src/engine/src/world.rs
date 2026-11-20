@@ -5386,20 +5386,18 @@ impl CreateWorld {
         out
     }
 
-    /// KineticBlockEntity.tick precedes its FluidTransportBehaviour tick.
-    pub fn fluid_transport_base_tick(&mut self, dim: usize, pos: [i32; 3]) {
+    /// `KineticBlockEntity.tick` of a kinetic entity whose subclass ticks in a shared walk
+    /// (a fluid pipe's FluidTransportBehaviour, an ejector's DepotBehaviour), on its
+    /// registration turn. `Level.blockEntityTickers` ticks every entity registered before it
+    /// first, so their base ticks run before this one: after a reload, an ejector's
+    /// `attachKinetics` finds its source's network already restored by `initialize`
+    /// (`KineticNetwork.initFromTE`, `addSilently`), and the sync its `add` causes reaches them.
+    pub fn kinetic_base_ticks_through(&mut self, dim: usize, pos: [i32; 3]) {
         let d = &mut self.dims[dim];
         let mut prefix = d.block_entities.walk_through(View::All, pos);
         while let Some(p) = prefix.next(&d.block_entities) {
             d.kinetics.tick_registered_base(p);
         }
-    }
-
-    /// `KineticBlockEntity.tick` precedes the ejector's `DepotBehaviour` at its registration
-    /// turn (`attachKinetics` on the first: a block placed since the last solve joins its
-    /// network now, as Java's block entity does at its own tick).
-    pub fn ejector_base_tick(&mut self, dim: usize, pos: [i32; 3]) {
-        self.dims[dim].kinetics.tick_registered_base(pos);
     }
 
     /// Pipe behaviours tick in Level.blockEntityTickers registration order.
@@ -6313,7 +6311,7 @@ mod tests {
             while let Some(turn) = turns.next(w) {
                 match turn {
                     TransportTick::Ejector(p) => {
-                        w.ejector_base_tick(0, p);
+                        w.kinetic_base_ticks_through(0, p);
                         w.tick_depot(0, p, false);
                         let speed = w.speed(0, p).unwrap_or(0.0);
                         let Some(mut e) = w.dims[0].ejectors.remove(&p) else {
@@ -6349,28 +6347,97 @@ mod tests {
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
         ));
         let (motor, e) = ([0, 8, -1], [0, 8, 0]);
-        w.block_changed(0, motor, 0, 10);
-        w.block_changed(0, e, 0, 11);
         let mut events = Vec::new();
-        // Its shaft stands still on the first turn (the motor's generator is solved after the
-        // level's block entities tick): the plate holds where it is (it began retracting open).
+        // One block a tick, as the case places them: the motor ticks (and generates) before
+        // the ejector, registered after it, takes its first turn.
+        w.block_changed(0, motor, 0, 10);
         walk_ejectors(&mut w, 1);
         w.tick(0, &mut events);
+        w.block_changed(0, e, 0, 11);
+        walk_ejectors(&mut w, 1);
+        w.tick(0, &mut events);
+        // 16 rpm one block ahead: `getWindUpSpeed` is 16/256 a tick from its first turn. Java's
+        // tick 2 shows the plate retracting at 0.9375 and tick 10 at 0.4375 after nine turns.
         assert_eq!(w.speed(0, e), Some(16.0));
         assert_eq!(
             w.dims[0].ejectors[&e].state,
             crate::ejector::State::Retracting
         );
-        assert_eq!(w.dims[0].ejectors[&e].lid.value, 1.0);
-        // 16 rpm one block ahead: `getWindUpSpeed` is 16/256 a tick. Java's tick 10 shows
-        // the lid at 0.4375 after nine turns.
-        walk_ejectors(&mut w, 9);
-        assert_eq!(w.dims[0].ejectors[&e].lid.value, 0.4375);
-        // Sixteen ticks of winding bring it down; the next turn charges it, as Java's tick 20
-        // (charged) shows.
+        assert_eq!(w.dims[0].ejectors[&e].lid.value, 0.9375);
         walk_ejectors(&mut w, 8);
+        assert_eq!(w.dims[0].ejectors[&e].lid.value, 0.4375);
+        // Sixteen turns of winding bring it down; the next turn charges it, as Java's tick 19
+        // (charged) shows.
+        walk_ejectors(&mut w, 9);
         assert_eq!(w.dims[0].ejectors[&e].state, crate::ejector::State::Charged);
         assert_eq!(w.dims[0].ejectors[&e].lid.value, 0.0);
+    }
+
+    #[test]
+    fn a_reloaded_ejector_attaches_after_the_entities_registered_before_it() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Fuzz seed 7804 (shrunk): a motor turns a shaft; an ejector is placed beside it and
+        // the world reloads in that tick. `Level.blockEntityTickers` ticks the motor and the
+        // shaft first: their `initialize` restores the network (`initFromTE`, `addSilently`),
+        // then the ejector's `attachKinetics` joins it and its `updateNetwork` syncs them all.
+        let names = [
+            ("create:creative_motor", vec![("facing", "south")]),
+            (
+                "create:shaft",
+                vec![("axis", "z"), ("waterlogged", "false")],
+            ),
+            (
+                "create:weighted_ejector",
+                vec![("facing", "east"), ("waterlogged", "false")],
+            ),
+        ];
+        states::set_range(10, 3);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (motor, shaft, e) = ([0, 8, -2], [0, 8, -1], [0, 8, 0]);
+        let settings = Settings {
+            motor_rpm: 32.,
+            ..Settings::default()
+        };
+        let mut events = Vec::new();
+        // One block a tick; the motor's speed is set the tick after it is placed.
+        w.block_changed(0, motor, 0, 10);
+        w.tick(0, &mut events);
+        w.block_changed(0, shaft, 0, 11);
+        w.set_settings(0, motor, 10, settings);
+        w.tick(0, &mut events);
+        w.block_changed(0, e, 0, 12);
+        let saved: Vec<_> = [motor, shaft, e]
+            .into_iter()
+            .map(|p| (p, w.dims[0].kinetics.saved_state(p, 0)))
+            .collect();
+        // Java's tick 2: the motor and the shaft saved a network of 2, the motor no stress.
+        let size = |s: &Option<crate::kinetics::SavedKineticState>| {
+            s.as_ref().and_then(|s| s.network.as_ref()).map(|n| n.size)
+        };
+        assert_eq!(size(&saved[0].1), Some(2));
+        assert_eq!(size(&saved[1].1), Some(2));
+        w.column_unloaded(0, 0, -1);
+        w.column_unloaded(0, 0, 0);
+        w.load_settings(0, [(motor, 32)].into_iter());
+        for ((p, saved), state) in saved.into_iter().zip([10, 11, 12]) {
+            w.block_loaded(0, p, state);
+            if let Some(saved) = saved {
+                assert!(w.dims[0].kinetics.restore_state(p, 0, saved));
+            }
+        }
+        walk_ejectors(&mut w, 1);
+        w.tick(0, &mut events);
+        // Java's tick 3: one network of 3 with the ejector's 2 per rpm, saved by every member.
+        for p in [motor, shaft, e] {
+            let saved = w.dims[0].kinetics.saved_state(p, 0).unwrap();
+            let network = saved.network.unwrap();
+            assert_eq!((network.size, network.stress), (3, 64.0), "{p:?}");
+            assert_eq!(network.capacity, 524288.0, "{p:?}");
+        }
+        states::clear_range();
     }
 
     struct ItemBeltSide;
@@ -8283,7 +8350,7 @@ mod tests {
             false,
         );
         assert_eq!(w.speed(0, drive), Some(0.));
-        w.fluid_transport_base_tick(0, pipe);
+        w.kinetic_base_ticks_through(0, pipe);
         assert_eq!(w.speed(0, drive), Some(64.));
         states::clear_range();
     }

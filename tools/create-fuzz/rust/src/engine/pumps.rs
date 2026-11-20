@@ -44,7 +44,7 @@ impl Run {
         if !self.w.dims[0].fluid_transport.pipes.contains_key(&pos) {
             return;
         }
-        self.w.fluid_transport_base_tick(0, pos);
+        self.w.kinetic_base_ticks_through(0, pos);
         let mut transport = std::mem::take(&mut self.w.dims[0].fluid_transport);
         if let Some((a, b)) = transport.tick_pipe(self, pos) {
             self.set(pos, AIR);
