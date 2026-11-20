@@ -18,12 +18,25 @@
               "type": "minecraft:copy_name"
             },
             {
+              "type": "minecraft:copy_custom_data",
               "source": "block_entity",
-              "include": [
-                "create:toolbox_uuid",
-                "create:toolbox_inventory"
-              ],
-              "type": "minecraft:copy_components"
+              "ops": [
+                {
+                  "source": "Items",
+                  "target": "\"create:toolbox_inventory\".Items",
+                  "op": "replace"
+                },
+                {
+                  "source": "Compartments",
+                  "target": "\"create:toolbox_inventory\".Compartments",
+                  "op": "replace"
+                },
+                {
+                  "source": "UniqueId",
+                  "target": "\"create:toolbox_uuid\"",
+                  "op": "replace"
+                }
+              ]
             }
           ]
         }

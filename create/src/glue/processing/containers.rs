@@ -49,6 +49,41 @@ impl mod_api::BlockPart for ToolboxDraw {}
 
 #[mod_api::sunrise_part]
 impl mod_api::BlockEntityPart for ToolboxDraw {
+    fn block_entity_save_additional(
+        &self,
+        _level: &dyn mod_api::LevelHost,
+        event: &mut mod_api::BlockEntitySaveAdditionalEvent<'_>,
+    ) {
+        super::toolbelt::save_additional(event);
+    }
+
+    fn block_entity_load_additional(
+        &self,
+        _level: &dyn mod_api::LevelHost,
+        event: &mut mod_api::BlockEntityLoadAdditionalEvent<'_>,
+    ) {
+        super::toolbelt::load_additional(event);
+    }
+
+    fn block_entity_on_load(
+        &self,
+        host: mod_api::HostSide,
+        event: &mut mod_api::BlockEntityOnLoadEvent,
+    ) {
+        if let mod_api::HostSide::Server(host) = host {
+            super::toolbelt::loaded(host, event.entity);
+        }
+    }
+
+    fn pre_remove_side_effects(
+        &self,
+        _level: &mut dyn mod_api::LevelRandomHost,
+        event: &mut mod_api::PreRemoveSideEffectsEvent<'_>,
+    ) {
+        // `ToolboxBlock.onRemove` does not spill. Its loot table carries the contents instead.
+        event.keep_contents = true;
+    }
+
     fn block_entity_submit(
         &self,
         host: &dyn mod_api::ClientHost,

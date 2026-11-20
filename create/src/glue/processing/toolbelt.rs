@@ -14,7 +14,7 @@
 //! (`CreateToolboxData` in their persistent data) and sent to their client when they change.
 //!
 //! A compartment's item kind (`ToolboxInventory.filters`) is the first stack put into it, kept
-//! with the toolbox's column (and on its item) once set, and what shares it is Create's
+//! in the toolbox's saved data (and on its item) once set, and what shares it is Create's
 //! (`canItemsShareCompartment`: the same item and components, tools however worn, any belt
 //! connectors). Each toolbox has its `UniqueId`, kept with it and on its item, by which the menu
 //! orders the nearest eight. A left click picks a toolbox up with its contents into the
@@ -23,20 +23,18 @@
 //! (`isOpenInContainer`), and out of creative the pick-block key equips an item a toolbox in reach
 //! holds (`onPickItem`, from a block; the server's pick names no entity's item).
 //!
-//! A toolbox replaced by the game (`/setblock`, `/fill`) loses its contents, as Create's
-//! (`onRemove` drops nothing), and a piston can't move it. Left out (no API for it): one the level
-//! destroys with its drops (`/setblock .. destroy`, `Level.destroyBlock`) drops an empty toolbox,
-//! where Create's loot copies its contents (`BlockDropsEvent` gives no read of the block entity;
-//! `API_GAPS.md`).
+//! The loot table copies the saved container slots, compartment kinds and id to the item.
+//! `pre_remove_side_effects` suppresses the container's separate spill: breaking keeps the
+//! contents only in the toolbox item, and replacement without drops loses them as in Create.
 
 use super::super::net;
 use super::super::persist::mark_pos_unsaved;
 use super::super::server::ServerLevel;
-use super::super::world::level_index;
 use create_engine::toolbox::{self as tb, STACKS_PER_COMPARTMENT};
 use create_engine::{Block, dye};
 use mod_api::{
-    ClientHost, Compound, DrawContext, Flow, ItemStack, PlayerRef, ServerHost, Tag, Text,
+    ClientHost, Compound, DimensionKey, DrawContext, Flow, ItemStack, PlayerRef, ServerHost, Tag,
+    Text,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -46,7 +44,7 @@ pub(crate) const CHANNEL: &str = "create:toolbelt";
 const DATA: &str = "CreateToolboxData";
 /// The toolbox item's custom data key for its contents (`TOOLBOX_INVENTORY`).
 const ITEM_KEY: &str = "create:toolbox_inventory";
-/// The toolbox's id, on its item (`TOOLBOX_UUID`) and with its column (`UniqueId`).
+/// The toolbox's id on its item (`TOOLBOX_UUID`); the block entity saves it as `UniqueId`.
 const UUID_KEY: &str = "create:toolbox_uuid";
 const COMPARTMENTS: usize = 8;
 const MOD: &str = "create";
@@ -64,20 +62,17 @@ struct Kept {
     uuid: Option<u128>,
 }
 
-/// The toolboxes' item keys, requested at registration.
-pub(crate) static TOOLBOX_ITEMS: std::sync::OnceLock<Vec<mod_api::ItemKey>> =
-    std::sync::OnceLock::new();
-
 thread_local! {
-    /// Each toolbox's compartment kinds and id, by level and position.
-    static FILTERS: RefCell<HashMap<(usize, [i32; 3]), Kept>> = RefCell::new(HashMap::new());
-    /// Contents taken out of a toolbox about to be broken, for its drop (`block_drops`).
-    static BREAKING: RefCell<HashMap<(usize, [i32; 3]), Compound>> = RefCell::new(HashMap::new());
+    /// Each toolbox's compartment kinds and id, by the SDK's dimension key and position.
+    static FILTERS: RefCell<HashMap<(DimensionKey, [i32; 3]), Kept>> = RefCell::new(HashMap::new());
+    /// Chunk/block notifications carry Create's internal level index. Save and load expose the
+    /// SDK key without a full Host, so retain their association while this world is open.
+    static DIMENSIONS: RefCell<HashMap<usize, DimensionKey>> = RefCell::new(HashMap::new());
 }
 
 pub(crate) fn clear() {
     FILTERS.with_borrow_mut(HashMap::clear);
-    BREAKING.with_borrow_mut(HashMap::clear);
+    DIMENSIONS.with_borrow_mut(HashMap::clear);
 }
 
 fn is_toolbox(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
@@ -162,13 +157,14 @@ fn uuid_order(u: u128) -> (i64, i64) {
     ((u >> 64) as u64 as i64, u as u64 as i64)
 }
 
-fn kept(dim: usize, pos: [i32; 3]) -> Kept {
+fn kept(dim: DimensionKey, pos: [i32; 3]) -> Kept {
     FILTERS.with_borrow(|m| m.get(&(dim, pos)).cloned().unwrap_or_default())
 }
 
 /// The toolbox's id, made (`UUID.randomUUID`, from the level's random) for one that has none.
 fn uuid(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> u128 {
-    if let Some(u) = kept(lv.dim, pos).uuid {
+    let key = lv.level.dimension();
+    if let Some(u) = kept(key, pos).uuid {
         return u;
     }
 
@@ -184,17 +180,16 @@ fn uuid(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> u128 {
         .fold(0u128, |a, w| a << 32 | u128::from(*w as u32));
     u = (u & !(0xF << 76)) | (0x4 << 76);
     u = (u & !(0x3 << 62)) | (0x2 << 62);
-    let dim = lv.dim;
-    FILTERS.with_borrow_mut(|m| m.entry((dim, pos)).or_default().uuid = Some(u));
-    mark_pos_unsaved(dim, pos);
+    FILTERS.with_borrow_mut(|m| m.entry((key, pos)).or_default().uuid = Some(u));
+    mark_pos_unsaved(lv.dim, pos);
     u
 }
 
 /// The toolbox's compartment kinds: the kept ones, and for a compartment without one, the
 /// kind of what is in it now (`setStackInSlot` / `insertItem` setting the filter).
 fn filters(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Filters {
-    let dim = lv.dim;
-    let mut f = kept(dim, pos).filters;
+    let key = lv.level.dimension();
+    let mut f = kept(key, pos).filters;
     let slots = stored(lv, pos);
     let mut changed = false;
     for (c, filter) in f.iter_mut().enumerate() {
@@ -209,8 +204,8 @@ fn filters(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Filters {
         }
     }
     if changed {
-        FILTERS.with_borrow_mut(|m| m.entry((dim, pos)).or_default().filters = f.clone());
-        mark_pos_unsaved(dim, pos);
+        FILTERS.with_borrow_mut(|m| m.entry((key, pos)).or_default().filters = f.clone());
+        mark_pos_unsaved(lv.dim, pos);
     }
     f
 }
@@ -890,7 +885,7 @@ fn take_contents(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Compound {
         clear.push((i, None));
     }
     lv.set_slots(pos, &clear);
-    FILTERS.with_borrow_mut(|m| m.remove(&(lv.dim, pos)));
+    FILTERS.with_borrow_mut(|m| m.remove(&(lv.level.dimension(), pos)));
     let mut c = Compound::new();
     c.insert("Items".into(), Tag::List(items));
     c.insert("Compartments".into(), write_kinds(&f));
@@ -927,56 +922,6 @@ fn with_contents(stack: &mut ItemStack, contents: &Compound) {
     let _ = stack.apply_components(&patch);
 }
 
-/// Before a toolbox at `pos` is removed by a player, an explosion or the port's own break: its
-/// contents go with its drop.
-pub(crate) fn before_removal(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
-    if !is_toolbox(lv, pos) {
-        return;
-    }
-    let c = take_contents(lv, pos);
-    BREAKING.with_borrow_mut(|b| b.insert((lv.dim, pos), c));
-}
-
-/// The broken toolbox's drop takes what it held (`copy_components` of `TOOLBOX_INVENTORY`).
-pub(crate) fn block_drops(
-    level: &dyn mod_api::LevelHost,
-    event: &mut mod_api::BlockDropsEvent<'_>,
-) {
-    let Some(dim) = level_index(event.dimension.key().id()) else {
-        return;
-    };
-    let pos = [event.pos.x, event.pos.y, event.pos.z];
-    let Some(c) = BREAKING.with_borrow_mut(|b| b.remove(&(dim, pos))) else {
-        return;
-    };
-    let _ = level;
-    let items = TOOLBOX_ITEMS.get().map_or(&[][..], Vec::as_slice);
-    if let Some(drop) = event
-        .drops
-        .iter_mut()
-        .find(|d| items.contains(&d.stack.item()))
-    {
-        with_contents(&mut drop.stack, &c);
-    }
-}
-
-/// Drops collected rather than spawned (a drill on a moving structure): a toolbox among them
-/// takes what it held.
-pub(crate) fn attach(dim: usize, pos: [i32; 3], drops: &mut [ItemStack]) {
-    let Some(c) = BREAKING.with_borrow_mut(|b| b.remove(&(dim, pos))) else {
-        return;
-    };
-    let items = TOOLBOX_ITEMS.get().map_or(&[][..], Vec::as_slice);
-    if let Some(d) = drops.iter_mut().find(|d| items.contains(&d.item())) {
-        with_contents(d, &c);
-    }
-}
-
-/// Contents taken for a drop that never came (a creative break) are gone with the toolbox.
-pub(crate) fn level_tick() {
-    BREAKING.with_borrow_mut(HashMap::clear);
-}
-
 /// `ToolboxBlock.setPlacedBy`: a toolbox placed from an item with contents takes them.
 pub(super) fn placed(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &ItemStack) {
     let Some(Tag::Compound(custom)) = stack
@@ -986,7 +931,8 @@ pub(super) fn placed(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &ItemStack)
         return;
     };
     if let Some(u) = read_uuid(custom.get(&UUID_KEY.into())) {
-        FILTERS.with_borrow_mut(|m| m.entry((lv.dim, pos)).or_default().uuid = Some(u));
+        FILTERS
+            .with_borrow_mut(|m| m.entry((lv.level.dimension(), pos)).or_default().uuid = Some(u));
         mark_pos_unsaved(lv.dim, pos);
     }
     let Some(Tag::Compound(c)) = custom.get(&ITEM_KEY.into()) else {
@@ -1009,7 +955,7 @@ pub(super) fn placed(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &ItemStack)
     }
     lv.set_slots(pos, &changes);
     let f = read_kinds(c.get(&"Compartments".into()));
-    FILTERS.with_borrow_mut(|m| m.entry((lv.dim, pos)).or_default().filters = f);
+    FILTERS.with_borrow_mut(|m| m.entry((lv.level.dimension(), pos)).or_default().filters = f);
     mark_pos_unsaved(lv.dim, pos);
 }
 
@@ -1058,29 +1004,51 @@ pub(crate) fn left_click(host: &mut dyn ServerHost, pos: [i32; 3]) -> Flow {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Saving the compartment kinds with their column
+// Saving the compartment kinds with the block entity
 
-pub(crate) fn save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
-    let list: Vec<Tag> = FILTERS.with_borrow(|m| {
-        m.iter()
-            .filter(|((d, p), _)| *d == dim && [p[0] >> 4, p[2] >> 4] == chunk)
-            .map(|((_, p), k)| {
-                let mut c = Compound::new();
-                c.insert("Pos".into(), Tag::IntArray(p.to_vec()));
-                c.insert("Compartments".into(), write_kinds(&k.filters));
-                if let Some(u) = k.uuid {
-                    c.insert("UniqueId".into(), uuid_tag(u));
-                }
-                Tag::Compound(c)
-            })
-            .collect()
-    });
-    if !list.is_empty() {
-        data.insert("toolboxes".into(), Tag::List(list));
+pub(super) fn save_additional(event: &mut mod_api::BlockEntitySaveAdditionalEvent<'_>) {
+    let k = kept(event.level.dimension(), event.pos);
+    event
+        .tag
+        .insert("Compartments".into(), write_kinds(&k.filters));
+    if let Some(u) = k.uuid {
+        event.tag.insert("UniqueId".into(), uuid_tag(u));
     }
 }
 
-pub(crate) fn load(dim: usize, data: &Compound) {
+pub(super) fn load_additional(event: &mod_api::BlockEntityLoadAdditionalEvent<'_>) {
+    let compartments = event.tag.get(&"Compartments".into());
+    let id = read_uuid(event.tag.get(&"UniqueId".into()));
+    if compartments.is_some() || id.is_some() {
+        FILTERS.with_borrow_mut(|m| {
+            m.insert(
+                (event.level.dimension(), event.pos),
+                Kept {
+                    filters: read_kinds(compartments),
+                    uuid: id,
+                },
+            );
+        });
+    }
+}
+
+pub(super) fn loaded(host: &mut dyn ServerHost, entity: mod_api::BlockEntityRef) {
+    let (Some(level), Some(pos)) = (entity.level(&*host), entity.position(&*host)) else {
+        return;
+    };
+    let Some(dimension) = level.dimension().id(&*host) else {
+        return;
+    };
+    super::super::ensure_column(host, &dimension, [pos[0] >> 4, pos[2] >> 4]);
+    if let Some(mut lv) = ServerLevel::new(host, &dimension) {
+        uuid(&mut lv, pos);
+    }
+}
+
+/// Import metadata from older columns. The block entity's own save wins when present.
+pub(crate) fn load(lv: &ServerLevel<'_>, data: &Compound) {
+    let dim = lv.level.dimension();
+    DIMENSIONS.with_borrow_mut(|m| m.insert(lv.dim, dim));
     let Some(Tag::List(list)) = data.get(&"toolboxes".into()) else {
         return;
     };
@@ -1097,22 +1065,24 @@ pub(crate) fn load(dim: usize, data: &Compound) {
                 filters: read_kinds(c.get(&"Compartments".into())),
                 uuid: read_uuid(c.get(&"UniqueId".into())),
             };
-            m.insert((dim, [p[0], p[1], p[2]]), kept);
+            m.entry((dim, [p[0], p[1], p[2]])).or_insert(kept);
         }
     });
 }
 
 /// The toolbox at `pos` is gone: what was kept of it too.
 pub(crate) fn removed(dim: usize, pos: [i32; 3]) {
-    if FILTERS.with_borrow_mut(|m| m.remove(&(dim, pos))).is_some() {
-        mark_pos_unsaved(dim, pos);
+    if let Some(key) = DIMENSIONS.with_borrow(|m| m.get(&dim).copied()) {
+        FILTERS.with_borrow_mut(|m| m.remove(&(key, pos)));
     }
 }
 
 pub(crate) fn chunk_unload(dim: usize, chunk: [i32; 2]) {
-    FILTERS.with_borrow_mut(|m| {
-        m.retain(|(d, p), _| *d != dim || [p[0] >> 4, p[2] >> 4] != chunk);
-    });
+    if let Some(key) = DIMENSIONS.with_borrow(|m| m.get(&dim).copied()) {
+        FILTERS.with_borrow_mut(|m| {
+            m.retain(|(d, p), _| *d != key || [p[0] >> 4, p[2] >> 4] != chunk);
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1817,8 +1787,8 @@ impl mod_api::MenuPart for CompartmentRules {
         let level = player
             .and_then(|p| p.dimension(host))
             .map(|d| d.to_string())
-            .and_then(|d| Some((level_index(&d)?, host.level(&d)?)));
-        let Some((dim, level)) = level else {
+            .and_then(|d| host.level(&d));
+        let Some(level) = level else {
             return;
         };
         // By name, which the client's prediction can read too (it has no Create world).
@@ -1835,7 +1805,10 @@ impl mod_api::MenuPart for CompartmentRules {
             return;
         }
         let c = event.slot / STACKS_PER_COMPARTMENT;
-        let kept = FILTERS.with_borrow(|m| m.get(&(dim, pos)).and_then(|k| k.filters[c].clone()));
+        let kept = FILTERS.with_borrow(|m| {
+            m.get(&(level.dimension(), pos))
+                .and_then(|k| k.filters[c].clone())
+        });
         let kind = kept
             .and_then(|f| ItemStack::from_nbt(host, &f))
             .or_else(|| {
