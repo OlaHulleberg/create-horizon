@@ -341,14 +341,14 @@ impl Subsystem for Controller {
         client_tick(host);
     }
 
-    /// While the controller is in use, its six keys are its buttons and their presses are kept
-    /// from the game (no walking, jumping or sneaking).
+    /// While Create captures movement, the six key presses go to the controller or train,
+    /// not to the player (no walking, jumping or sneaking).
     fn key_mapping_pre(
         &self,
         _host: &mut dyn ClientHost,
         event: &mut KeyMappingPreEvent<'_>,
     ) -> Flow {
-        if ACTIVE.get() && event.pressed && MAPPINGS.contains(&event.mapping) {
+        if movement_captured() && event.pressed && MAPPINGS.contains(&event.mapping) {
             return Flow::Cancel;
         }
         Flow::Continue
@@ -458,9 +458,13 @@ pub(crate) fn movement_buttons(host: &dyn ClientHost) -> u8 {
         .fold(0, |buttons, (i, _)| buttons | 1 << i)
 }
 
+fn movement_captured() -> bool {
+    ACTIVE.get() || crate::glue::trains::controls::is_driving()
+}
+
 /// Clear logical movement during capture; on reset, hand the still-held keys back to the game.
 pub(crate) fn sync_movement_capture(host: &mut dyn ClientHost) {
-    let captured = ACTIVE.get() || crate::glue::trains::controls::is_driving();
+    let captured = movement_captured();
     for mapping in MAPPINGS {
         let down = !captured && host.mapping_physical_down(mapping) == Ok(Some(true));
         if let Err(error) = host.set_mapping_down(mapping, down)

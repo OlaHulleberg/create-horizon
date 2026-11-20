@@ -308,14 +308,22 @@ fn client_tick(host: &mut dyn ClientHost) {
     if !DRIVING.get() {
         return;
     }
-    if !host.playing() {
+    if host.local_player().is_none() {
         DRIVER.with_borrow_mut(|d| *d = Driver::default());
         DRIVING.set(false);
         return;
     }
+    if !host.playing() || host.is_key_down("key.keyboard.escape") {
+        // With the world still open, release held train keys and stop on the server
+        // before handing movement back to the game.
+        let packets = DRIVER.with_borrow_mut(|d| d.tick(0, true));
+        send_server(host, packets);
+        DRIVING.set(false);
+        sync_movement_capture(host);
+        return;
+    }
     let down = movement_buttons(host);
-    let escape = host.is_key_down("key.keyboard.escape");
-    let mut packets = DRIVER.with_borrow_mut(|d| d.tick(down, escape));
+    let mut packets = DRIVER.with_borrow_mut(|d| d.tick(down, false));
     // `TrainHUD.tick`: the bars chase the train, the prompt lives 30 ticks, and a throttle set
     // by the wheel goes to the server until it agrees.
     let width = PROMPT.with_borrow(|p| {
