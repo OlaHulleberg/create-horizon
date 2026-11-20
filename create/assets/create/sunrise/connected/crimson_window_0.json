@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:crimson_window"
+  ],
+  "sprites": [
+    "create:block/palettes/crimson_window"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/crimson_window_connected",
+  "table": "vertical"
+}

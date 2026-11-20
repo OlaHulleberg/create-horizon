@@ -7,6 +7,8 @@ const COUPLING: &str = "assets/create/models/block/minecart_coupling/";
 const CHAIN: &str = "assets/create/models/block/chain_conveyor/chain_";
 const BLOCK_ATLAS: &str = "assets/minecraft/atlases/blocks.json";
 const SHADER: &str = "assets/create/shaders/pipeline/textured.wgsl";
+const CONNECTED: &str = "assets/create/sunrise/connected/";
+const CONNECTED_TABLES: &str = "assets/create/sunrise/connected_tables/";
 
 pub(crate) const SPINNING_TOOLS: [(&str, &[&str]); 3] = [
     ("wrench", &["item", "gear"]),
@@ -29,7 +31,10 @@ pub(crate) fn spinner_definition(item: &str) -> Value {
 /// The asset paths this generator owns, including obsolete generated frames.
 pub(super) fn owns(path: &str) -> bool {
     matches!(path, BLOCK_ATLAS | SHADER)
-        || (path.ends_with(".json") && (path.starts_with(COUPLING) || path.starts_with(CHAIN)))
+        || (path.ends_with(".json")
+            && [COUPLING, CHAIN, CONNECTED, CONNECTED_TABLES]
+                .iter()
+                .any(|dir| path.starts_with(dir)))
 }
 
 /// The jar supplies the coupling and spinning tools' models and its 23 original steam sprites.
@@ -76,6 +81,20 @@ pub(super) fn assets(contains: impl Fn(&str) -> bool) -> Result<BTreeMap<String,
             "sprite": format!("create:block/special/{name}"),
         }));
     }
+    let (connected, sheets) = crate::ct::native_assets();
+    for sheet in sheets {
+        let path = format!(
+            "assets/create/textures/{}.png",
+            sheet.trim_start_matches("create:")
+        );
+        if !contains(&path) {
+            return Err(format!(
+                "{path}: missing connected texture sheet in the pinned jar"
+            ));
+        }
+        sources.push(json!({ "type": "minecraft:single", "resource": sheet }));
+    }
+    out.extend(connected);
     out.insert(
         BLOCK_ATLAS.into(),
         crate::pretty(&json!({ "sources": sources })),
@@ -153,8 +172,7 @@ mod tests {
         let generated = assets(|_| true).unwrap();
         let atlas: Value = serde_json::from_slice(&generated[BLOCK_ATLAS]).unwrap();
         let sources = atlas["sources"].as_array().unwrap();
-        assert_eq!(sources.len(), 23);
-        for (frame, source) in sources.iter().enumerate() {
+        for (frame, source) in sources[..23].iter().enumerate() {
             assert_eq!(
                 source,
                 &json!({
@@ -164,12 +182,33 @@ mod tests {
                 })
             );
         }
-        assert_eq!(generated.len(), 23);
         assert!(!generated.keys().any(|path| path.ends_with(".png")));
         assert!(
             assets(|path| !path.ends_with("/steam_jet_12.png"))
                 .unwrap_err()
                 .contains("steam_jet_12.png")
+        );
+    }
+
+    #[test]
+    fn the_registry_stitches_each_referenced_connected_sheet_once() {
+        let generated = assets(|_| true).unwrap();
+        let atlas: Value = serde_json::from_slice(&generated[BLOCK_ATLAS]).unwrap();
+        let sources = atlas["sources"].as_array().unwrap();
+        let (rules, sheets) = crate::ct::native_assets();
+        assert_eq!(sources.len(), 23 + sheets.len());
+        for sheet in sheets {
+            let expected = json!({ "type": "minecraft:single", "resource": sheet });
+            assert_eq!(sources.iter().filter(|s| **s == expected).count(), 1);
+        }
+        for (path, bytes) in rules {
+            assert!(owns(&path));
+            assert_eq!(generated[&path], bytes);
+        }
+        assert!(
+            assets(|path| !path.ends_with("/framed_glass_connected.png"))
+                .unwrap_err()
+                .contains("framed_glass_connected.png")
         );
     }
 

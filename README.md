@@ -62,7 +62,8 @@ reaching into belts and tanks. The full list, with what would fix each one: **[A
 > Create's textures, models and sounds are All Rights Reserved, so they are not in this repository. Your own
 > machine downloads Create's official jar from Modrinth, where the Create Team publishes it, and checks it
 > against the hash pinned here. This repository ships MIT data, asset references and the port's own assets,
-> never the jar or its protected assets. Local `prepare` is still needed for connected textures, tinted copies,
+> never the jar or its protected assets. Full framed glass and nonrandom windows connect using the original jar's
+> sheets by reference. Local `prepare` is still needed for the other connected textures, tinted copies,
 > model-derived placement ghosts and other assets not yet supplied by references.
 
 You need:

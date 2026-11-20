@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:cherry_window"
+  ],
+  "sprites": [
+    "create:block/palettes/cherry_window"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/cherry_window_connected",
+  "table": "vertical"
+}

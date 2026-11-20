@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:layered_calcite"
+  ],
+  "sprites": [
+    "create:block/palettes/stone_types/layered/calcite_cut_layered"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/stone_types/layered/calcite_cut_layered_connected",
+  "table": "horizontal_kryppers"
+}

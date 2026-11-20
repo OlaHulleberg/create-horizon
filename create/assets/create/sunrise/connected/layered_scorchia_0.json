@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:layered_scorchia"
+  ],
+  "sprites": [
+    "create:block/palettes/stone_types/layered/scorchia_cut_layered"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/stone_types/layered/scorchia_cut_layered_connected",
+  "table": "horizontal_kryppers"
+}

@@ -11,7 +11,7 @@ Read [README.md](README.md) and [docs/architecture.md](docs/architecture.md) fir
 - Never commit Create's All Rights Reserved assets, anything derived from them, the jar itself, binaries or
   `create/.horizon/`. Draw Create's models by id and sample its textures; never transcribe their numbers. The
   `committed_assets` test allows generated block states and models, verified item-model references, the port's
-  steam atlas declarations and shader, and Catnip's placement indicator in `create/assets`. It refuses copies of the jar's assets when the jar is at
+  atlas declarations, connected-texture rules and shader, and Catnip's placement indicator in `create/assets`. It refuses copies of the jar's assets when the jar is at
   hand. Details: [CONTRIBUTING.md](CONTRIBUTING.md).
 - Keep the repository MIT: never read or copy NeoForge source or data (LGPL), horizon-rust/horizon at or after
   `fb1135c6` (LGPL), or Sunrise's own code and tables.

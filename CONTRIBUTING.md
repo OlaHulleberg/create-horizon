@@ -18,7 +18,7 @@ remaining assets locally. Create's English UI text
 (`src/generated/resources/assets/create/lang/en_us.json`) is MIT and may be used.
 
 A test in `tools/create-data` (`committed_assets`) allows generated block states and models, verified item
-references, the port's steam-frame atlas declarations and shader, and Catnip's placement indicator under
+references, the port's connected-texture rules, atlas declarations and shader, and Catnip's placement indicator under
 `create/assets`. When Create's jar is at hand
 (`$CREATE_JAR` or the download cache), it refuses any file under `create/assets` or `create/data` that copies one of
 the jar's assets, byte for byte or as JSON. Code that copies a model's numbers is for review to catch.
@@ -36,7 +36,7 @@ Sunrise's own (read it only to learn the API).
 From `tools/create-data/`, run `cargo run --locked -- registry --out ../../create`. This downloads the pinned jar
 and the pinned `src/generated` tree metadata. The generator matches data and referenced item models to MIT source
 blobs and writes the converted data, omissions and plain item references. It also writes the reference-only
-coupling, steam-frame and animated tool declarations and the port-owned chain models and shader. `--check`
+coupling, steam-frame, animated tool and connected-texture declarations and the port-owned chain models and shader. `--check`
 compares without writing; `--audit <file>` records the evidence for each item definition accepted or refused.
 For an offline run, supply
 `--jar <pinned jar>` and `--tree <saved GitHub tree JSON>`. Keep the output separate from local `prepare` assets;

@@ -484,7 +484,7 @@ mod tests {
 }
 
 /// What the repository may hold under `create/assets`: generated block states, models, simple
-/// item definitions and atlas references, the port's shader and Catnip's MIT placement indicator. Everything under Create's `src/main/resources/assets/` is All Rights
+/// item definitions, connected-texture rules and atlas references, the port's shader and Catnip's MIT placement indicator. Everything under Create's `src/main/resources/assets/` is All Rights
 /// Reserved: textures, models, particles, sounds and translations of Create's come from the
 /// player's jar in `prepare`, never from a committed file. Where Create's jar is at hand
 /// (`$CREATE_JAR`, else the `prepare` download cache), no committed file under `create/assets`
@@ -523,6 +523,7 @@ mod committed_assets {
         let root = repo().join("create/assets");
         let mut all = Vec::new();
         files(&root, &root, &mut all);
+        let (generated_connections, _) = crate::ct::native_assets();
         let refused: Vec<&String> = all
             .iter()
             .filter(|f| {
@@ -538,6 +539,7 @@ mod committed_assets {
                 }
                 !(f.starts_with("create/blockstates/") && f.ends_with(".json")
                     || f.starts_with("create/models/block/") && f.ends_with(".json")
+                    || generated_connections.get(&format!("assets/{f}")).is_some_and(|expected| std::fs::read(root.join(f)).is_ok_and(|bytes| bytes == *expected))
                     || matches!(f.as_str(), "create/textures/gui/placement_indicator.png"
                         | "create/shaders/pipeline/textured.wgsl" | "minecraft/atlases/blocks.json"))
             })

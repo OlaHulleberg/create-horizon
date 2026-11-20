@@ -114,6 +114,182 @@
       "type": "minecraft:single",
       "resource": "create:particle/steam_jet_22",
       "sprite": "create:block/special/steam_jet_22"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/acacia_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/bamboo_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/birch_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/cherry_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/crimson_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/dark_oak_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/framed_glass_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/horizontal_framed_glass_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/industrial_iron_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/jungle_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/mangrove_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/oak_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/ornate_iron_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/spruce_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/cap/andesite_cut_cap_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/cap/asurine_cut_cap_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/cap/calcite_cut_cap_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/cap/crimsite_cut_cap_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/cap/deepslate_cut_cap_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/cap/diorite_cut_cap_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/cap/dripstone_cut_cap_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/cap/granite_cut_cap_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/cap/limestone_cut_cap_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/cap/ochrum_cut_cap_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/cap/scorchia_cut_cap_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/cap/scoria_cut_cap_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/cap/tuff_cut_cap_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/cap/veridium_cut_cap_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/layered/andesite_cut_layered_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/layered/asurine_cut_layered_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/layered/calcite_cut_layered_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/layered/crimsite_cut_layered_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/layered/deepslate_cut_layered_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/layered/diorite_cut_layered_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/layered/dripstone_cut_layered_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/layered/granite_cut_layered_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/layered/limestone_cut_layered_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/layered/ochrum_cut_layered_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/layered/scorchia_cut_layered_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/layered/scoria_cut_layered_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/layered/tuff_cut_layered_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/layered/veridium_cut_layered_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/vertical_framed_glass_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/warped_window_connected"
     }
   ]
 }
