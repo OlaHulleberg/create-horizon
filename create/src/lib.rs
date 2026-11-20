@@ -481,6 +481,7 @@ impl Hooks for Create {
         for s in SUBSYSTEMS {
             s.movement_input(host, event);
         }
+        glue::equipment::sample_movement(event);
     }
 
     fn data_pack_files(

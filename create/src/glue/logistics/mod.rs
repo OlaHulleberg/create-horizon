@@ -29,9 +29,9 @@
 //!   outline (content shapes select by entity class, not by riding). A belt's casing is drawn by
 //!   its block entity (its block is never a terrain model, `ENTITYBLOCK_ANIMATED` in every
 //!   state), as `BeltModel` would draw it.
-//! - Players riding a belt are pushed by their own client (`push_player`), other entities by
-//!   their motion (`EntityRef::set_velocity`): the mod API has no `Entity.move`. Up a slope they
-//!   climb the belt's stairs by stepping up, where Create moves them.
+//! - On flat belts, the local player gets a SELF move after travel. The existing velocity
+//!   pushes on slopes and for other entities stay until the mod API can express their contact
+//!   and movement (see `API_GAPS.md`).
 //! - Item vaults' connected textures (`ItemVaultCTBehaviour`) are the connected-texture rules
 //!   `create-data prepare` writes: a vault joins any vault block of its axis and size beside it,
 //!   not only its own vault's.
@@ -85,8 +85,9 @@ use create_engine::kinetics::{Axis, Dir};
 use create_engine::parts::StateInfo;
 use mod_api::{
     BlockPart, ClientHost, Compound, ContentsChangedEvent, Flow, Hand, HostBlockStates, HostSide,
-    ITEMS, InteractionResult, ItemAfterVerticalCollisionEvent, ModContainer, PlayerRef, Registrar,
-    RegistrationContext, ServerHost, Tag, UseItemOnEvent, UseWithoutItemEvent,
+    ITEMS, InteractionResult, ItemAfterVerticalCollisionEvent, ModContainer, PlayerRef,
+    PlayerTickPostEvent, Registrar, RegistrationContext, ServerHost, Tag, UseItemOnEvent,
+    UseWithoutItemEvent,
 };
 
 pub struct Logistics;
@@ -445,7 +446,13 @@ impl Subsystem for Logistics {
         client::tick_client_depots(host);
         client::tick_client_belts(host);
         client::tick_client_flaps();
-        belt::carry_local_player(host);
+        belt::carry_slopes(host);
+    }
+
+    fn player_tick(&self, host: HostSide, event: &mut PlayerTickPostEvent) {
+        if let HostSide::Client(host) = host {
+            belt::carry_local_player(host, event.player);
+        }
     }
 
     fn client_reset(&self) {
