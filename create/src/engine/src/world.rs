@@ -330,7 +330,7 @@ pub struct Dimension {
     pub deployers: HashMap<[i32; 3], crate::deployer::Deployer>,
     pub deploying: Vec<[i32; 3]>,
     deployer_saved: HashMap<[i32; 3], crate::deployer::Deployer>,
-    brass_saved: HashMap<[i32; 3], crate::tunnel::Brass>,
+    brass_saved: HashMap<[i32; 3], crate::tunnel::SavedBrass>,
     pub deployer_changes: Vec<[i32; 3]>,
     pub deployer_drops: Vec<([i32; 3], (String, u8))>,
     pub deployer_cracks: Vec<([i32; 3], [i32; 3])>,
@@ -1046,9 +1046,13 @@ impl CreateWorld {
             d.depot_work.push([pos[0], pos[1] - 2, pos[2]]);
         }
         if block == Block::BrassTunnel && !d.brass.contains_key(&pos) {
-            // `read`: what it held and its mode, saved with the column.
-            let b = d.brass_saved.remove(&pos).unwrap_or_default();
-            if b.stack.is_some() {
+            // `read`: persisted tunnel distribution and connection state, saved with the column.
+            let b = d
+                .brass_saved
+                .remove(&pos)
+                .map(crate::tunnel::Brass::from_saved)
+                .unwrap_or_default();
+            if b.is_running() {
                 d.brass_running.push(pos);
             }
             d.brass.insert(pos, b);
@@ -3984,27 +3988,30 @@ impl CreateWorld {
     pub fn load_brass(
         &mut self,
         dim: usize,
-        saved: impl Iterator<Item = ([i32; 3], crate::tunnel::Brass)>,
+        saved: impl Iterator<Item = ([i32; 3], crate::tunnel::SavedBrass)>,
     ) {
         self.dims[dim].brass_saved.extend(saved);
     }
 
-    /// The brass tunnels of a column holding a stack or not splitting (`stackToDistribute`,
-    /// `selectionMode`), to save.
+    /// The brass tunnels of a column whose persisted state differs from a fresh tunnel
+    /// (`BrassTunnelBlockEntity.write`: stack, entry side, progress, previous index, synced,
+    /// connections, and selection mode), to save.
     pub fn column_brass(
         &self,
         dim: usize,
         cx: i32,
         cz: i32,
-    ) -> Vec<([i32; 3], crate::tunnel::Brass)> {
+    ) -> Vec<([i32; 3], crate::tunnel::SavedBrass)> {
         let mut out: Vec<_> = self.dims[dim]
             .brass
             .iter()
-            .filter(|(p, b)| {
-                (p[0] >> 4, p[2] >> 4) == (cx, cz)
-                    && (b.stack.is_some() || b.mode != crate::tunnel::Mode::Split)
+            .filter_map(|(p, b)| {
+                if (p[0] >> 4, p[2] >> 4) != (cx, cz) {
+                    return None;
+                }
+                let saved = b.to_saved();
+                (!saved.is_default()).then_some((*p, saved))
             })
-            .map(|(p, b)| (*p, b.clone()))
             .collect();
         out.sort_by_key(|e| e.0);
         out

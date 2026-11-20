@@ -73,7 +73,7 @@ pub(super) fn carry_out(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, out: 
         out.insert(SIDES.into(), Tag::Compound(c));
     }
     if let Some(b) = brass {
-        out.insert(BRASS.into(), brass_to_nbt(&[([0; 3], b)]));
+        out.insert(BRASS.into(), brass_to_nbt(&[([0; 3], b.to_saved())]));
     }
 }
 

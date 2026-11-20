@@ -207,6 +207,44 @@ pub fn distributes(axis: Axis, shape: Shape, tunnel: impl Fn(Dir) -> bool) -> bo
         .any(|d| d.axis() != axis && !tunnel(d))
 }
 
+/// `BrassTunnelBlockEntity.write/read` (`:594-639`): the server state persisted across saves and
+/// contraption carriage: `SyncedOutput`, `ConnectedLeft`, `ConnectedRight`, `StackToDistribute`,
+/// `StackEnteredFrom`, `DistributionProgress`, `PreviousIndex`, and `SelectionMode`.
+/// `newItemArrived` is not saved (`BrassTunnelBlockEntity.java:78`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SavedBrass {
+    pub stack: Option<(String, u8)>,
+    pub entered_from: Option<Dir>,
+    pub progress: i32,
+    pub previous_output: usize,
+    pub mode: Mode,
+    pub synced: bool,
+    pub connected_left: bool,
+    pub connected_right: bool,
+}
+
+impl Default for SavedBrass {
+    fn default() -> SavedBrass {
+        SavedBrass {
+            stack: None,
+            entered_from: None,
+            progress: -1,
+            previous_output: 0,
+            mode: Mode::Split,
+            synced: false,
+            connected_left: false,
+            connected_right: false,
+        }
+    }
+}
+
+impl SavedBrass {
+    /// Whether this state matches a freshly placed tunnel and needs no saved entry.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// A brass tunnel's typed state: the stack it holds to hand out, the side it came in through,
 /// `distributionProgress` (-1 to look for outputs), whether it just arrived, and
 /// `previousOutputIndex`.
@@ -230,22 +268,45 @@ pub struct Brass {
 
 impl Default for Brass {
     fn default() -> Brass {
-        Brass {
-            stack: None,
-            entered_from: None,
-            progress: -1,
-            new_item: false,
-            previous_output: 0,
-            mode: Mode::Split,
-            stack_progress: None,
-            synced: false,
-            connected_left: false,
-            connected_right: false,
-        }
+        Brass::from_saved(SavedBrass::default())
     }
 }
 
 impl Brass {
+    /// Extracts the persisted state (`BrassTunnelBlockEntity.write`).
+    pub fn to_saved(&self) -> SavedBrass {
+        SavedBrass {
+            stack: self.stack.clone(),
+            entered_from: self.entered_from,
+            progress: self.progress,
+            previous_output: self.previous_output,
+            mode: self.mode,
+            synced: self.synced,
+            connected_left: self.connected_left,
+            connected_right: self.connected_right,
+        }
+    }
+
+    /// Restores a brass tunnel from its saved state (`BrassTunnelBlockEntity.read`).
+    pub fn from_saved(saved: SavedBrass) -> Brass {
+        Brass {
+            stack: saved.stack,
+            entered_from: saved.entered_from,
+            progress: saved.progress,
+            new_item: false,
+            previous_output: saved.previous_output,
+            mode: saved.mode,
+            stack_progress: None,
+            synced: saved.synced,
+            connected_left: saved.connected_left,
+            connected_right: saved.connected_right,
+        }
+    }
+
+    /// Whether the tunnel needs ticking (`stackToDistribute` held or `syncedOutputActive`).
+    pub fn is_running(&self) -> bool {
+        self.stack.is_some() || self.synced
+    }
     /// `BrassTunnelBlockEntity.canInsert`: whether an item entering from `side` is accepted by
     /// the tunnel's own filter and (when distributing) its held slot; false means `stuckAtTunnel`.
     pub fn can_insert(&self, distributing: bool, filter_passes: bool) -> bool {
@@ -806,5 +867,92 @@ mod tests {
         b.stack = None;
         b.synced = true;
         assert_eq!(b.handler_target(true), HandlerTarget::Busy);
+    }
+
+    #[test]
+    fn saved_brass_preserves_index_progress_and_synced_across_reload() {
+        // Observed in t8-brass-reload-index: a RoundRobin brass tunnel between two depots hands
+        // 1 iron ingot to depot 0 (previous_output becomes 1). After a save and reload, a gold
+        // ingot arrives and goes immediately to depot 1 instead of retrying full depot 0.
+        let mut b = Brass {
+            mode: Mode::RoundRobin,
+            stack: Some(("minecraft:iron_ingot".into(), 1)),
+            new_item: true,
+            ..Default::default()
+        };
+        let mut depot0_full = false;
+        let mut got = Vec::new();
+        let left = distribute(1, 2, b.previous_output, b.mode, 0, |t, n, sim| {
+            if t == 0 && depot0_full {
+                return Some(n);
+            }
+            if !sim {
+                if t == 0 {
+                    depot0_full = true;
+                }
+                got.push((t, n));
+            }
+            Some(0)
+        });
+        assert_eq!((left, got), (Some(0), vec![(0, 1)]));
+        b.stack = None;
+        b.progress = -1;
+        b.previous_output = (b.previous_output + 1) % 2;
+        assert_eq!(b.previous_output, 1);
+
+        let saved = b.to_saved();
+        assert!(!saved.is_default());
+        let mut reloaded = Brass::from_saved(saved);
+        assert_eq!(reloaded.previous_output, 1);
+        assert_eq!(reloaded.progress, -1);
+        assert!(!reloaded.new_item);
+
+        reloaded.stack = Some(("minecraft:gold_ingot".into(), 1));
+        reloaded.new_item = true;
+        assert_eq!(reloaded.begin_tick(true), BrassPhase::Gather);
+        reloaded.schedule_distribution();
+        assert_eq!(reloaded.progress, 2);
+        assert_eq!(reloaded.begin_tick(true), BrassPhase::Wait);
+        assert_eq!(reloaded.begin_tick(true), BrassPhase::Distribute);
+        let mut got2 = Vec::new();
+        let left2 = distribute(
+            1,
+            2,
+            reloaded.previous_output,
+            reloaded.mode,
+            0,
+            |t, n, sim| {
+                if t == 0 && depot0_full {
+                    return Some(n);
+                }
+                if !sim {
+                    got2.push((t, n));
+                }
+                Some(0)
+            },
+        );
+        assert_eq!((left2, got2), (Some(0), vec![(1, 1)]));
+
+        // Mid-countdown progress, synced, and connections also round-trip; running covers synced.
+        let mid = Brass {
+            stack: None,
+            entered_from: Some(Dir::North),
+            progress: 7,
+            new_item: true,
+            previous_output: 2,
+            mode: Mode::Synchronize,
+            stack_progress: None,
+            synced: true,
+            connected_left: true,
+            connected_right: false,
+        };
+        let restored = Brass::from_saved(mid.to_saved());
+        assert_eq!(restored.progress, 7);
+        assert_eq!(restored.previous_output, 2);
+        assert!(restored.synced);
+        assert!(restored.connected_left);
+        assert_eq!(restored.entered_from, Some(Dir::North));
+        assert!(!restored.new_item);
+        assert!(restored.is_running());
     }
 }
