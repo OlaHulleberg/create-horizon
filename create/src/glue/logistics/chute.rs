@@ -469,8 +469,8 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
         };
         // `handleDownwardOutput(true)`: past the middle the chute asks, by a simulated
         // `insertItemStacked` into the inventory below, whether it takes any of the stack;
-        // while none of it goes in, the stack waits at 0.5 (`ChuteBlockEntity.tick`).
-        let takes_something = |lv: &mut ServerLevel<'_>| {
+        // while it may not go on, the stack waits at 0.5 (`ChuteBlockEntity.tick`).
+        let inventory = container.then(|| {
             if belt_below {
                 let (id, progress) = super::belt::belt_name(&*lv.host, &stack);
                 let n = stack.count().min(u32::from(u8::MAX)) as u8;
@@ -479,20 +479,18 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
             } else {
                 items::insert_room(lv, below, Direction::Up, &stack).unwrap_or(0) > 0
             }
-        };
-        let can = if !active {
-            false
-        } else if container {
-            takes_something(lv)
-        } else if target_chute.is_some() {
-            target_takes(lv)
-        } else if diagonal {
-            false
-        } else {
-            let funnel_down = super::funnel::funnel_at(lv, below)
-                .is_some_and(|f| f.belt.is_none() && f.facing == Dir::Down);
-            !funnel_down && falls_through(lv, below, false)
-        };
+        });
+        let can = active
+            && create_engine::chute::can_output_down(
+                diagonal,
+                inventory,
+                target_chute.map(|_| target_takes(lv)),
+                || {
+                    let funnel_down = super::funnel::funnel_at(lv, below)
+                        .is_some_and(|f| f.belt.is_none() && f.facing == Dir::Down);
+                    !funnel_down && falls_through(lv, below, false)
+                },
+            );
         // Into the chute it leads into: at the top, or past the middle from a diagonal one.
         let into_target = |lv: &mut ServerLevel<'_>, stack: ItemStack| {
             set_chute_stack(lv, target, Some(stack));
