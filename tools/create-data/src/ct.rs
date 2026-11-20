@@ -367,6 +367,8 @@ enum Faces {
 enum Join {
     /// The same block.
     Block,
+    /// Any compatible casing appearance. The local rule only joins the same block.
+    Casing,
     /// The same block state: the same block in the same form (`state == other`, or the axis,
     /// shafts and sides Create compares).
     State,
@@ -493,14 +495,14 @@ fn plans() -> Vec<Plan> {
         plan(
             casing,
             &[casing],
-            Join::Block,
+            Join::Casing,
             vec![rule(casing, &sheet, Omni, Faces::All)],
         );
     }
     plan(
         "railway_casing",
         &["railway_casing"],
-        Join::Block,
+        Join::Casing,
         vec![
             rule(
                 "railway_casing_side",
@@ -899,7 +901,7 @@ fn properties(plan: &Plan, rule: &Rule, matched: &str, dir: &str) -> String {
             .collect::<Vec<_>>()
             .join(" "),
         match plan.join {
-            Join::Block => "block",
+            Join::Block | Join::Casing => "block",
             Join::State => "state",
         },
         (0..count)
@@ -1075,13 +1077,24 @@ fn tank_files(
     }
 }
 
-/// Full framed glass and the nonrandom windows use Create's block-and-cover test without
-/// custom appearance, geometry, or face orientation. Other behaviours keep their local rules.
+/// Directions expressible by a native table, without model-specific rotation or mirroring.
+fn native_faces(rule: &Rule) -> Option<&'static [&'static str]> {
+    if rule.by_texture || !rule.seams || !rule.random.is_empty() {
+        // Rules without the cover test here use either special geometry (panes) or their
+        // own orientation or join tests, not the ordinary full-block face lookup.
+        return None;
+    }
+    match rule.faces {
+        Faces::All => Some(&["all"]),
+        Faces::Sides => Some(&["sides"]),
+        Faces::Ends => Some(&["up", "down"]),
+        Faces::Some(_) => None,
+    }
+}
+
+/// All rules of a plan must fit: do not register competing native and local rules.
 fn native(plan: &Plan) -> bool {
-    matches!(
-        plan.name.as_str(),
-        "framed_glass" | "horizontal_framed_glass" | "vertical_framed_glass"
-    ) || (plan.name.ends_with("_window") && plan.name != "weathered_iron_window")
+    plan.join == Join::Block && plan.rules.iter().all(|rule| native_faces(rule).is_some())
 }
 
 /// Generated Sunrise rules and the sprites they require. The outcomes use exactly the
@@ -1091,6 +1104,9 @@ pub(super) fn native_assets() -> (BTreeMap<String, Vec<u8>>, BTreeSet<String>) {
     let mut sprites = BTreeSet::new();
     for plan in plans().into_iter().filter(native) {
         for (i, rule) in plan.rules.into_iter().enumerate() {
+            let Some(faces) = native_faces(&rule) else {
+                continue;
+            };
             let sheet = format!("create:block/{}", rule.sheet);
             sprites.insert(sheet.clone());
             let table = rule.ty.name();
@@ -1134,17 +1150,11 @@ pub(super) fn native_assets() -> (BTreeMap<String, Vec<u8>>, BTreeSet<String>) {
                         "tiles": tiles,
                     }))
                 });
-            let faces: &[&str] = match rule.faces {
-                Faces::All => &["all"],
-                Faces::Sides => &["sides"],
-                Faces::Ends => &["up", "down"],
-                Faces::Some(_) => unreachable!("glass cube rules use all faces, sides or ends"),
-            };
             files.insert(
                 format!("assets/create/sunrise/connected/{}_{i}.json", plan.name),
                 crate::pretty(&json!({
                     "method": "table",
-                    "blocks": [format!("create:{}", plan.name)],
+                    "blocks": plan.blocks.iter().map(|b| format!("create:{b}")).collect::<Vec<_>>(),
                     "sprites": [rule.original],
                     "faces": faces,
                     "connect": "block",

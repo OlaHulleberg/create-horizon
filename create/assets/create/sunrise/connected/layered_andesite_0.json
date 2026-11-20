@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:layered_andesite"
+  ],
+  "sprites": [
+    "create:block/palettes/stone_types/layered/andesite_cut_layered"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/stone_types/layered/andesite_cut_layered_connected",
+  "table": "horizontal_kryppers"
+}

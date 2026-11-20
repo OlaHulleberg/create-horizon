@@ -1,0 +1,16 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:layered_scoria"
+  ],
+  "sprites": [
+    "create:block/palettes/stone_types/cap/scoria_cut_cap"
+  ],
+  "faces": [
+    "up",
+    "down"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/stone_types/cap/scoria_cut_cap_connected",
+  "table": "omni"
+}

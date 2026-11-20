@@ -1,0 +1,16 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:layered_ochrum"
+  ],
+  "sprites": [
+    "create:block/palettes/stone_types/cap/ochrum_cut_cap"
+  ],
+  "faces": [
+    "up",
+    "down"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/stone_types/cap/ochrum_cut_cap_connected",
+  "table": "omni"
+}

@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:layered_tuff"
+  ],
+  "sprites": [
+    "create:block/palettes/stone_types/layered/tuff_cut_layered"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/stone_types/layered/tuff_cut_layered_connected",
+  "table": "horizontal_kryppers"
+}
