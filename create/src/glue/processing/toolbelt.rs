@@ -32,7 +32,8 @@ use super::super::server::ServerLevel;
 use create_engine::toolbox::{self as tb, STACKS_PER_COMPARTMENT};
 use create_engine::{Block, dye};
 use mod_api::{
-    ClientHost, Compound, DrawContext, Flow, ItemStack, PlayerRef, ServerHost, Tag, Text,
+    BlockEntityRef, ClientHost, Compound, DrawContext, Flow, Host, HostTransaction, ItemStack,
+    PlayerRef, ServerHost, Tag, Text,
 };
 use std::cell::RefCell;
 
@@ -153,35 +154,53 @@ fn uuid(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> u128 {
     u
 }
 
-/// The toolbox's compartment kinds: the kept ones, and for a compartment without one, the
-/// kind of what is in it now (`setStackInSlot` / `insertItem` setting the filter).
-fn filters(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Filters {
-    let entity = lv.host.block_entity(lv.level, pos);
-    let data = entity.and_then(|entity| entity.data(&*lv.host));
-    let mut f = read_kinds(
-        data.as_ref()
+fn saved_kinds(host: &dyn Host, entity: BlockEntityRef) -> Filters {
+    read_kinds(
+        entity
+            .data(host)
+            .as_ref()
             .and_then(|data| data.get(&"Compartments".into())),
-    );
-    let slots = stored(lv, pos);
+    )
+}
+
+/// Fill only unset kinds. Emptying a compartment does not clear its kind.
+fn seed_kinds(host: &dyn Host, kinds: &mut Filters, slots: &[Option<ItemStack>]) -> bool {
     let mut changed = false;
-    for (c, filter) in f.iter_mut().enumerate() {
-        if filter.is_some() {
-            continue;
-        }
-        let first = (0..STACKS_PER_COMPARTMENT)
-            .find_map(|i| slots[c * STACKS_PER_COMPARTMENT + i].as_ref());
-        if let Some(s) = first {
-            *filter = kind_of(&*lv.host, s);
+    for (filter, stacks) in kinds.iter_mut().zip(slots.chunks(STACKS_PER_COMPARTMENT)) {
+        if filter.is_none()
+            && let Some(first) = stacks.iter().flatten().next()
+        {
+            *filter = kind_of(host, first);
             changed |= filter.is_some();
         }
     }
-    if changed && let Some(entity) = entity {
+    changed
+}
+
+/// Use occupied slots as a read-only fallback for writes the pin does not notify us about.
+fn filters(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Filters {
+    let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+        return Filters::default();
+    };
+    let mut kinds = saved_kinds(&*lv.host, entity);
+    seed_kinds(&*lv.host, &mut kinds, &stored(lv, pos));
+    kinds
+}
+
+/// A backing-container notification tells us the slots are already written (e.g. a menu click).
+/// Raw storage writes do not all send this notice; toolbox-owned writes seed their kind directly.
+pub(crate) fn contents_changed(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+        return;
+    };
+    let mut kinds = saved_kinds(&*lv.host, entity);
+    // `merge_data` can notify again; the saved kinds are already present by then.
+    if seed_kinds(&*lv.host, &mut kinds, &stored(lv, pos)) {
         let _ = entity.merge_data(
             &mut *lv.host,
-            Compound::from([("Compartments".into(), write_kinds(&f))]),
+            Compound::from([("Compartments".into(), write_kinds(&kinds))]),
         );
     }
-    f
 }
 
 fn filter_stack(lv: &ServerLevel<'_>, f: &Option<Compound>) -> Option<ItemStack> {
@@ -194,34 +213,50 @@ fn max_stack(lv: &ServerLevel<'_>, s: &ItemStack) -> u32 {
 
 /// `settle`: a compartment's stacks packed to the front, full ones first.
 fn settle(lv: &mut ServerLevel<'_>, pos: [i32; 3], c: usize, mut stacks: Vec<Option<ItemStack>>) {
-    let Some(sample) = stacks.iter().flatten().next().cloned() else {
-        let changes: Vec<(usize, Option<ItemStack>)> = (0..STACKS_PER_COMPARTMENT)
-            .map(|i| (c * STACKS_PER_COMPARTMENT + i, None))
-            .collect();
-        lv.set_slots(pos, &changes);
+    let Some(entity) = lv.host.block_entity(lv.level, pos) else {
         return;
     };
-    let max = max_stack(lv, &sample);
-    if max == 1 {
-        stacks.sort_by_key(Option::is_none);
-    } else {
-        let mut total: u32 = stacks.iter().flatten().map(ItemStack::count).sum();
-        for s in stacks.iter_mut() {
-            let n = total.min(max);
-            total -= n;
-            *s = (n > 0).then(|| {
-                let mut x = sample.clone();
-                let _ = x.set_count(n);
-                x
-            });
+    let sample = stacks.iter().flatten().next().cloned();
+    if let Some(sample) = &sample {
+        let max = max_stack(lv, sample);
+        if max == 1 {
+            stacks.sort_by_key(Option::is_none);
+        } else {
+            let mut total: u32 = stacks.iter().flatten().map(ItemStack::count).sum();
+            for s in &mut stacks {
+                let n = total.min(max);
+                total -= n;
+                *s = super::super::packages::body::with_count(sample, n);
+            }
         }
     }
-    let changes: Vec<(usize, Option<ItemStack>)> = stacks
-        .into_iter()
-        .enumerate()
-        .map(|(i, s)| (c * STACKS_PER_COMPARTMENT + i, s))
-        .collect();
-    lv.set_slots(pos, &changes);
+    let first = c * STACKS_PER_COMPARTMENT;
+    let mut kinds = saved_kinds(&*lv.host, entity);
+    let seed = kinds[c].is_none()
+        && sample
+            // When a transfer empties previously unnotified slots, retain their kind.
+            .or_else(|| (first..first + STACKS_PER_COMPARTMENT).find_map(|i| lv.slot(pos, i)))
+            .and_then(|stack| kind_of(&*lv.host, &stack))
+            .is_some_and(|kind| {
+                kinds[c] = Some(kind);
+                true
+            });
+    let _ = lv.host.transaction(|host, tx| {
+        for (i, stack) in stacks.into_iter().enumerate() {
+            entity
+                .set_item_slot(host, tx, (first + i) as u32, stack)
+                .map_err(|_| ())?;
+        }
+        if seed {
+            entity
+                .merge_data(
+                    host,
+                    Compound::from([("Compartments".into(), write_kinds(&kinds))]),
+                )
+                .map_err(|_| ())?;
+        }
+        Ok::<(), ()>(())
+    });
 }
 
 fn compartment(lv: &ServerLevel<'_>, pos: [i32; 3], c: usize) -> Vec<Option<ItemStack>> {
@@ -462,7 +497,7 @@ fn equip(
         return;
     }
     let slot = slot as usize;
-    let f = filters(&mut lv, pos);
+    let f = filters(&lv, pos);
     if let Some(stack) = hotbar_stack(&*lv.host, player, hotbar)
         && filter_stack(&lv, &f[slot]).is_none_or(|k| !same_kind(&*lv.host, &k, &stack))
     {
@@ -588,7 +623,7 @@ pub(crate) fn player_tick(host: &mut dyn ServerHost, player: PlayerRef) {
             drop.push(hotbar);
             continue;
         }
-        let f = filters(&mut lv, pos);
+        let f = filters(&lv, pos);
         let kind = filter_stack(&lv, &f[slot]);
         let Some(kind) = kind else {
             drop.push(hotbar);
@@ -1751,4 +1786,57 @@ pub(crate) fn register(r: &mut dyn mod_api::Registrar) {
 /// Whether `state` is a toolbox (for the glue's block hooks).
 pub(crate) fn toolbox_block(b: Block) -> bool {
     dye::is_toolbox(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mod_api::{Identifier, ItemResource, STORAGE, prelude::ItemsHost, testing::FakeHost};
+
+    #[test]
+    fn a_notified_storage_insert_sets_a_kind_that_survives_emptying() {
+        let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+        let mut host = FakeHost::new();
+        let id = Identifier::parse("minecraft:diamond").unwrap();
+        host.registries.resolve_items([id.clone()]).unwrap();
+        let diamond = ItemStack::of(host.item_key(&id).unwrap());
+        let resource = ItemResource::of(&diamond);
+        let pos = [0, 0, 0];
+        host.level.block_entity(pos).with_items(tb::STORED);
+        let level = host.level.level();
+        let storage = level.capability(&mut host, &STORAGE, pos, None).unwrap();
+        let mut kinds = Filters::default();
+        host.transaction(|host, tx| {
+            assert_eq!(storage.insert(host, tx, &resource, 7), 7);
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+        let slots = |host: &FakeHost| {
+            host.level
+                .block_entity_at(pos)
+                .unwrap()
+                .items
+                .as_ref()
+                .unwrap()
+                .slots
+                .clone()
+        };
+        // The pin's notification gives the post-write slots, not the original offer.
+        assert!(seed_kinds(&host, &mut kinds, &slots(&host)));
+        assert_eq!(kinds[0], diamond.to_nbt(&host));
+        assert!(kinds[0].is_some());
+        assert!(!seed_kinds(&host, &mut kinds, &slots(&host)));
+
+        host.transaction(|host, tx| {
+            assert_eq!(storage.extract(host, tx, &resource, 7), 7);
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+        assert!(slots(&host).iter().all(Option::is_none));
+        assert!(!seed_kinds(&host, &mut kinds, &slots(&host)));
+        assert_eq!(
+            read_kinds(Some(&write_kinds(&kinds)))[0],
+            diamond.to_nbt(&host)
+        );
+    }
 }
