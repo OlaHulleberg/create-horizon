@@ -794,6 +794,12 @@ pub fn tick_transport(lv: &mut ServerLevel<'_>) {
                 super::funnel::tick_funnel(lv, p);
                 continue;
             }
+            // A weighted ejector is the depot behaviour it extends, ticked with its block
+            // entity by this walk.
+            create_engine::world::TransportTick::Ejector(p) => {
+                super::arms::tick_ejector(lv, p);
+                continue;
+            }
             create_engine::world::TransportTick::Belt(c) => c,
         };
         let Some((seg, length, mut belt_items)) = with_world(|w| {

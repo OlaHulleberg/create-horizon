@@ -160,6 +160,25 @@ impl Held {
     }
 }
 
+/// `DepotBehaviour.getRemainingSpace` with merging enabled (an ejector's depot), and how
+/// much of an incoming stack that lets `insert` take: the stack-size getter's limit
+/// (`max_stack`, with 0 standing for 64, as the ejector's scroll value formats it) capped by
+/// the held stack's own stack size — `ItemStack.EMPTY.getMaxStackSize()`, 1, with nothing
+/// held (`held_max` is None) — less what already lies on the depot (`getPresentStackSize`:
+/// the held stack and the output buffer).
+///
+/// ```java
+/// int fromGetter =
+///     Math.min(maxStackSize.get() == 0 ? 64 : maxStackSize.get(), getHeldItemStack().getMaxStackSize());
+/// return (fromGetter) - cumulativeStackSize;
+/// ```
+pub fn merge_take(max_stack: u8, held_max: Option<u8>, present: u32, count: u8) -> u8 {
+    let from_getter = i32::from(if max_stack == 0 { 64 } else { max_stack })
+        .min(i32::from(held_max.unwrap_or(1)));
+    let room = from_getter.saturating_sub(present as i32);
+    count.min(room.max(0) as u8)
+}
+
 /// `DepotRenderer.renderItem`'s copies of a stack: one more for each two doublings of its count.
 pub fn copies(count: u32) -> u32 {
     // Mth.log2: floor(log2(count)).
@@ -360,6 +379,26 @@ mod tests {
         // new java.util.Random(1).nextFloat() and new Random(0).nextFloat(), from the JDK.
         assert_eq!(JavaRandom::new(1).next_float(), 0.7308782);
         assert_eq!(JavaRandom::new(0).next_float(), 0.73096776);
+    }
+
+    #[test]
+    fn an_empty_merging_depot_takes_one_item_of_a_landing_stack() {
+        // e1-ejector-empty-takes-one: a 12-stack lands on an empty, charged ejector. Java
+        // keeps 11 in the entity: with no held stack, `getHeldItemStack().getMaxStackSize()`
+        // is `ItemStack.EMPTY`'s 1, so however much the value board allows, only one goes on.
+        assert_eq!(merge_take(0, None, 0, 12), 1);
+        assert_eq!(merge_take(64, None, 0, 12), 1);
+        // With one iron already held (its own stack size 64), the scroll value 16 leaves
+        // room for 15 more; 12 all go on.
+        assert_eq!(merge_take(16, Some(64), 1, 12), 12);
+        // Five held of the same 16: 11 fit, the 12th stays in the entity.
+        assert_eq!(merge_take(16, Some(64), 5, 12), 11);
+        // The value 0 stands for 64: four more join 60 held.
+        assert_eq!(merge_take(0, Some(64), 60, 12), 4);
+        // Full already: none.
+        assert_eq!(merge_take(0, Some(64), 64, 12), 0);
+        // What it holds also counts the output buffer (`getPresentStackSize`).
+        assert_eq!(merge_take(16, Some(64), 16, 12), 0);
     }
 
     #[test]
