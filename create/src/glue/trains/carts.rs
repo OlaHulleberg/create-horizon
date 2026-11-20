@@ -3,11 +3,11 @@
 //! (`MountedContraption`, `OrientedContraptionEntity`), their items (`MinecartContraptionItem`)
 //! and couplings (`MinecartCouplingItem`, `CouplingHandler`, `CouplingPhysics`,
 //! `MinecartController`). The rules are `create_engine::cart`'s, `mounted`'s and `coupling`'s.
-//! A contraption is typed data keyed by its cart's UUID, followed each level tick through the
-//! cart's entity, and kept in the overworld's level attachment (`create:minecart_contraptions`)
-//! with the couplings and the
-//! assemblers' modes. Nothing runs in a level tick while no cart carries a contraption, no
-//! carts are coupled and no assembler has a cart to handle.
+//! A saved general entity rides the cart, so the game applies its occupied-cart rules. The
+//! carried blocks and actors are still keyed by the cart's UUID in the overworld's level
+//! attachment (`create:minecart_contraptions`), with the couplings and assembler modes. Nothing
+//! runs in a level tick while no cart carries a contraption, no carts are coupled and no
+//! assembler has a cart to handle.
 //!
 //! A contraption's chests, barrels, vaults and toolboxes ride with their items (the
 //! contraptions subsystem's mounted storage), which a furnace cart burns coal from, and its glue
@@ -17,10 +17,6 @@
 //!
 //! Left out, as the mod API can't do it (beyond drawing, see the parent module):
 //!
-//! - A carrying cart counting as ridden: its
-//!   rails slow it as an empty cart's, which `rail_drag` gives back each tick, but it still moves
-//!   its full step where a ridden one moves three quarters (`moveMinecartOnRail`). Needs
-//!   `MinecartRef::set_carrying`.
 //! - The hard coupling step moving a cart off its rail with collisions
 //!   (`Entity.move(MoverType.SELF)`): such a cart only has its motion
 //!   damped. Needs `EntityRef::move_by` (API_GAPS.md).
@@ -46,12 +42,15 @@ use create_engine::kinetics::{Axis, Dir};
 use create_engine::mounted::{self, Mode, Mounted, RailShape};
 use mod_api::{
     AttachmentCodec, AttachmentType, BlockPart, BlockState, BreakBlockEvent, ClientHost, Compound,
-    EntityInteractEvent, EntityMountEvent, EntityRef, EntityUuid, Flow, Holder, Host, HostSide,
-    InteractionResult, ItemPart, ItemStack, MinecartPassEvent, Registrar, RegistrationContext,
-    RenderLevelStageEvent, ServerHost, SoundSource, Tag, Text, UseItemOnEvent, UseOnEvent,
+    EntityInteractEvent, EntityRef, EntitySpawn, EntityUuid, Flow, GeneralEntityCategory,
+    GeneralSavePolicy, Holder, Host, HostSide, InteractionResult, ItemPart, ItemStack,
+    MinecartPassEvent, Registrar, RegistrationContext, RemovalReason, RenderLevelStageEvent,
+    ServerHost, SoundSource, SpawnBody, Tag, Text, UseItemOnEvent, UseOnEvent,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
+
+const CONTRAPTION: &str = "create:contraption";
 
 /// The overworld's saved contraptions, couplings and assembler modes.
 static SAVED: AttachmentType<Compound> = AttachmentType {
@@ -93,7 +92,7 @@ impl Cart {
             velocity: entity.velocity(&*host).unwrap_or_default(),
             push: minecart.push(&*host).unwrap_or_default(),
             fuel: minecart.fuel(&*host).unwrap_or(0),
-            ridden: entity.passengers(&*host).is_some_and(|p| !p.is_empty()),
+            ridden: entity.is_vehicle(&*host) == Some(true),
             kind,
         })
     }
@@ -115,6 +114,8 @@ struct OnCart {
     dim: usize,
     m: Mounted,
     coupled: bool,
+    /// The oriented contraption's entity UUID. Absent in saves before it rode the cart.
+    rider: Option<u128>,
     /// Its storage blocks' items (`MountedStorageManager`): each block's offset and slots.
     storage: Vec<([i32; 3], Vec<Option<ItemStack>>)>,
     /// The glue that held it (`Contraption.superglue`), in offsets from its anchor.
@@ -319,6 +320,22 @@ static DUST: std::sync::OnceLock<mod_api::ParticleKey> = std::sync::OnceLock::ne
 
 impl Subsystem for Carts {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
+        if let Err(e) = r.declare_general_entity(
+            "contraption",
+            GeneralEntityCategory::Misc,
+            1.0,
+            1.0,
+            None,
+            GeneralSavePolicy::Save,
+            false,
+            false,
+            5,
+            3,
+            1,
+            &[],
+        ) {
+            crate::create_log!("[create] cart contraption type was refused: {e:?}");
+        }
         let _ = END_ROD.set(r.particle_key("minecraft:end_rod"));
         let _ = DUST.set(r.particle_key("minecraft:dust"));
         r.block_part(states::key(Block::CartAssembler), AssemblerBlock);
@@ -440,24 +457,6 @@ impl Subsystem for Carts {
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         level_tick(lv);
-    }
-
-    /// A player getting on a cart that carries a contraption is kept off (its seat is the
-    /// contraption's: `Entity.canAddPassenger`).
-    fn entity_mount(&self, _host: &mut dyn ServerHost, event: &mut EntityMountEvent<'_>) -> Flow {
-        if !event.mounting {
-            return Flow::Continue;
-        }
-        let carrying = CARTS.with_borrow(|c| {
-            c.known
-                .iter()
-                .any(|(u, k)| k.entity.id() == event.vehicle && c.mounted.contains_key(u))
-        });
-        if carrying {
-            event.cancelled = true;
-            return Flow::Cancel;
-        }
-        Flow::Continue
     }
 
     fn entity_interact(
@@ -1130,6 +1129,13 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
             *s = super::car_id(a);
         }
     }
+    let Some(air) = super::default_state(&*lv.host, "minecraft:air") else {
+        return;
+    };
+    // A refused join or mount must not take any blocks or their contents out of the world.
+    let Some(rider) = board_contraption(lv, nc) else {
+        return;
+    };
     let mut initial = cart::horizontal_direction(axis, backwards);
     if let Some((other, p)) = &connected {
         let centre = |b: [i32; 3]| {
@@ -1148,6 +1154,7 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
                 .is_ok()
         });
         if !coupled {
+            remove_contraption(lv, Some(rider));
             return;
         }
         nc.entity.teleport_to(lv.host, here, None);
@@ -1181,9 +1188,6 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
     // What their block entities and the engine keep for its other blocks rides too.
     let held = crate::glue::contraptions::actors::carry_held(lv, held_key(nc.uuid), pos, &blocks);
     // `removeBlocksFromWorld`: anchors stay.
-    let Some(air) = super::default_state(&*lv.host, "minecraft:air") else {
-        return;
-    };
     for (o, s) in blocks.iter().filter(|(o, _)| *o != [0, 0, 0]) {
         if is_anchor(*s) {
             continue;
@@ -1226,6 +1230,7 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
                 dim,
                 m,
                 coupled,
+                rider: Some(rider),
                 storage,
                 glue,
                 held,
@@ -1285,6 +1290,30 @@ fn disassemble_at(lv: &mut ServerLevel<'_>, axis: Axis, backwards: bool, nc: &Ca
     }
 }
 
+/// `OrientedContraptionEntity.startRiding`: take an actual passenger slot before moving blocks
+/// or spending a contraption item. The game owns the rider's lifetime across chunk reloads.
+fn board_contraption(lv: &mut ServerLevel<'_>, cart: &Cart) -> Option<u128> {
+    let rider = lv.level.spawn_entity(
+        lv.host,
+        CONTRAPTION,
+        cart.pos,
+        &EntitySpawn::new(SpawnBody::General),
+    )?;
+    if let Some(uuid) = rider.uuid(lv.host)
+        && rider.start_riding(lv.host, cart.entity, false).is_ok()
+    {
+        return Some(uuid);
+    }
+    rider.remove(lv.host, RemovalReason::Discarded);
+    None
+}
+
+fn remove_contraption(lv: &mut ServerLevel<'_>, rider: Option<u128>) {
+    if let Some(entity) = rider.and_then(|id| lv.host.entity_by_uuid(EntityUuid(id))) {
+        entity.remove(lv.host, RemovalReason::Discarded);
+    }
+}
+
 /// A contraption leaves its cart (`stopRiding` → `disassemble`): it goes back into the world
 /// where the cart is, and a coupling the contraption made goes.
 fn let_go(lv: &mut ServerLevel<'_>, uuid: u128, at: [f64; 3], on: OnCart) {
@@ -1305,6 +1334,7 @@ fn let_go(lv: &mut ServerLevel<'_>, uuid: u128, at: [f64; 3], on: OnCart) {
 /// place is taken drops. Anchors are not placed (`customBlockPlacement`). Storage blocks take
 /// back what they carried (dropped where none went back).
 fn put_back(lv: &mut ServerLevel<'_>, at: [f64; 3], on: OnCart) {
+    remove_contraption(lv, on.rider);
     let m = &on.m;
     let origin = [
         at[0].floor() as i32,
@@ -1540,6 +1570,7 @@ fn contraption_of(host: &dyn Host, c: &Compound, dim: usize) -> Option<OnCart> {
         dim,
         m,
         coupled,
+        rider: None,
         storage,
         glue,
         held: get(c, "Held").cloned(),
@@ -1572,7 +1603,7 @@ impl ItemPart for ContraptionItem {
         };
         let player = host.player(event.player)?;
         let dimension = player.level(&*host)?.dimension().id(&*host)?;
-        let lv = ServerLevel::new(host, &dimension)?;
+        let mut lv = ServerLevel::new(host, &dimension)?;
         let item = event.stack.item().id(&*lv.host);
         let kind = cart::item_cart(&item)?;
         let Some((shape, ..)) = rail_at(&lv, event.pos) else {
@@ -1590,14 +1621,21 @@ impl ItemPart for ContraptionItem {
             ]),
         );
         let id = lv.host.summon(&dimension, kind, at, nbt)?;
-        let data = item_contraption(event.stack);
-        use_one(lv.host, player);
         let entity = lv.host.entity(id)?;
         let nc = Cart::read(lv.host, entity)?;
         let dim = lv.dim;
-        let Some(mut on) = data.and_then(|c| contraption_of(&*lv.host, &c, dim)) else {
+        let Some(mut on) =
+            item_contraption(event.stack).and_then(|c| contraption_of(&*lv.host, &c, dim))
+        else {
+            use_one(lv.host, player);
             return Some(InteractionResult::SuccessServer);
         };
+        let Some(rider) = board_contraption(&mut lv, &nc) else {
+            entity.discard(lv.host);
+            return Some(InteractionResult::Fail);
+        };
+        use_one(lv.host, player);
+        on.rider = Some(rider);
         let m = on.m;
         on.m = Mounted::placed_at(m.blocks, m.mode, m.initial, mounted::y_rot(facing));
         on.coupled = false;
@@ -1679,6 +1717,7 @@ fn interact_entity(
         c.known.remove(&nc.uuid);
         c.dirty = true;
     });
+    remove_contraption(&mut lv, on.rider);
     nc.entity.discard(lv.host);
     Some(InteractionResult::SuccessServer)
 }
@@ -1814,7 +1853,6 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     }
     let mut carts = HashMap::new();
     if !CARTS.with_borrow(State::idle) {
-        rail_drag(lv);
         tick_stations(lv);
         let tick = lv.game_time();
         if tick % 20 == 0 {
@@ -1851,34 +1889,6 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     });
     if overworld && CARTS.with_borrow(|c| c.dirty) {
         save(lv);
-    }
-}
-
-/// `OldMinecartBehavior.applyNaturalSlowdown`: a cart carrying something slows by 0.997 a tick
-/// on its rails, an empty one by 0.96. A carrying cart can't be marked as ridden (see the
-/// module's doc), so its rails slowed it as an empty one this tick: the rest of its motion is
-/// given back.
-fn rail_drag(lv: &mut ServerLevel<'_>) {
-    let dim = lv.dim;
-    let carrying: Vec<EntityRef> = CARTS.with_borrow(|c| {
-        c.mounted
-            .iter()
-            .filter(|(_, on)| on.dim == dim)
-            .filter_map(|(u, _)| c.known.get(u).map(|k| k.entity))
-            .collect()
-    });
-    let k = 0.997 / 0.96;
-    for e in carrying {
-        if e.level(&*lv.host) != Some(lv.level) {
-            continue;
-        }
-        // `isOnRails` answers false here: the rail under it as its tick finds it.
-        let on_rails = e
-            .position(&*lv.host)
-            .is_some_and(|p| rail_under(lv, p).is_some());
-        if let (true, Some(v)) = (on_rails, e.velocity(&*lv.host)) {
-            e.set_velocity(lv.host, [v[0] * k, v[1], v[2] * k]);
-        }
     }
 }
 
@@ -1975,8 +1985,8 @@ fn follow(lv: &mut ServerLevel<'_>) -> HashMap<u128, Cart> {
 /// toward the cart's motion by its mode, or on a coupling faces from one of its carts to the
 /// other (`updateOrientation`), comes off on an activator rail (a rideable cart's powered one
 /// ejects it, `Minecart.activateMinecart`; any lets go of a chest or furnace cart's,
-/// `MinecartController.disassemble`) or when its coupling is gone (`removeConnection`), keeps
-/// riders off, and keeps its furnace carts going (`powerFurnaceCartWithFuelFromStorage`).
+/// `MinecartController.disassemble`) or when its coupling is gone (`removeConnection`), and
+/// keeps its furnace carts going (`powerFurnaceCartWithFuelFromStorage`).
 fn tick_mounted(lv: &mut ServerLevel<'_>, carts: &HashMap<u128, Cart>) {
     let dim = lv.dim;
     let list: Vec<(u128, Option<coupling::Link>)> = CARTS.with_borrow(|c| {
@@ -1988,19 +1998,41 @@ fn tick_mounted(lv: &mut ServerLevel<'_>, carts: &HashMap<u128, Cart>) {
     });
     for (uuid, link) in list {
         let nc = &carts[&uuid];
-        let Some(prev) = CARTS.with_borrow(|c| c.known.get(&uuid).map(|k| k.prev)) else {
+        let Some((prev, coupled, rider)) = CARTS.with_borrow(|c| {
+            let on = c.mounted.get(&uuid)?;
+            Some((c.known.get(&uuid)?.prev, on.coupled, on.rider))
+        }) else {
             continue;
         };
-        for rider in nc.entity.passengers(&*lv.host).unwrap_or_default() {
-            rider.stop_riding(lv.host);
-        }
         let rail = rail_under(lv, nc.pos);
         let eject = rail.is_some_and(|(_, activator, powered)| {
             activator && (powered || nc.kind != "minecraft:minecart")
         });
-        let unlinked = CARTS.with_borrow(|c| c.mounted.get(&uuid).is_some_and(|on| on.coupled))
-            && link.is_none();
-        if eject || unlinked {
+        let unlinked = coupled && link.is_none();
+        let detached = !eject
+            && !unlinked
+            && match rider {
+                // A saved passenger may still be loading. The cart's own flag includes retained
+                // off-level passengers even when there is no resident handle for them.
+                Some(id) => lv
+                    .host
+                    .entity_by_uuid(EntityUuid(id))
+                    .map_or(!nc.ridden, |r| r.vehicle(&*lv.host) != Some(nc.entity)),
+                // Older saves have the blocks but no rider. Board once the cart is loaded.
+                None => match board_contraption(lv, nc) {
+                    Some(id) => {
+                        CARTS.with_borrow_mut(|c| {
+                            if let Some(on) = c.mounted.get_mut(&uuid) {
+                                on.rider = Some(id);
+                                c.dirty = true;
+                            }
+                        });
+                        false
+                    }
+                    None => true,
+                },
+            };
+        if eject || unlinked || detached {
             if let Some(on) = CARTS.with_borrow_mut(|c| {
                 c.dirty = true;
                 c.mounted.remove(&uuid)
@@ -2255,6 +2287,9 @@ fn save(lv: &mut ServerLevel<'_>) {
         .filter_map(|(u, d, on)| {
             let mut c = contraption_tag(&*lv.host, on, true);
             c.insert("Cart".into(), Tag::IntArray(uuid_ints(*u)));
+            if let Some(rider) = on.rider {
+                c.insert("Rider".into(), Tag::IntArray(uuid_ints(rider)));
+            }
             c.insert(
                 "Dimension".into(),
                 Tag::String(level_id(*d)?.as_str().into()),
@@ -2331,7 +2366,8 @@ fn load(lv: &mut ServerLevel<'_>) {
         ) else {
             continue;
         };
-        if let Some(on) = contraption_of(&*lv.host, &c, dim) {
+        if let Some(mut on) = contraption_of(&*lv.host, &c, dim) {
+            on.rider = uuid_of(&ints(get(&c, "Rider")));
             mounted.insert(uuid, on);
         }
     }
