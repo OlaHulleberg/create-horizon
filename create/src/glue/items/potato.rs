@@ -533,7 +533,8 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
         return false;
     }
     // A join listener may change either input. Do not charge a different stack or hotbar slot.
-    if (main && player.selected_slot(&*lv.host) != selected_slot)
+    if ((main || source == Source::Hand(Hand::Main))
+        && player.selected_slot(&*lv.host) != selected_slot)
         || !held(&*lv.host, player, event.hand).is_some_and(|stack| {
             stack.is_stackable_with(&cannon) && stack.count() == cannon.count()
         })

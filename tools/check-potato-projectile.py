@@ -29,7 +29,7 @@ def run(args, scratch, scenario):
 
     if scenario == "veto":
         env["POTATO_TEST_REFUSAL"] = "1"
-    if scenario == "swap":
+    if scenario in {"swap", "ammo_swap"}:
         env["POTATO_TEST_SWAP"] = "1"
 
     def ctl(*words):
@@ -101,17 +101,32 @@ def run(args, scratch, scenario):
         else:
             if scenario == "swap":
                 cmd("item replace entity @s hotbar.2 with minecraft:iron_pickaxe")
-            cmd('summon minecraft:pig 8.9 76 16 {NoAI:1b,NoGravity:1b,Tags:["shot_target"]}')
+            if scenario == "ammo_swap":
+                cmd("item replace entity @s weapon.offhand with create:potato_cannon[minecraft:damage=7]")
+                assert cmd("execute if items entity @s weapon.offhand create:potato_cannon[minecraft:damage=7]")["result"] == 1
+                cmd("item replace entity @s hotbar.0 with minecraft:potato 10")
+                cmd("item replace entity @s hotbar.1 with minecraft:air")
+                cmd("item replace entity @s hotbar.2 with minecraft:potato 10")
+            target_x = 10.1 if scenario == "ammo_swap" else 8.9
+            cmd(f'summon minecraft:pig {target_x} 76 16 {{NoAI:1b,NoGravity:1b,Tags:["shot_target"]}}')
             health("shot_target", 10)
             ctl("wait", "12")
             ctl("use-item")
             ctl("wait", "35")
-            if scenario in {"veto", "swap"}:
+            if scenario in {"veto", "swap", "ammo_swap"}:
                 health("shot_target", 10)
-                assert cmd("clear @s minecraft:potato 0")["result"] == 10
-                for filter_ in ("create:potato_cannon", "minecraft:iron_pickaxe") if scenario == "swap" else ("create:potato_cannon",):
-                    stack = cmd(f'data get entity @s Inventory[{{id:"{filter_}"}}]')
-                    assert stack["success"] and "minecraft:damage" not in stack["chat"][0], stack
+                assert cmd("clear @s minecraft:potato 0")["result"] == (20 if scenario == "ammo_swap" else 10)
+                if scenario == "ammo_swap":
+                    for slot in (0, 2):
+                        assert cmd(f"execute if items entity @s hotbar.{slot} minecraft:potato")["result"] == 10
+                    assert cmd("execute if items entity @s weapon.offhand create:potato_cannon[minecraft:damage=7]")["result"] == 1
+                else:
+                    items = ["create:potato_cannon"]
+                    if scenario == "swap":
+                        items.append("minecraft:iron_pickaxe")
+                    for item in items:
+                        stack = cmd(f'data get entity @s Inventory[{{id:"{item}"}}]')
+                        assert stack["success"] and "minecraft:damage" not in stack["chat"][0], stack
             else:
                 health("shot_target", 5)
                 assert cmd("clear @s minecraft:potato 0")["result"] == 9
@@ -136,7 +151,7 @@ def run(args, scratch, scenario):
 
     if scenario == "veto":
         assert "[potato check] join refused" in log()
-    if scenario == "swap":
+    if scenario in {"swap", "ammo_swap"}:
         assert "[potato check] selected slot changed" in log()
         assert not samples(log()), "an unpaid projectile flew after the selected slot changed"
     if scenario != "flight":
@@ -206,7 +221,7 @@ def main():
     parser.add_argument("--fixture", action="store_true")
     args = parser.parse_args()
     args.scratch.mkdir(parents=True, exist_ok=True)
-    for scenario in ("veto", "swap", "flight") if args.fixture else ("smoke",):
+    for scenario in ("veto", "swap", "ammo_swap", "flight") if args.fixture else ("smoke",):
         scratch = Path(tempfile.mkdtemp(prefix=f"potato-{scenario}-", dir=args.scratch))
         print(f"{scenario}: {scratch}", flush=True)
         run(args, scratch, scenario)
