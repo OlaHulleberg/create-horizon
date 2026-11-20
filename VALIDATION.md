@@ -40,6 +40,24 @@ all succeeded. The cogwheel, motor and depot drew in the world, and the cogwheel
 At that point the wrench occupied a slot but had no icon or held model. The visual test below verifies the
 replacement item model and other assets migrated off local preparation.
 
+## Repeat the toolbox smoke test
+
+On Linux with Python 3.9+ and a display (or Xvfb), set `nightly`, `resources` and `jars` to absolute paths
+for the pinned Nightly, a private copy of its prepared resources, and the directory containing the verified
+Create jar named by SHA-512. From the repository root, stage the native app with a one-frame run, then start
+the test using that app:
+
+```sh
+(cd create && xvfb-run -a cargo sunrise-mod run --game "$nightly/sunrise-client" \
+    --resources "$resources" --jars "$jars" -- --frames 1)
+xvfb-run -a python3 tools/check-toolbox.py "$nightly/sunrise-ctl" \
+    create/target/sunrise-mod/run/app/sunrise-client "$resources" "$jars"
+```
+
+The script launches its own game with an isolated `SUNRISE_HOME`, `--game-dir` and control socket, then shuts
+it down and removes those temporary files. It checks indexed compartment kinds, contents and UUID before
+and after breaking and re-placing the sole drop. It does not drive `STORAGE`.
+
 ## Registry visuals on `ed3ac19`
 
 Built and checked a second `.smod` from a clean checkout with no `create-data prepare` outputs. The 5,916 staged

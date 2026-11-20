@@ -45,6 +45,18 @@ pub(super) fn candidate(
     let facts = host.block_states();
     let has = |k: &str| state.property(&facts, k).ok().flatten().is_some();
     let class = |class| facts.block_class(state, class).ok().flatten();
+    // `CopycatSpecialCases`: Create's `GlassPaneBlock` variants and vanilla's panes
+    // inherit from `IronBarsBlock` but are not the special bar material.
+    let create_pane = create.is_some_and(|block| {
+        block.name().ends_with("_window_pane")
+            || matches!(
+                block,
+                Block::FramedGlassPane
+                    | Block::HorizontalFramedGlassPane
+                    | Block::VerticalFramedGlassPane
+                    | Block::TiledGlassPane
+            )
+    });
     Some(Candidate {
         copycat: matches!(create, Some(Block::CopycatPanel | Block::CopycatStep)),
         allow: tagged("create:copycat_allow"),
@@ -54,33 +66,12 @@ pub(super) fn candidate(
         stairs: class(BlockClass::Stair)?,
         full,
         collides,
-        bars: special_bars(&id, create, class)?,
-        trapdoor: class(BlockClass::TrapDoor)? && has("half") && has("open") && has("facing"),
-    })
-}
-
-/// `CopycatSpecialCases`: glass panes inherit from `IronBarsBlock` without being bar material.
-/// Stained panes have their own class check; these are vanilla's clear pane and Create's panes.
-fn special_bars(
-    id: &str,
-    create: Option<Block>,
-    class: impl Fn(BlockClass) -> Option<bool>,
-) -> Option<bool> {
-    Some(
-        class(BlockClass::IronBars)?
+        bars: class(BlockClass::IronBars)?
             && !class(BlockClass::StainedGlassPane)?
             && id != "minecraft:glass_pane"
-            && !create.is_some_and(|block| {
-                block.name().ends_with("_window_pane")
-                    || matches!(
-                        block,
-                        Block::FramedGlassPane
-                            | Block::HorizontalFramedGlassPane
-                            | Block::VerticalFramedGlassPane
-                            | Block::TiledGlassPane
-                    )
-            }),
-    )
+            && !create_pane,
+        trapdoor: class(BlockClass::TrapDoor)? && has("half") && has("open") && has("facing"),
+    })
 }
 
 /// `getAcceptedBlockState` for the item `stack` on a copycat of `shape` at `pos`: the item's
@@ -144,27 +135,94 @@ pub(super) fn place_sound(host: &dyn Host, state: BlockState) -> Option<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mod_api::__private::part_tests::{block_key, install_parts_fixture};
+    use mod_api::prelude::*;
+    use mod_api::testing::{FakeLevel, with_mods};
+    use mod_api::{
+        Backend, BackendRef, BlockKey, BlockStateRecord, Hooks, LevelReadError, LevelRef, ModEntry,
+        Registrar, RegistrationContext, ServerHost,
+    };
+
+    const PANE: &str = "create:oak_window_pane";
+    const BARS: &str = "minecraft:iron_bars";
+    // Both fixture materials have a narrow, colliding shape, not full-block bounds.
+    const SHAPE: [f64; 6] = [0.4375, 0.0, 0.4375, 0.5625, 1.0, 0.5625];
+
+    struct Materials;
+
+    #[mod_api::__subscriptions]
+    impl Hooks for Materials {
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+            r.block_key(PANE);
+            r.block_key(BARS);
+        }
+    }
+
+    mod_api::__mod_api_impl_host_areas!(Materials, except(tags));
+    mod_api::__mod_api_impl_server_host_areas!(Materials);
+    mod_api::__mod_api_impl_backend_areas!(Materials, except(block_states, keys, level_collision));
+    impl Host for Materials {
+        fn backend(&self) -> Option<BackendRef<'_>> {
+            Some(mod_api::__private::backend_ref(self))
+        }
+    }
+    impl ServerHost for Materials {}
+    impl Backend for Materials {}
+    impl TagsHost for Materials {
+        fn block_in_tag(&self, _: BlockKey, _: &str) -> Option<bool> {
+            Some(false)
+        }
+
+        fn state_outline(&self, _: BlockState) -> Option<Vec<[f64; 6]>> {
+            Some(vec![SHAPE])
+        }
+    }
+    impl BlockStatesBackend for Materials {
+        fn block_state_class(
+            &self,
+            _: BlockState,
+            class: BlockClass,
+        ) -> Result<Option<bool>, LevelReadError> {
+            Ok(Some(class == BlockClass::IronBars))
+        }
+    }
+    impl KeysBackend for Materials {
+        fn block_key_id(&self, key: BlockKey) -> String {
+            [PANE, BARS]
+                .into_iter()
+                .find(|id| block_key(id) == key)
+                .expect("only the two registered fixture blocks are used")
+                .into()
+        }
+    }
+    impl LevelCollisionBackend for Materials {
+        fn level_block_shape(
+            &self,
+            _: LevelRef,
+            _: BlockState,
+            _: [i32; 3],
+            _: BlockShapeKind,
+        ) -> Option<Vec<[f64; 6]>> {
+            Some(vec![SHAPE])
+        }
+    }
 
     #[test]
     fn a_copycat_panel_accepts_iron_bars_but_not_create_window_panes() {
-        let panel = Shape::Panel(Dir::Up);
-        for (id, accepted) in [
-            ("create:oak_window_pane", false),
-            ("minecraft:iron_bars", true),
-        ] {
-            // Both inherit IronBarsBlock but neither has full-block bounds in this test.
-            let create = id.strip_prefix("create:").and_then(Block::from_name);
-            let facts = Candidate {
-                bars: special_bars(id, create, |class| match class {
-                    BlockClass::IronBars => Some(true),
-                    BlockClass::StainedGlassPane => Some(false),
-                    _ => None,
-                })
-                .unwrap(),
-                collides: true,
-                ..Candidate::default()
+        with_mods(vec![].into(), || {
+            install_parts_fixture(&[ModEntry::new("create", Box::new(Materials))]).unwrap();
+            let lv = ServerLevel {
+                host: &mut Materials,
+                level: FakeLevel::default().level(),
+                dim: 0,
+                dimension: "minecraft:overworld",
             };
-            assert_eq!(cc::accepts(panel, &facts), accepted, "{id}");
-        }
+            let panel = Shape::Panel(Dir::Up);
+            for (id, accepted) in [(PANE, false), (BARS, true)] {
+                let state = BlockStateRecord::new(block_key(id), 0).into();
+                let facts = candidate(&lv, state, [0; 3]).unwrap();
+                assert_eq!(cc::accepts(panel, &facts), accepted, "{id}");
+            }
+        });
     }
 }

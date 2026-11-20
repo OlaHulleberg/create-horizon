@@ -1311,6 +1311,7 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::glue::subsystem::Subsystem;
     use mod_api::prelude::*;
     use mod_api::testing::FakeHost;
     use mod_api::{Backend, BackendRef, CreativeModeTabInfo, ItemKey};
@@ -1360,7 +1361,7 @@ mod tests {
         };
         let predicate = Attribute::InItemGroup("create:base".into());
         assert!(probe.attribute(&predicate));
-        invalidate_item_groups();
+        super::super::Items.tags_updated(&mut fixture);
         assert!(ITEM_GROUPS_DIRTY.get());
         assert!(probe.attribute(&predicate));
         clear_item_groups();

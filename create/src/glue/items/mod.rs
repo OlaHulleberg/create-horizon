@@ -309,7 +309,7 @@ impl Subsystem for Items {
     }
 
     fn tags_updated(&self, _host: &mut dyn ServerHost) {
-        // Keep the last catalog while the next server tick requests it again.
+        // Keep the last catalog while the next server tick builds the new generation.
         filters::invalidate_item_groups();
     }
 

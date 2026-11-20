@@ -868,7 +868,7 @@ mod tests {
             self.playing
         }
         fn mapping_physical_down(&self, name: &str) -> Result<Option<bool>, LevelReadError> {
-            Ok(Some(name == "key.forward"))
+            Ok(Some(matches!(name, "key.forward" | "key.sneak")))
         }
         fn set_mapping_down(&mut self, key: &str, down: bool) -> Result<(), MappingError> {
             self.effects.push(Effect::Mapping(key.to_owned(), down));
@@ -947,9 +947,21 @@ mod tests {
                         }),
                     ]
                 );
-                assert_eq!(restored.len(), 6);
-                assert!(restored.contains(&Effect::Mapping("key.forward".into(), true)));
-                assert!(restored.iter().all(|e| matches!(e, Effect::Mapping(..))));
+                let expected = [
+                    ("key.forward", true),
+                    ("key.back", false),
+                    ("key.left", false),
+                    ("key.right", false),
+                    ("key.jump", false),
+                    ("key.sneak", true),
+                ];
+                assert_eq!(restored.len(), expected.len());
+                for (key, down) in expected {
+                    assert!(
+                        restored.contains(&Effect::Mapping(key.into(), down)),
+                        "expected {key}={down} in {restored:?}",
+                    );
+                }
             } else {
                 assert!(host.effects.is_empty());
             }
