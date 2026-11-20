@@ -1,7 +1,7 @@
 //! Chutes and smart chutes at belts, mirroring glue/logistics/chute.rs: a belt's end hands a
-//! stack into an empty chute (`ChuteBlockEntity`'s `DirectBeltInputBehaviour`, refused under a
-//! chute and while fans blow up a chute with none below it); it falls (`tick`) at the column's
-//! motion (`chute_motion`: gravity, and encased fans under the lowest chute blowing up or over
+//! stack into an empty chute (`ChuteBlockEntity`'s `DirectBeltInputBehaviour`, while
+//! `canDirectlyInsert`); it falls (`tick`) at the column's motion (`chute_motion`: gravity,
+//! and encased fans under the lowest chute blowing up or over
 //! the highest blowing down) and leaves at the bottom into the belt segment below
 //! (`ItemHandlerBeltSegment`), a depot, or the chute it leads into (a diagonal chute's beside
 //! the one below), or out of the bottom (`handleDownwardOutput`, native item flight); blown up,
@@ -96,11 +96,33 @@ impl Run {
     fn chute_motion(&self, p: Pos) -> f32 {
         chute::item_motion(self.chute_push(p, 0), self.chute_pull(p, 0))
     }
-    /// `canDirectlyInsert` as the glue reads it (`direct_input_accepts`): no chute above, and not
-    /// blown up without a chute below.
+    /// The glue's `can_directly_insert` (`ChuteBlockEntity.canDirectlyInsert`).
     pub(super) fn chute_takes_from_side(&self, p: Pos) -> bool {
-        self.chute_at([p[0], p[1] + 1, p[2]]).is_none()
-            && !(self.chute_motion(p) > 0. && self.chute_at([p[0], p[1] - 1, p[2]]).is_none())
+        chute::can_directly_insert(
+            self.chute_at([p[0], p[1] + 1, p[2]]),
+            self.chute_motion(p),
+            || !self.input_chutes(p).is_empty(),
+            self.chute_open(p),
+        )
+    }
+    /// The glue's `chute_open` (`AbstractChuteBlock.isOpenChute`).
+    fn chute_open(&self, p: Pos) -> bool {
+        match self.chute_block(p) {
+            Some((Block::Chute, _)) => {
+                chute::is_open(self.chute_at(p).unwrap_or(Dir::Down), self.chute_shape(p))
+            }
+            Some((Block::SmartChute, _)) => chute::is_open(Dir::Down, None),
+            _ => false,
+        }
+    }
+    /// The glue's `chute_shape`: `ChuteBlock.SHAPE` of the chute at `p`.
+    fn chute_shape(&self, p: Pos) -> Option<Shape> {
+        let state = self.name(self.at(p));
+        let (_, props) = crate::scenario::parse_state(&state);
+        props
+            .iter()
+            .find(|(k, _)| k == "shape")
+            .and_then(|(_, v)| Shape::read(v))
     }
     /// `chute_direct_input` and `chute_take`: the whole stack, at the top, while it is empty and
     /// takes it.
@@ -121,7 +143,7 @@ impl Run {
                 count: item.count,
             },
         );
-        self.w.dims[0].chutes.insert(p, 1.);
+        self.w.set_chute_position(0, p, 1.);
         0
     }
     /// `tick_chute_shapes` (`updateChuteState`): diagonal chutes with nothing to lead into turn
@@ -136,12 +158,7 @@ impl Run {
                 continue;
             };
             let state = self.name(self.at(pos));
-            let (_, props) = crate::scenario::parse_state(&state);
-            let shape = props
-                .iter()
-                .find(|(k, _)| k == "shape")
-                .and_then(|(_, v)| Shape::read(v))
-                .unwrap_or(Shape::Normal);
+            let shape = self.chute_shape(pos).unwrap_or(Shape::Normal);
             let facing = info.facing.unwrap_or(Dir::Down);
             let funnel_down = self
                 .funnel_at([pos[0], pos[1] + 1, pos[2]])
@@ -202,7 +219,7 @@ impl Run {
             };
             match next {
                 Some(p) => {
-                    self.w.dims[0].chutes.insert(pos, p);
+                    self.w.set_chute_position(0, pos, p);
                 }
                 None => {
                     self.w.dims[0].chutes.remove(&pos);
@@ -290,7 +307,7 @@ impl Run {
             run.chute_stacks.remove(&pos);
             run.chute_stacks.insert(target, stack);
             let at = if diagonal { 0.51 } else { 1. };
-            run.w.dims[0].chutes.insert(target, at);
+            run.w.set_chute_position(0, target, at);
         };
         match chute::step(position, motion, can) {
             Fall::At(p) => Some(p),
@@ -374,7 +391,7 @@ impl Run {
             Fall::Out if above_chute.is_some() => {
                 self.chute_stacks.remove(&pos);
                 self.chute_stacks.insert(above, stack);
-                self.w.dims[0].chutes.insert(above, 0.);
+                self.w.set_chute_position(0, above, 0.);
                 None
             }
             Fall::Out if container => match self.depot_insert(above, &stack, false) {

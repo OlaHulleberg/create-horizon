@@ -420,7 +420,11 @@ pub struct Dimension {
     /// Track, stations and signals, the graph built from them, and the trains on it.
     pub railway: crate::trains::Railway,
     /// Chutes holding a stack: where it is (1 top, 0 bottom); the only ones that tick.
+    /// Set through `set_chute_position`, which marks the column to be saved.
     pub chutes: HashMap<[i32; 3], f32>,
+    /// Stack positions saved with a column (`ChuteBlockEntity.write`'s `ItemPosition`), kept
+    /// until their chute loads (`read`).
+    pub(crate) chute_saved: HashMap<[i32; 3], f32>,
     /// Empty chutes that may take from the inventory above them.
     pub chute_pulls: crate::chute::Pulls,
     /// Smart chutes' filters, saved with their column.
@@ -1183,7 +1187,9 @@ impl CreateWorld {
             // Placed, loaded or changed (powered): it may take from the inventory above it, and
             // a stack it holds (a powered smart chute's, kept in the middle) moves on.
             d.chute_pulls.wake(pos);
-            d.chutes.entry(pos).or_insert(0.5);
+            // `read`: a loading chute's stack goes on from its saved `ItemPosition`.
+            let saved = d.chute_saved.remove(&pos);
+            d.chutes.entry(pos).or_insert(saved.unwrap_or(0.5));
         }
         if block == Block::ItemVault
             && let Some(axis) = info.axis
@@ -2247,6 +2253,8 @@ impl CreateWorld {
             d.bearing_checks
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.brass_saved
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.chute_saved
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.deployer_saved
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -5559,6 +5567,53 @@ mod tests {
         assert_eq!(order(w.chute_ticks(0), &w), vec![[0, 9, 5], [0, 8, 6]]);
         let mut phase = w.transport_ticks(0, 0);
         assert!(phase.next(&mut w).is_none());
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_chute_s_stack_goes_on_from_its_saved_position() {
+        // Java issue #161: `ChuteBlockEntity.write` saves `ItemPosition` and `read` starts the
+        // stack there again (`ChuteBlockEntity.java:554`, `:565`). Observed in Java: a stack
+        // that entered at the top, four ticks down (0.2) when the world reloads, is at
+        // 2.9802322e-8 the tick after and leaves the next; the port started it again at 0.5.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
+            "create:chute",
+            vec![("facing", "down"), ("shape", "normal")],
+        )];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let pos = [0, 7, 5];
+        w.apply_block_change(0, pos, 0, 10, false);
+        let mut at = 1.0;
+        w.set_chute_position(0, pos, at);
+        for _ in 0..4 {
+            let crate::chute::Fall::At(next) = crate::chute::fall(at, true) else {
+                panic!("still in the chute");
+            };
+            at = next;
+            w.set_chute_position(0, pos, at);
+        }
+        // Each move marks the column, so the tick's flush writes it.
+        assert_eq!(w.take_unsaved(0), vec![(0, 0)]);
+        let saved = w.column_chutes(0, 0, 0);
+        assert_eq!(saved, vec![(pos, at)]);
+        w.column_unloaded(0, 0, 0);
+        w.load_chutes(0, saved.into_iter());
+        w.block_loaded(0, pos, 10);
+        let loaded = w.dims[0].chutes[&pos];
+        assert_eq!(loaded, at);
+        assert_eq!(
+            crate::chute::fall(loaded, true),
+            crate::chute::Fall::At(2.9802322e-8)
+        );
+        assert_eq!(
+            crate::chute::fall(2.9802322e-8, true),
+            crate::chute::Fall::Out
+        );
         states::clear_range();
     }
 

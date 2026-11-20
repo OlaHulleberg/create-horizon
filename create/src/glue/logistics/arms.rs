@@ -635,7 +635,7 @@ impl arm::World for ArmWorld<'_, '_> {
                 let n = count.min(max);
                 if !simulate {
                     set_chute_stack(lv, pos, items::stack_of(&*lv.host, item, u32::from(n)));
-                    with_world(|w| w.dims[dim].chutes.insert(pos, 1.0));
+                    with_world(|w| w.set_chute_position(dim, pos, 1.0));
                 }
                 count - n
             }

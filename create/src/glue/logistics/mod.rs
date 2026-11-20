@@ -195,6 +195,7 @@ impl Subsystem for Logistics {
         let side_filters = tunnel_filters_from_nbt(&*lv.host, data);
         let belts = belts_from_nbt(data);
         let brass = brass_from_nbt(data);
+        let chutes = chutes_from_nbt(data);
         let amounts: Vec<([i32; 3], create_engine::board::FilterAmount)> =
             match data.get(&FILTER_AMOUNTS.into()) {
                 Some(Tag::IntArray(v)) => v
@@ -219,6 +220,7 @@ impl Subsystem for Logistics {
             w.dims[dim].tunnel_filters.extend(side_filters);
             w.load_belt_items(dim, belts.into_iter());
             w.load_brass(dim, brass.into_iter());
+            w.load_chutes(dim, chutes.into_iter());
         });
     }
 
@@ -237,7 +239,7 @@ impl Subsystem for Logistics {
         })
         .unwrap_or_default();
         tunnel_filters_to_nbt(&*lv.host, data, &side_filters);
-        let Some((vaults, filters, belts, brass)) = with_world(|w| {
+        let Some((vaults, filters, belts, brass, chutes)) = with_world(|w| {
             let mut filters: Vec<([i32; 3], create_engine::filter::Filter)> = w.dims[dim]
                 .chute_filters
                 .iter()
@@ -250,6 +252,7 @@ impl Subsystem for Logistics {
                 filters,
                 w.column_belts(dim, cx, cz),
                 w.column_brass(dim, cx, cz),
+                w.column_chutes(dim, cx, cz),
             )
         }) else {
             return;
@@ -275,6 +278,9 @@ impl Subsystem for Logistics {
         }
         if !brass.is_empty() {
             data.insert("brass".into(), brass_to_nbt(&brass));
+        }
+        if !chutes.is_empty() {
+            data.insert(CHUTES.into(), chutes_to_nbt(&chutes));
         }
     }
 
@@ -504,6 +510,33 @@ pub(crate) const BELT_COVERED: &str = "Covered";
 
 /// The key of the filter slots' amounts in a column's saved data.
 const FILTER_AMOUNTS: &str = "filter_amounts";
+
+/// Chutes' stack positions saved with a column (`ChuteBlockEntity.write`'s `ItemPosition`): x,
+/// y, z and the position's float bits of each.
+const CHUTES: &str = "chutes";
+
+/// `CHUTES` of the chutes in a column.
+fn chutes_to_nbt(chutes: &[([i32; 3], f32)]) -> Tag {
+    Tag::IntArray(
+        chutes
+            .iter()
+            .flat_map(|(p, at)| [p[0], p[1], p[2], at.to_bits() as i32])
+            .collect(),
+    )
+}
+
+/// What `chutes_to_nbt` wrote (`ChuteBlockEntity.read`'s `ItemPosition`).
+fn chutes_from_nbt(data: &Compound) -> Vec<([i32; 3], f32)> {
+    match data.get(&CHUTES.into()) {
+        Some(Tag::IntArray(v)) => v
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| ([c[0], c[1], c[2]], f32::from_bits(c[3] as u32)))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
 
 /// Shows filter `filter` in the slot of the block at `pos` (`FILTER`).
 pub(crate) fn show_filter(
@@ -814,7 +847,9 @@ fn contents_changed(lv: &ServerLevel<'_>, pos: [i32; 3]) {
         Block::Chute | Block::SmartChute => {
             if chute::chute_stack(lv, pos).is_some() {
                 with_world(|w| {
-                    w.dims[dim].chutes.entry(pos).or_insert(1.0);
+                    if !w.dims[dim].chutes.contains_key(&pos) {
+                        w.set_chute_position(dim, pos, 1.0);
+                    }
                 });
             }
         }

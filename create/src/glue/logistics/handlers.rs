@@ -493,7 +493,9 @@ fn chute_given(host: &mut dyn ServerHost, at: At) {
         1.0
     };
     with_world(|w| {
-        w.dims[at.dim].chutes.entry(at.pos).or_insert(start);
+        if !w.dims[at.dim].chutes.contains_key(&at.pos) {
+            w.set_chute_position(at.dim, at.pos, start);
+        }
     });
 }
 
