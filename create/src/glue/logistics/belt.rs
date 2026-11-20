@@ -204,7 +204,7 @@ pub fn update_cover(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             matches!(
                 b,
                 create_engine::Block::AndesiteTunnel | create_engine::Block::BrassTunnel
-            ) || super::funnel::is_funnel(b) && i.facing != Some(Dir::Up)
+            ) || create_engine::funnel::is_funnel(b) && i.facing != Some(Dir::Up)
         }
         None => false,
     };
@@ -1107,7 +1107,9 @@ impl belt::Surroundings for BeltSide<'_, '_> {
     }
 
     /// The machines over segment `segment` (presses, deployers, spouts) are the processing
-    /// subsystems': the first that answers acts.
+    /// subsystems': the first that answers acts. An arriving item is not offered to them when
+    /// the block over the segment is in the way (`BeltInventory`: `isBlocked`, then
+    /// `handleReceivedItem`).
     fn process(
         &mut self,
         segment: i32,
@@ -1115,6 +1117,14 @@ impl belt::Surroundings for BeltSide<'_, '_> {
         locked: bool,
     ) -> Option<belt::Process> {
         let at = self.at(segment);
+        // `getBeltProcessingAtSegment`: none, and nothing acts.
+        let above = self.lv.info([at[0], at[1] + 2, at[2]]).map(|(b, _)| b);
+        if !above.is_some_and(belt::processes_below) {
+            return None;
+        }
+        if !locked && self.lv.processing_blocked(at) {
+            return None;
+        }
         super::super::SUBSYSTEMS
             .iter()
             .find_map(|s| s.belt_process(self.lv, at, item, locked))

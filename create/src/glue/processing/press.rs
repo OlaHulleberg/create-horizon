@@ -189,7 +189,7 @@ pub fn tick_presses(lv: &mut ServerLevel<'_>) {
         let item = stacks::id(&*lv.host, &stack);
         let count = stack.count().min(255) as u8;
         let speed = lv.speed(above);
-        let in_way = lv.blocked([depot[0], depot[1] + 1, depot[2]]);
+        let in_way = lv.processing_blocked(depot);
         // A sequenced assembly's pressing step first (`SequencedAssemblyRecipe.getRecipe`).
         let sequenced = sequenced_on_depot(lv, depot, "create:pressing", None);
         let fits = sequenced.is_some()
@@ -348,7 +348,8 @@ pub fn press_on_depot(
 
 /// `BeltPressingCallbacks` for a stack on the belt segment at `at` under the press two above
 /// (`BeltProcessingBehaviour` of `PressingBehaviour`): None without a press there. An item
-/// arriving (`onItemReceived`) passes a blocked press (`isBlocked`) and one standing still, is
+/// arriving (`onItemReceived`; not when `isBlocked`, which the belt asks) passes one standing
+/// still, is
 /// held while the press runs, and starts it when a recipe takes it (a sequenced assembly's
 /// pressing step first); held (`whenItemHeld`), at the head's lowest point one of it becomes the
 /// recipe's rolled results, at rest where they lie (locked, a random angle).
@@ -363,9 +364,6 @@ pub fn press_on_belt(
     let dim = lv.dim;
     let above = [at[0], at[1] + 2, at[2]];
     let mut p = with_world(|w| w.dims[dim].presses.get(&above).copied()).flatten()?;
-    if !locked && lv.blocked([at[0], at[1] + 1, at[2]]) {
-        return None;
-    }
     if lv.speed(above) == 0.0 {
         return Some(Process::Pass);
     }

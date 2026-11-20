@@ -64,7 +64,7 @@ pub(crate) fn spout_on_depot(lv: &mut ServerLevel<'_>, depot: [i32; 3]) {
         return;
     };
     // DepotBehaviour.tick tests arrival before dispatching received/held callbacks.
-    if !recipes::ready() || (!held_state.locked && lv.blocked([depot[0], depot[1] + 1, depot[2]])) {
+    if !recipes::ready() || (!held_state.locked && lv.processing_blocked(depot)) {
         return;
     }
     let before = s;

@@ -6,6 +6,18 @@
 
 use crate::kinetics::Dir;
 
+/// Whether `block` is a funnel (`AbstractFunnelBlock.isFunnel`).
+pub fn is_funnel(block: crate::Block) -> bool {
+    use crate::Block;
+    matches!(
+        block,
+        Block::AndesiteFunnel
+            | Block::BrassFunnel
+            | Block::AndesiteBeltFunnel
+            | Block::BrassBeltFunnel
+    )
+}
+
 /// `defaultExtractionTimer`.
 pub const EXTRACTION_COOLDOWN: u32 = 8;
 
