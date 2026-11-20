@@ -1736,7 +1736,7 @@ pub(super) fn render_overlay(host: &dyn ClientHost, draw: &mut dyn mod_api::Draw
         .iter()
         .map(|s| {
             s.as_ref()
-                .map(|s| items::tooltip_lines(host, s))
+                .map(|s| items::tooltip_lines(host, s, false))
                 .unwrap_or_default()
         })
         .collect();

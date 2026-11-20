@@ -94,11 +94,15 @@ pub(crate) fn item_tooltip(host: &dyn ClientHost, event: &mut mod_api::ItemToolt
     tooltip::item_tooltip(host, event);
 }
 
-/// `ItemStack.getTooltipLines(.., TooltipFlag.NORMAL)` on a client, including each mod's
+/// `ItemStack.getTooltipLines` on a client, using the caller's tooltip flag, including each mod's
 /// `item_tooltip` edits. Keep the components for drawing, not just the rendered strings.
-pub(crate) fn tooltip_lines(host: &dyn ClientHost, stack: &ItemStack) -> Vec<mod_api::Text> {
+pub(crate) fn tooltip_lines(
+    host: &dyn ClientHost,
+    stack: &ItemStack,
+    advanced: bool,
+) -> Vec<mod_api::Text> {
     mod_api::ItemResource::of(stack)
-        .tooltip(host, false, false)
+        .tooltip(host, advanced, false)
         .unwrap_or_default()
         .into_iter()
         .filter_map(|element| match element {
