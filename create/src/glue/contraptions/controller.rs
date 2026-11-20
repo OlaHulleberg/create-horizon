@@ -331,8 +331,8 @@ impl Subsystem for Controller {
         });
         send_server(host, packets);
         let active = CLIENT.with_borrow(Client::active);
-        if !ACTIVE.replace(active) && active {
-            release_movement_mappings(host);
+        if ACTIVE.replace(active) != active {
+            sync_movement_capture(host);
         }
         true
     }
@@ -449,14 +449,24 @@ fn send_server(host: &mut dyn ClientHost, packets: Vec<ToServer>) {
 // ---------------------------------------------------------------------------------------------
 // Client
 
-/// `ControlsUtil.getControls().forEach(kb -> kb.setDown(false))`: clear logical movement
-/// without releasing the physical inputs that drive controllers and trains.
-pub(crate) fn release_movement_mappings(host: &mut dyn ClientHost) {
+/// `ControlsUtil.isActuallyPressed`: sample the player's bindings, not their logical held state.
+pub(crate) fn movement_buttons(host: &dyn ClientHost) -> u8 {
+    MAPPINGS
+        .iter()
+        .enumerate()
+        .filter(|(_, mapping)| host.mapping_physical_down(mapping) == Ok(Some(true)))
+        .fold(0, |buttons, (i, _)| buttons | 1 << i)
+}
+
+/// Clear logical movement during capture; on reset, hand the still-held keys back to the game.
+pub(crate) fn sync_movement_capture(host: &mut dyn ClientHost) {
+    let captured = ACTIVE.get() || crate::glue::trains::controls::is_driving();
     for mapping in MAPPINGS {
-        if let Err(error) = host.set_mapping_down(mapping, false)
+        let down = !captured && host.mapping_physical_down(mapping) == Ok(Some(true));
+        if let Err(error) = host.set_mapping_down(mapping, down)
             && error != mod_api::MappingError::NoWorld
         {
-            crate::create_log!("[create] could not clear movement mapping {mapping}: {error:?}");
+            crate::create_log!("[create] could not set movement mapping {mapping}: {error:?}");
         }
     }
 }
@@ -480,15 +490,7 @@ fn client_tick(host: &mut dyn ClientHost) {
         || player.is_spectator(&*host).unwrap_or(false)
         || host.is_key_down("key.keyboard.escape")
         || !lectern && !holding;
-    // `isActuallyPressed`: the keys themselves, kept from the game or not.
-    let held = if stop {
-        0
-    } else {
-        release_movement_mappings(host);
-        (0..ct::KEYS.len())
-            .filter(|&b| host.is_key_down(ct::KEYS[b]))
-            .fold(0u8, |m, b| m | 1 << b)
-    };
+    let held = if stop { 0 } else { movement_buttons(host) };
     let (packets, click) =
         CLIENT.with_borrow_mut(|c| if stop { (c.stop(), None) } else { c.tick(held) });
     send_server(host, packets);
@@ -499,10 +501,11 @@ fn client_tick(host: &mut dyn ClientHost) {
         sound.pitch = pitch;
         let _ = host.play_local_sound(&sound, 0);
     }
-    ACTIVE.set(CLIENT.with_borrow(Client::active));
+    let active = CLIENT.with_borrow(Client::active);
+    ACTIVE.set(active);
+    sync_movement_capture(host);
     // `LinkedControllerItemRenderer.tick`: each button chases its key, while active.
     let pressed = CLIENT.with_borrow(|c| c.pressed);
-    let active = ACTIVE.get();
     BUTTONS.with_borrow_mut(|v| {
         for (i, b) in v.iter_mut().enumerate() {
             let target = if active && pressed & (1 << i) != 0 {
