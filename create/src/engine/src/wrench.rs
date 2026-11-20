@@ -135,6 +135,13 @@ pub fn rotated(
     out
 }
 
+/// `IWrenchable.onWrenched` where a Create block answers PASS instead: `LargeWaterWheelBlock`
+/// and `WaterWheelStructuralBlock` return `InteractionResult.PASS`, so a plain wrench neither
+/// turns them nor takes them. Every other wrenchable block turns (`getRotatedBlockState`).
+pub fn turns(name: &str) -> bool {
+    !matches!(name, "large_water_wheel" | "water_wheel_structure")
+}
+
 /// `PumpBlock.getRotatedBlockState`: the state's `facing` turned around.
 pub fn reversed(props: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     let mut out = props.clone();
@@ -346,6 +353,10 @@ mod tests {
         ] {
             assert!(wrenchable(name), "{name}");
         }
+        // A large water wheel and its frame cells answer PASS (`onWrenched`); every other
+        // wrenchable block turns.
+        assert!(!turns("large_water_wheel") && !turns("water_wheel_structure"));
+        assert!(turns("water_wheel") && turns("shaft") && turns("mechanical_pump"));
         for name in [
             "cut_granite_brick_stairs",
             "granite_pillar",

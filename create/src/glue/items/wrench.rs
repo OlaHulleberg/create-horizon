@@ -2,10 +2,12 @@
 //! the player unless creative, the block gone without drops); else `onWrenched`, turned about the
 //! axis of the face clicked, with Create's sounds. Any other block in `create:wrench_pickup`
 //! (bars, rails, redstone parts...) is picked up the same way when sneaking
-//! (`onItemUseOnOther`); the rest are left alone. A block a subsystem wrenches its own way
-//! answers first (`Subsystem::wrench_used`: a copycat's material, a pipe's glass, a whistle's
-//! size, a belt's casing, a funnel's mode). What takes the click before the wrench's use
-//! is each block's own: a crafter's edge and a deployer's mode (processing's
+//! (`onItemUseOnOther`); a large wheel's frame cell hands its sneak wrench to the wheel it
+//! holds (`WaterWheelStructuralBlock.onSneakWrenched`); the rest are left alone. A block a
+//! subsystem wrenches its own way answers first (`Subsystem::wrench_used`: a copycat's
+//! material, a pipe's glass, a whistle's size, a belt's casing, a funnel's mode). What takes
+//! the click before the wrench's use is each block's own: a crafter's edge and a deployer's
+//! mode (processing's
 //! `right_click_block`), a bracket (decor's part), a cart assembler (trains' part), a redstone
 //! link (redstone's part).
 
@@ -88,12 +90,20 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
         }
     }
     if back {
-        remove(&mut lv, player, pos, event.stack);
+        // `IWrenchable.onSneakWrenched` on the block clicked: a large wheel's frame cell takes
+        // the wheel it holds (`WaterWheelStructuralBlock.onSneakWrenched`), the frame going
+        // through its own shape updates.
+        let target = with_world(|w| w.sneak_wrenched(lv.dim, pos, id)).unwrap_or(pos);
+        remove(&mut lv, player, target, event.stack);
         return Some(InteractionResult::Success);
     }
     // `NozzleBlock.onWrenched`: FAIL (it is only picked up).
     if block == Block::Nozzle {
         return Some(InteractionResult::Fail);
+    }
+    // `LargeWaterWheelBlock.onWrenched` and `WaterWheelStructuralBlock.onWrenched`: PASS.
+    if !create_engine::wrench::turns(block.name()) {
+        return Some(InteractionResult::Pass);
     }
     if let Some(next) = turned(&lv, pos, clicked) {
         // IWrenchable.updateAfterWrenched fits the rotated state before switching it.

@@ -2963,6 +2963,20 @@ impl CreateWorld {
         self.frame_holds(dim, pos, state, false)
     }
 
+    /// `WaterWheelStructuralBlock.onSneakWrenched`: what a sneak wrench at `pos` takes — the
+    /// block's own `IWrenchable.onSneakWrenched` override. A frame cell that still holds its
+    /// wheel (`stillValid`) hands the click to the wheel `getMaster` finds: the wheel is taken
+    /// (its drops, then `destroyBlock`), and its frame cells go through their own
+    /// `updateShape`/`tick`. A cell whose frame no longer holds a wheel is taken itself.
+    pub fn sneak_wrenched(&self, dim: usize, pos: [i32; 3], state: u32) -> [i32; 3] {
+        if self.frame_still_valid(dim, pos, state)
+            && let Some(master) = self.wheel_master(dim, pos, state)
+        {
+            return master;
+        }
+        pos
+    }
+
     /// `stillValid` with its `directlyAdjacent`: a cell beside the wheel holds it when it points
     /// at one that turns on another axis, a corner cell when the cell it points at does.
     fn frame_holds(&self, dim: usize, pos: [i32; 3], state: u32, directly_adjacent: bool) -> bool {
@@ -8221,6 +8235,112 @@ mod tests {
         for p in adjacent {
             let state = w.state_at(0, p).unwrap();
             w.block_changed(0, p, state, 0);
+            for d in crate::kinetics::Dir::ALL {
+                let o = d.offset();
+                let q = [p[0] + o[0], p[1] + o[1], p[2] + o[2]];
+                if let Some(s) = w.state_at(0, q) {
+                    w.neighbor_changed(0, q, s);
+                }
+            }
+        }
+        let mut due = w.take_frame_ticks(0);
+        due.sort();
+        let mut want = corners;
+        want.sort();
+        assert_eq!(due, want, "the corners go the tick after");
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_frame_cells_sneak_wrench_takes_the_wheel_it_holds() {
+        // Issue #165, Java ticks 21-22 of create-fuzz seed 74 (`wheel-min.json`): a sneak
+        // wrench on an edge cell of a large wheel's frame hands the click to the wheel
+        // (`WaterWheelStructuralBlock.onSneakWrenched`: `stillValid`, then `getMaster`, then
+        // `IWrenchable.onSneakWrenched` on the master). The wheel goes on the click; the four
+        // cells beside it go on the next tick and the four corners on the one after, each
+        // through `updateShape` scheduling its own `tick`.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let facings = ["down", "up", "north", "south", "east", "west"];
+        let mut names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
+            "create:large_water_wheel",
+            vec![("axis", "z"), ("extension", "false")],
+        )];
+        names.extend(
+            facings
+                .iter()
+                .map(|f| ("create:water_wheel_structure", vec![("facing", *f)])),
+        );
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let cell = |facing: crate::kinetics::Dir| -> u32 {
+            11 + facings
+                .iter()
+                .position(|f| *f == format!("{facing:?}").to_lowercase())
+                .unwrap() as u32
+        };
+        let wheel = [4, 9, 0];
+        w.block_changed(0, wheel, 0, 10);
+        let frame = crate::waterwheel::structure(crate::kinetics::Axis::Z);
+        for (o, f) in &frame {
+            let p = [wheel[0] + o[0], wheel[1] + o[1], wheel[2] + o[2]];
+            w.block_changed(0, p, 0, cell(*f));
+        }
+        // The edge cell at (5, 9, 0) faces west at the wheel.
+        let clicked = [5, 9, 0];
+        let clicked_state = cell(crate::kinetics::Dir::West);
+        assert_eq!(w.state_at(0, clicked), Some(clicked_state));
+        assert_eq!(
+            w.sneak_wrenched(0, clicked, clicked_state),
+            wheel,
+            "the frame cell hands the sneak wrench to its wheel"
+        );
+        // `IWrenchable.onSneakWrenched` on the wheel: `destroyBlock(master, false)`, which
+        // tells the blocks beside it.
+        w.block_changed(0, wheel, 10, 0);
+        for d in crate::kinetics::Dir::ALL {
+            let o = d.offset();
+            let q = [wheel[0] + o[0], wheel[1] + o[1], wheel[2] + o[2]];
+            if let Some(s) = w.state_at(0, q) {
+                w.neighbor_changed(0, q, s);
+            }
+        }
+        assert_eq!(
+            w.state_at(0, clicked),
+            Some(clicked_state),
+            "the clicked cell is not what the wrench takes"
+        );
+        assert_eq!(
+            w.sneak_wrenched(0, clicked, clicked_state),
+            clicked,
+            "a frame that no longer holds a wheel is taken itself"
+        );
+        let beside: Vec<[i32; 3]> = frame
+            .iter()
+            .map(|(o, _)| [wheel[0] + o[0], wheel[1] + o[1], wheel[2] + o[2]])
+            .filter(|o| {
+                let (x, y) = (o[0] - wheel[0], o[1] - wheel[1]);
+                (x != 0) != (y != 0)
+            })
+            .collect();
+        let corners: Vec<[i32; 3]> = frame
+            .iter()
+            .map(|(o, _)| [wheel[0] + o[0], wheel[1] + o[1], wheel[2] + o[2]])
+            .filter(|o| o[0] != wheel[0] && o[1] != wheel[1])
+            .collect();
+        assert_eq!((beside.len(), corners.len()), (4, 4));
+        let mut due = w.take_frame_ticks(0);
+        due.sort();
+        let mut want = beside.clone();
+        want.sort();
+        assert_eq!(due, want, "the cells beside the wheel tick next");
+        assert!(w.take_frame_ticks(0).is_empty(), "the corners wait");
+        // Their tick takes them away, telling the corners in turn.
+        for p in &beside {
+            let state = w.state_at(0, *p).unwrap();
+            w.block_changed(0, *p, state, 0);
             for d in crate::kinetics::Dir::ALL {
                 let o = d.offset();
                 let q = [p[0] + o[0], p[1] + o[1], p[2] + o[2]];
