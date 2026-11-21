@@ -17,14 +17,12 @@
 //! (the gear each item is, cached by key), and only backtanks with something to do tick.
 //!
 //! The diving boots sink the local player on its client (`DivingBootsItem
-//! .accelerateDescentUnderwater`, from its movement input and pushes to its velocity); their
-//! hold on swimming (`HeavyBootsOnPlayerMixin`: `isUnderWater` false, so no sprint-swimming)
-//! is left out, and the ground (`onGround || verticalCollision`, which a client can't read for
-//! its own player) is a block shape just under or over the player's box.
+//! .accelerateDescentUnderwater`, from its movement input and its velocity and ground flag);
+//! their hold on swimming (`HeavyBootsOnPlayerMixin`: `isUnderWater` false, so no
+//! sprint-swimming) is left out, and `verticalCollision` against a ceiling is a block shape just
+//! over the player's box.
 //!
-//! Left out, for want of the API: the helmet keeps the wearer's air full on the server only: a client
-//! cannot set its own player's air (`set_air_supply` is the server's), and the server's value
-//! never changes, so the client's bubbles still run down (no damage is taken). The Capacity
+//! Left out, for want of the API: the Capacity
 //! enchantment is read from a stack's components, but the game's item enchantment table does not
 //! hold a native mod's enchantments, so it is not offered by enchanting tables nor shown in tooltips.
 //! A placed backtank is put on by a click with the chest free (`BacktankBlock.useItemOn`).
@@ -93,6 +91,8 @@ thread_local! {
     /// Backtanks a player is breaking with air in them, by level and position: their drop takes
     /// the air (`CopyComponentsFunction` of `BACKTANK_AIR`).
     static BREAKING: RefCell<HashMap<(usize, [i32; 3]), eq::Backtank>> = RefCell::new(HashMap::new());
+    /// Players (entity ids) whose diving helmet gives them breath this tick.
+    static BREATHING: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
 }
 
 pub struct Equipment;
@@ -140,28 +140,31 @@ fn diving_boots(host: &mut dyn mod_api::ClientHost, player: PlayerRef) {
     if !in_water || e.pose(h) == Some("swimming") || player.abilities(h).is_some_and(|a| a.flying) {
         return;
     }
-    let Some(v) = e.velocity(h) else {
+    let Some(mut v) = e.velocity(h) else {
         return;
     };
-    // `onGround() || verticalCollision`: the client has no ground flag to read for its own
-    // player, so a block shape just under or over its box counts.
-    let on_ground = e.bounding_box(h).is_some_and(|[lo, hi]| {
-        let level = h.level(h.dimension());
-        let touches = |y0: f64, y1: f64| {
-            level.is_some_and(|l| {
-                l.has_collisions(h, [lo[0], y0, lo[2], hi[0], y1, hi[2]]) == Some(true)
-            })
-        };
-        touches(lo[1] - 1.0e-3, lo[1]) || touches(hi[1], hi[1] + 1.0e-3)
+    // `verticalCollision` has no read: a block shape just over the box stands in for a ceiling.
+    let ceiling = e.bounding_box(h).is_some_and(|[lo, hi]| {
+        h.level(h.dimension()).is_some_and(|l| {
+            let probe = [lo[0], hi[1], lo[2], hi[0], hi[1] + 1.0e-3, hi[2]];
+            l.has_collisions(h, probe) == Some(true)
+        })
     });
+    let on_ground = e.on_ground(h) == Some(true) || ceiling;
     let (forward, strafe, jump, sneak) = INPUT.get();
-    let mut push = [0.0f32; 3];
-    push[1] = if jump && on_ground { 0.5 } else { -0.05 };
-    if v[0].hypot(v[2]) < 0.145 && (forward > 0.0 || strafe != 0.0) && !sneak {
-        push[0] = (v[0] * 0.3) as f32;
-        push[2] = (v[2] * 0.3) as f32;
+    let on_ground = if jump && on_ground {
+        v[1] += 0.5;
+        false
+    } else {
+        v[1] -= f64::from(0.05f32);
+        on_ground
+    };
+    if v[0].hypot(v[2]) < f64::from(0.145f32) && (forward > 0.0 || strafe != 0.0) && !sneak {
+        v[0] *= f64::from(1.3f32);
+        v[2] *= f64::from(1.3f32);
     }
-    host.push_player(push);
+    host.set_local_player_on_ground(on_ground);
+    host.set_local_player_velocity(v);
 }
 
 impl Subsystem for Equipment {
@@ -250,6 +253,7 @@ impl Subsystem for Equipment {
         HITTERS.with_borrow_mut(Vec::clear);
         SERVER_FIRE_GRANTS.with_borrow_mut(HashMap::clear);
         BREAKING.with_borrow_mut(HashMap::clear);
+        BREATHING.with_borrow_mut(Vec::clear);
     }
 
     /// A backtank's air (`BacktankBlockEntity.write`) rides with it.
@@ -395,30 +399,34 @@ impl Subsystem for Equipment {
         CLIENT_FIRE_GRANT.set(None);
     }
 
-    /// The start of the local player's tick on its client: diving boots and fire prediction.
+    /// The start of a player's tick: on the server the diving helmet's air, before this tick's
+    /// breathing; on the local player's client the diving boots and fire prediction.
     fn player_tick_pre(&self, host: HostSide, event: &mut mod_api::PlayerTickPreEvent) {
-        if let HostSide::Client(host) = host {
-            let player = event.player;
-            diving_boots(host, player);
-            if host.local_player() != Some(player) {
-                return;
-            }
-            let entity = player.entity();
-            if full_netherite(host, player) {
-                if (CLIENT_FIRE_GRANT.get() == Some(entity)
-                    || entity.fire_immune(host) != Some(true))
-                    && entity.set_client_fire_immunity(host, true)
-                {
-                    CLIENT_FIRE_GRANT.set(Some(entity));
+        match host {
+            HostSide::Server(host) => helmet_breath(host, event.player),
+            HostSide::Client(host) => {
+                let player = event.player;
+                diving_boots(host, player);
+                if host.local_player() != Some(player) {
+                    return;
                 }
-            } else if CLIENT_FIRE_GRANT.take() == Some(entity) {
-                entity.set_client_fire_immunity(host, false);
+                let entity = player.entity();
+                if full_netherite(host, player) {
+                    if (CLIENT_FIRE_GRANT.get() == Some(entity)
+                        || entity.fire_immune(host) != Some(true))
+                        && entity.set_client_fire_immunity(host, true)
+                    {
+                        CLIENT_FIRE_GRANT.set(Some(entity));
+                    }
+                } else if CLIENT_FIRE_GRANT.take() == Some(entity) {
+                    entity.set_client_fire_immunity(host, false);
+                }
             }
         }
     }
 
-    /// The end of a player's server tick (`EntityTickEvent`, `LivingBreatheEvent`): the extendo
-    /// grip's reach and the diving helmet's air.
+    /// The end of a player's server tick (`EntityTickEvent`): the extendo grip's reach and the
+    /// netherite diving set.
     fn player_tick(&self, host: HostSide, event: &mut PlayerTickPostEvent) {
         let HostSide::Server(host) = host else {
             return;
@@ -433,12 +441,6 @@ impl Subsystem for Equipment {
         });
         for _ in 0..hits {
             wear_extendo(host, player);
-        }
-        let Some(living) = host.living(player.entity()) else {
-            return;
-        };
-        if let Gear::Helmet(fire_resistant) = gear(host, living.equipment(&*host, ARMOR[0])) {
-            breathe(host, player, fire_resistant);
         }
         netherite_set(host, player);
     }
@@ -789,15 +791,34 @@ pub(crate) fn player_logged_out(uuid: u128) {
     SERVER_FIRE_GRANTS.with_borrow_mut(|grants| grants.remove(&uuid));
 }
 
-/// `DivingHelmetItem.breatheUnderwater`: one air a second from the emptiest tank, and breath.
-fn breathe(host: &mut dyn ServerHost, player: PlayerRef, fire_resistant: bool) {
+/// Whether `player`'s diving helmet gives breath this tick, for `living_breathe`.
+fn helmet_breath(host: &mut dyn ServerHost, player: PlayerRef) {
+    let helmet = host
+        .living(player.entity())
+        .map(|living| gear(host, living.equipment(&*host, ARMOR[0])));
+    let breathes = match helmet {
+        Some(Gear::Helmet(fire_resistant)) => breathe(host, player, fire_resistant),
+        _ => false,
+    };
+    let id = player.entity().id();
+    BREATHING.with_borrow_mut(|b| {
+        b.retain(|e| *e != id);
+        if breathes {
+            b.push(id);
+        }
+    });
+}
+
+/// `DivingHelmetItem.breatheUnderwater`: one air a second from the emptiest tank; true when
+/// the helmet gives breath this tick (`living_breathe` answers it).
+fn breathe(host: &mut dyn ServerHost, player: PlayerRef, fire_resistant: bool) -> bool {
     let entity = player.entity();
     let Some(living) = host.living(player.entity()) else {
-        return;
+        return false;
     };
     let tanks = tanks(&*host, living);
     if tanks.is_empty() {
-        return;
+        return false;
     }
     // `!isEyeInFluid(WATER) || hasEffect(WATER_BREATHING) || abilities.invulnerable`.
     let eye_in_water = entity
@@ -827,11 +848,20 @@ fn breathe(host: &mut dyn ServerHost, player: PlayerRef, fire_resistant: bool) {
     if let Some(slot) = breath.consume
         && !consume_air(host, player, slot, 1)
     {
-        return;
+        return false;
     }
-    if breath.refill {
-        // `setRefillAirAmount(getMaxAirSupply())`.
-        entity.set_air_supply(host, MAX_AIR_SUPPLY);
+    breath.refill
+}
+
+/// `LivingBreatheEvent` for a player the helmet gives breath this tick: `setCanBreathe(true)`,
+/// `setRefillAirAmount(getMaxAirSupply())`.
+pub(crate) fn living_breathe(event: &mut mod_api::LivingBreatheEvent<'_>) {
+    if BREATHING.with_borrow_mut(|b| {
+        let at = b.iter().position(|e| *e == event.entity);
+        at.map(|i| b.swap_remove(i)).is_some()
+    }) {
+        event.can_breathe = true;
+        event.refill = MAX_AIR_SUPPLY;
     }
 }
 
