@@ -91,7 +91,7 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
                 })
                 .flatten()
                 .unwrap_or_default();
-                let mut carried = actors::bearing_actors(&blocks);
+                let mut carried = actors::bearing_actors(&*lv.host, &blocks);
                 // A carriage's interfaces never stall it (`onCarriage`): `cargo` runs them.
                 carried
                     .actors

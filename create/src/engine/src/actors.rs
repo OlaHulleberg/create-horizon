@@ -4,8 +4,9 @@
 //! `SawMovementBehaviour`), harvesters (`HarvesterMovementBehaviour`), ploughs
 //! (`PloughMovementBehaviour`), rollers (`RollerMovementBehaviour`), deployers
 //! (`DeployerMovementBehaviour`, the glue's fake player), redstone contacts
-//! (`ContactMovementBehaviour`) and portable storage
-//! interfaces (`PortableStorageInterfaceMovement`, with `crate::psi`); a contraption's storage
+//! (`ContactMovementBehaviour`), portable storage
+//! interfaces (`PortableStorageInterfaceMovement`, with `crate::psi`) and lit campfires
+//! (`CampfireMovementBehaviour`); a contraption's storage
 //! taking what they collect (`MovementBehaviour.collectOrDropItem`,
 //! `ItemHandlerHelper.insertItem`); and contraption controls turning kinds of actor off
 //! (`ContraptionControlsBlockEntity`, `ContraptionControlsMovement`,
@@ -32,6 +33,11 @@ pub enum Kind {
     Interface {
         fluid: bool,
     },
+    /// A lit campfire (`CampfireMovementBehaviour`): it smokes where it is.
+    Campfire {
+        soul: bool,
+        signal: bool,
+    },
 }
 
 impl Kind {
@@ -51,6 +57,20 @@ impl Kind {
         })
     }
 
+    /// The actor of a vanilla block's state (`AllMovementBehaviours`): a lit campfire's.
+    pub fn of_vanilla(name: &str, props: &[(&str, &str)]) -> Option<Kind> {
+        let prop = |k: &str| props.iter().any(|(n, v)| *n == k && *v == "true");
+        let soul = match name {
+            "minecraft:campfire" => false,
+            "minecraft:soul_campfire" => true,
+            _ => return None,
+        };
+        prop("lit").then_some(Kind::Campfire {
+            soul,
+            signal: prop("signal_fire"),
+        })
+    }
+
     /// `getActiveAreaOffset`: how far ahead of the block's centre along its facing it acts.
     pub fn reach(self) -> f64 {
         match self {
@@ -59,6 +79,7 @@ impl Kind {
             Kind::Deployer => 2.0,
             Kind::Contact => 0.65,
             Kind::Interface { .. } => crate::psi::REACH,
+            Kind::Campfire { .. } => 0.0,
         }
     }
 
@@ -74,6 +95,8 @@ impl Kind {
             Kind::Contact => "create:redstone_contact",
             Kind::Interface { fluid: false } => "create:portable_storage_interface",
             Kind::Interface { fluid: true } => "create:portable_fluid_interface",
+            Kind::Campfire { soul: false, .. } => "minecraft:campfire",
+            Kind::Campfire { soul: true, .. } => "minecraft:soul_campfire",
         }
     }
 
@@ -245,6 +268,9 @@ pub enum Effect {
     /// A stationary contact a moving one powered is left (`deactivateLastVisitedContact`): it
     /// looks at what it faces again a tick later.
     ContactLeft([i32; 3]),
+    /// `CampfireMovementBehaviour.tick`: a campfire's smoke (signal smoke for a signal fire)
+    /// rising from where it is now.
+    Smoke { at: [f64; 3], signal: bool },
     /// `BlockBreakingMovementBehaviour.damageEntities` in the block at `pos`: each entity there
     /// (but items and the contraption's own) is hurt by `damage` (drills, saws, rollers; none
     /// for a plough) and thrown by `boost` (`throwEntity`).
@@ -464,7 +490,7 @@ impl Actor {
     pub fn active(&self) -> bool {
         match self.kind {
             Kind::Roller => !self.disabled && pointing_towards(self.relative_motion, self.facing),
-            Kind::Interface { .. } => !self.disabled,
+            Kind::Interface { .. } | Kind::Campfire { .. } => !self.disabled,
             _ => !self.disabled && !pointing_towards(self.relative_motion, self.facing.opposite()),
         }
     }
@@ -663,6 +689,13 @@ impl Actor {
         let visit = !self.stall && self.trigger(position, grid);
         self.position = Some(position);
         if !self.active() {
+            return false;
+        }
+        if let Kind::Campfire { signal, .. } = self.kind {
+            effects.push(Effect::Smoke {
+                at: position,
+                signal,
+            });
             return false;
         }
         if visit && !self.stall {
@@ -1970,5 +2003,53 @@ mod tests {
         assert!((stalled_at - 360.0).abs() <= 4.8, "stopped at {stalled_at}");
         assert!(connected && released);
         assert_eq!(world.0.connected, None, "let go once it turned away");
+    }
+
+    #[test]
+    fn a_lit_campfire_smokes_where_it_is_and_never_stalls() {
+        assert_eq!(
+            Kind::of_vanilla("minecraft:campfire", &[("lit", "false")]),
+            None
+        );
+        let kind = Kind::of_vanilla(
+            "minecraft:soul_campfire",
+            &[("lit", "true"), ("signal_fire", "true")],
+        );
+        assert_eq!(
+            kind,
+            Some(Kind::Campfire {
+                soul: true,
+                signal: true
+            })
+        );
+        let world = World(HashMap::from([([1, 0, 0], (1.5, false))]));
+        let mut a = Actor::new([0, 0, 0], kind.unwrap(), Dir::Up, -1);
+        let mut effects = Vec::new();
+        for x in [0.5, 1.5] {
+            assert!(!a.tick(
+                [x, 0.5, 0.5],
+                Dir::Up,
+                CONTROLLED_LOWER,
+                &world,
+                &mut effects
+            ));
+        }
+        let at: Vec<_> = effects
+            .iter()
+            .map(|e| match e {
+                Effect::Smoke { at, signal: true } => at[0],
+                e => panic!("{e:?}"),
+            })
+            .collect();
+        assert_eq!(at, vec![0.5, 1.5]);
+        a.disabled = true;
+        a.tick(
+            [2.5, 0.5, 0.5],
+            Dir::Up,
+            CONTROLLED_LOWER,
+            &world,
+            &mut effects,
+        );
+        assert_eq!(effects.len(), 2);
     }
 }
