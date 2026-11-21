@@ -537,7 +537,8 @@ fn horizontal_angle(d: Dir) -> f32 {
 }
 
 /// The partial model `BeltRenderer` draws for a segment (`getBeltPartial`), by its partial
-/// block's name, top half or `bottom`; None for a diagonal's bottom (it has none).
+/// block's name, top half or `bottom`. A diagonal has one model, drawn in the bottom's pass (the
+/// first, which `break`s), so it scrolls with the bottom's offset; None for its top.
 pub fn partial(seg: &Segment, bottom: bool) -> Option<&'static str> {
     let diagonal = matches!(seg.slope, Slope::Upward | Slope::Downward);
     let (mut start, mut end) = (seg.part == Part::Start, seg.part == Part::End);
@@ -545,10 +546,10 @@ pub fn partial(seg: &Segment, bottom: bool) -> Option<&'static str> {
         std::mem::swap(&mut start, &mut end);
     }
     Some(match (diagonal, bottom, start, end) {
-        (true, true, ..) => return None,
-        (true, false, true, _) => "create:part_belt_diagonal_start",
-        (true, false, _, true) => "create:part_belt_diagonal_end",
-        (true, false, ..) => "create:part_belt_diagonal_middle",
+        (true, false, ..) => return None,
+        (true, true, true, _) => "create:part_belt_diagonal_start",
+        (true, true, _, true) => "create:part_belt_diagonal_end",
+        (true, true, ..) => "create:part_belt_diagonal_middle",
         (false, true, true, _) => "create:part_belt_start_bottom",
         (false, true, _, true) => "create:part_belt_end_bottom",
         (false, true, ..) => "create:part_belt_middle_bottom",
@@ -2318,6 +2319,18 @@ mod tests {
         // Turned the other way it moves off again, and that is a change too.
         assert!(belt.tick(4, -0.1, true, &mut blocked).changed);
         assert!(!belt.items[0].stalled);
+    }
+
+    #[test]
+    fn a_diagonal_belt_scrolls_in_the_bottom_pass() {
+        let seg = Segment {
+            facing: Dir::North,
+            slope: Slope::Upward,
+            part: Part::Start,
+        };
+        assert_eq!(partial(&seg, false), None);
+        assert_eq!(partial(&seg, true), Some("create:part_belt_diagonal_start"));
+        assert_eq!(scroll(&seg, -256.0, false, 0.0, true), Some(0.1875));
     }
 
     #[test]
