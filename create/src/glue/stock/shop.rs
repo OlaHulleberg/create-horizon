@@ -299,7 +299,8 @@ fn cloth_of(host: &dyn Host, c: &Compound) -> Cloth {
     }
 }
 
-/// The cloths of column `chunk`, as `TableCloths` (`Pos` and the cloth's data each).
+/// The cloths of column `chunk` as an older version saved them under `create_table_cloths`
+/// (`Pos` and the cloth's data each): what their block entities keep.
 pub(super) fn save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
     let host: &dyn Host = &*lv.host;
     let mut list: Vec<([i32; 3], Compound)> = cloths(lv.dim, |m| {
