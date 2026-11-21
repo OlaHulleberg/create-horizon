@@ -467,56 +467,6 @@ pub(super) fn give_back_drained(
 /// compound per held stack.
 const KEY: &str = "create_machines";
 
-pub(super) fn chunk_data_save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
-    let here = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]);
-    let codes = std::cell::RefCell::new(create_engine::tank::Codes::default());
-    let tank = |p: &[i32; 3], f: Option<(Fluid, u32)>| {
-        let n = f.map_or(0, |(_, n)| n as i32);
-        let fluid = codes.borrow_mut().code(f.map(|f| f.0));
-        [p[0], p[1], p[2], fluid, n]
-    };
-    let Some((spouts, drains, items)) = with_world(|w| {
-        let d = &w.dims[dim];
-        let mut spouts: Vec<_> = d.spouts.iter().filter(|(p, _)| here(p)).collect();
-        spouts.sort_by_key(|e| e.0);
-        let mut drains: Vec<_> = d.drains.iter().filter(|(p, _)| here(p)).collect();
-        drains.sort_by_key(|e| e.0);
-        let items: Vec<Tag> = drains
-            .iter()
-            .filter_map(|(p, dr)| {
-                let h = dr.held.as_ref()?;
-                Some(Tag::Compound(Compound::from([
-                    ("Pos".into(), Tag::IntArray(p.to_vec())),
-                    ("Item".into(), Tag::String(h.item.as_str().into())),
-                    ("Count".into(), Tag::Int(i32::from(h.count))),
-                    ("BeltPosition".into(), Tag::Float(h.position.to_bits())),
-                    ("From".into(), Tag::Int(h.from as i32)),
-                    ("ProcessingTicks".into(), Tag::Int(dr.processing)),
-                ])))
-            })
-            .collect();
-        let spouts: Vec<i32> = spouts
-            .iter()
-            .flat_map(|(p, s)| spout::record(**p, s, &mut codes.borrow_mut()))
-            .collect();
-        let drains: Vec<i32> = drains.iter().flat_map(|(p, s)| tank(p, s.fluid)).collect();
-        Some((spouts, drains, items))
-    })
-    .flatten() else {
-        return;
-    };
-    if spouts.is_empty() && drains.is_empty() {
-        return;
-    }
-    let mut own = Compound::from([
-        ("spout_records".into(), Tag::IntArray(spouts)),
-        ("drains".into(), Tag::IntArray(drains)),
-        ("drain_items".into(), Tag::List(items)),
-    ]);
-    super::put_fluid_keys(&mut own, KEY, codes.into_inner());
-    data.insert(KEY.into(), Tag::Compound(own));
-}
-
 /// What a column saved of its spouts and drains, put back (the blocks found later keep it).
 pub(super) fn chunk_load(dim: usize, data: &Compound) {
     let Some(Tag::Compound(own)) = data.get(&KEY.into()) else {

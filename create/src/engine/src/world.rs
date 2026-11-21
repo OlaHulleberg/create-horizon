@@ -4435,6 +4435,20 @@ impl CreateWorld {
         self.dims[dim].tank_saved.extend(saved);
     }
 
+    /// `FluidTankBlockEntity.read` of a placed tank: a controller's contents change at once
+    /// (its shape is the world's); a tank not found yet takes all of `saved` when it is.
+    pub fn read_tank(&mut self, dim: usize, pos: [i32; 3], saved: crate::tank::SavedTank) {
+        let d = &mut self.dims[dim];
+        if !d.tanks.parts.contains_key(&pos) {
+            d.tank_saved.insert(pos, saved);
+            return;
+        }
+        if let (Some(m), Some(live)) = (saved.multi, d.tanks.multis.get_mut(&pos)) {
+            live.tank = m.tank;
+            d.tank_changes.push(pos);
+        }
+    }
+
     /// FluidTankBlockEntity.write for every column member, including pending connectivity.
     pub fn column_tanks(
         &self,

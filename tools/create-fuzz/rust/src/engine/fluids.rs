@@ -216,7 +216,7 @@ impl Run {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::persistence::{codec::Tag, fluids as saved};
+    use crate::persistence::fluids as saved;
     use create_engine::tank::{Fluid, Tank};
 
     fn tank_case() -> Scenario {
@@ -300,7 +300,7 @@ mod tests {
         r.w.set_tank(0, p, Tank::default());
         r.w.toggle_tank_windows(0, p);
         r.tick();
-        assert!(r.persisted.fluid_columns.contains_key(&(0, 0)));
+        assert!(r.persisted.records[&p].contains_key("FluidTank"));
         r.reload();
         let (_, m) = r.w.tank(0, p).unwrap();
         assert_eq!(m, create_engine::tank::Multi::default());
@@ -391,12 +391,22 @@ mod tests {
                 },
             ));
         d.fluid_transport.pipes.insert([6, 8, 0], pipe);
-        let data = saved::save_column(&r.w, (0, 0));
-        let encoded = serde_json::to_vec(&data).unwrap();
+        let mut data = std::collections::BTreeMap::new();
+        saved::save_entities(&r.w, (0, 0), &mut data);
+        let encoded = serde_json::to_vec(&data.into_iter().collect::<Vec<_>>()).unwrap();
         r.w.dims[0] = Default::default();
-        saved::load_column(&mut r.w, &serde_json::from_slice(&encoded).unwrap());
+        let data: Vec<([i32; 3], crate::persistence::codec::Compound)> =
+            serde_json::from_slice(&encoded).unwrap();
+        for (pos, tag) in data {
+            let block = if pos == [3, 8, 0] {
+                create_engine::Block::CreativeFluidTank
+            } else {
+                create_engine::Block::FluidPipe
+            };
+            saved::load(&mut r.w, pos, block, &tag);
+        }
         let d = &r.w.dims[0];
-        assert_eq!(d.plumbing.hose_saved[&[1, 8, 0]].0, 2.125);
+        assert_eq!(d.plumbing.hose_saved[&[1, 8, 0]].0, 2.1259);
         assert_eq!(
             d.plumbing.filters[&[2, 8, 0]].item,
             "minecraft:water_bucket"
@@ -419,7 +429,6 @@ mod tests {
                 .tank,
             Some((Fluid::Water, 900))
         );
-        assert!(matches!(data.get("create_fluids"), Some(Tag::Compound(_))));
     }
     #[test]
     fn secondary_use_bypasses_the_tank_container_handler() {

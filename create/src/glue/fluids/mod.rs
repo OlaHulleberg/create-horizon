@@ -59,6 +59,7 @@ pub(crate) mod pipes;
 mod place;
 pub(crate) mod plumbing;
 mod rims;
+mod saved;
 mod spouted;
 
 use super::server::ServerLevel;
@@ -267,6 +268,7 @@ impl Subsystem for Fluids {
         r.item_part(tank, place::TankItem);
     }
 
+    /// What an older version kept in the column.
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, chunk: [i32; 2], data: &Compound) {
         flows::forget_column(lv.dim, chunk);
         let tanks = tanks_from_nbt(data);
@@ -281,66 +283,27 @@ impl Subsystem for Fluids {
         pipes::chunk_load(dim, data);
     }
 
-    fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
-        let dim = lv.dim;
-        let tanks = with_world(|w| w.column_tanks(dim, chunk[0], chunk[1])).unwrap_or_default();
-        if !tanks.is_empty() {
-            // Per-member FluidTankBlockEntity.write state, including Uninitialized;
-            // controller contents occupy the first eight fields.
-            let mut codes = Codes::default();
-            let v = tanks
-                .iter()
-                .flat_map(|(p, saved)| {
-                    let m = saved.multi.unwrap_or_default();
-                    [
-                        p[0],
-                        p[1],
-                        p[2],
-                        codes.code(m.tank.fluid),
-                        m.tank.amount as i32,
-                        i32::from(m.width),
-                        i32::from(m.height),
-                        i32::from(m.window),
-                        saved.part.controller[0],
-                        saved.part.controller[1],
-                        saved.part.controller[2],
-                        i32::from(saved.part.window),
-                        i32::from(saved.part.update_connectivity),
-                        i32::from(saved.multi.is_some()),
-                    ]
-                })
-                .collect();
-            data.insert("tank_entities".into(), Tag::IntArray(v));
-            put_fluid_keys(data, "tank_entities", codes);
-        }
-        // `FluidTankBlockEntity.write`'s Boiler compound: its controller's saved data.
-        let boilers = with_world(|w| w.column_boilers(dim, chunk[0], chunk[1])).unwrap_or_default();
-        if !boilers.is_empty() {
-            data.insert(
-                "boilers".into(),
-                Tag::IntArray(
-                    boilers
-                        .iter()
-                        .flat_map(|(p, b)| {
-                            [
-                                p[0],
-                                p[1],
-                                p[2],
-                                b.water_supply.to_bits() as i32,
-                                b.active_heat,
-                                i32::from(b.passive_heat),
-                                b.attached_engines,
-                                b.attached_whistles,
-                                i32::from(b.needs_heat_level_update),
-                            ]
-                        })
-                        .collect(),
-                ),
-            );
-        }
-        plumbing::chunk_data_save(dim, chunk, data);
-        machines::chunk_data_save(dim, chunk, data);
-        pipes::chunk_data_save(dim, chunk, data);
+    fn save_entities(
+        &self,
+        lv: &ServerLevel<'_>,
+        chunk: [i32; 2],
+        out: &mut super::entity_data::Entities,
+    ) {
+        saved::save(lv, chunk, out);
+    }
+
+    fn load_entity(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        tag: &Compound,
+    ) {
+        saved::load(lv, pos, block, tag);
+    }
+
+    fn saved_keys(&self, block: create_engine::Block) -> &'static [&'static str] {
+        saved::saved_keys(block)
     }
 
     /// Prepare pipes, boilers, valves and tanks before the shared transport walk.

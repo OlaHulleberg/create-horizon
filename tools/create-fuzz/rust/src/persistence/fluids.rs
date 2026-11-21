@@ -1,38 +1,13 @@
-//! Fluid column codecs from MIT glue/fluids/{mod,plumbing,machines,pipes}.rs.
-//! Called only by the marked-column flush and chunk-load phases, never at unload.
+//! Fluid block entity codecs from MIT glue/fluids/saved.rs.
+//! Called only by the marked-column flush and entity-load phases, never at unload.
 use super::codec::{Compound, Tag};
 use crate::scenario::Pos;
 use create_engine::kinetics::Dir;
 use create_engine::spout;
 use create_engine::tank::{Codes, Fluid, MAX_HEIGHT, MAX_WIDTH, Multi, Tank};
 use create_engine::world::CreateWorld;
+use std::collections::BTreeMap;
 
-fn ints<'a>(data: &'a Compound, key: &str) -> &'a [i32] {
-    match data.get(key) {
-        Some(Tag::IntArray(v)) => v,
-        _ => &[],
-    }
-}
-fn keys(data: &Compound, key: &str) -> Vec<String> {
-    match data.get(&format!("{key}_fluids")) {
-        Some(Tag::List(v)) => v
-            .iter()
-            .map(|t| match t {
-                Tag::String(s) => s.clone(),
-                _ => String::new(),
-            })
-            .collect(),
-        _ => vec![],
-    }
-}
-fn put_keys(data: &mut Compound, key: &str, codes: Codes) {
-    if !codes.keys.is_empty() {
-        data.insert(
-            format!("{key}_fluids"),
-            Tag::List(codes.keys.into_iter().map(Tag::String).collect()),
-        );
-    }
-}
 pub fn shown_tank(m: Option<Multi>) -> Compound {
     let mut codes = Codes::default();
     let v = m.map_or_else(Vec::new, |m| {
@@ -52,404 +27,277 @@ pub fn shown_tank(m: Option<Multi>) -> Compound {
         ),
     ])
 }
-pub fn save_column(w: &CreateWorld, column: (i32, i32)) -> Compound {
+const TANK: &str = "FluidTank";
+const BOILER: &str = "BoilerState";
+const SMART_PIPE: &str = "SmartPipe";
+const HOSE: &str = "HosePulley";
+const CREATIVE: &str = "CreativeTank";
+const SPOUT: &str = "SpoutTank";
+const DRAIN: &str = "DrainTank";
+
+fn put_fluid(c: &mut Compound, fluid: Option<Fluid>) {
+    if let Some(f) = fluid {
+        c.insert("FluidName".into(), Tag::String(f.key()));
+    }
+}
+fn fluid_of(c: &Compound) -> Option<Fluid> {
+    match c.get("FluidName") {
+        Some(Tag::String(s)) => Fluid::of_key(s),
+        _ => None,
+    }
+}
+fn int(c: &Compound, k: &str) -> i32 {
+    match c.get(k) {
+        Some(Tag::Int(v)) => *v,
+        _ => 0,
+    }
+}
+fn float(c: &Compound, k: &str) -> f32 {
+    match c.get(k) {
+        Some(Tag::Float(v)) => f32::from_bits(*v),
+        _ => 0.,
+    }
+}
+fn flag(c: &Compound, k: &str) -> bool {
+    matches!(c.get(k), Some(Tag::Byte(b)) if *b != 0)
+}
+fn byte(b: bool) -> Tag {
+    Tag::Byte(i8::from(b))
+}
+fn multi_to_tag(m: &Multi) -> Compound {
+    let mut c = Compound::from([
+        ("Amount".into(), Tag::Int(m.tank.amount as i32)),
+        ("Size".into(), Tag::Int(i32::from(m.width))),
+        ("Height".into(), Tag::Int(i32::from(m.height))),
+        ("Window".into(), byte(m.window)),
+    ]);
+    put_fluid(&mut c, m.tank.fluid);
+    c
+}
+fn multi_of(c: &Compound) -> Multi {
+    Multi {
+        tank: Tank {
+            fluid: fluid_of(c),
+            amount: int(c, "Amount").max(0) as u32,
+        },
+        width: int(c, "Size").clamp(1, MAX_WIDTH) as u8,
+        height: int(c, "Height").clamp(1, MAX_HEIGHT) as u8,
+        window: flag(c, "Window"),
+    }
+}
+fn fluid_tank(fluid: Option<(Fluid, u32)>, processing: Option<i32>) -> Compound {
+    let mut c = Compound::from([("Amount".into(), Tag::Int(fluid.map_or(0, |f| f.1 as i32)))]);
+    put_fluid(&mut c, fluid.map(|f| f.0));
+    if let Some(ticks) = processing {
+        c.insert("ProcessingTicks".into(), Tag::Int(ticks));
+    }
+    c
+}
+fn fluid_tank_of(c: &Compound) -> Option<(Fluid, u32)> {
+    fluid_of(c).map(|f| (f, int(c, "Amount").max(0) as u32))
+}
+
+/// glue/fluids/saved.rs `save`: the fluid blocks' fields, by block entity.
+pub fn save_entities(w: &CreateWorld, column: (i32, i32), out: &mut BTreeMap<Pos, Compound>) {
     let here = |p: &Pos| (p[0] >> 4, p[2] >> 4) == column;
-    let mut data = Compound::new();
-    let tanks = w.column_tanks(0, column.0, column.1);
-    let mut codes = Codes::default();
-    let v: Vec<_> = tanks
-        .iter()
-        .flat_map(|(p, saved)| {
-            let m = saved.multi.unwrap_or_default();
-            [
-                p[0],
-                p[1],
-                p[2],
-                codes.code(m.tank.fluid),
-                m.tank.amount as i32,
-                i32::from(m.width),
-                i32::from(m.height),
-                i32::from(m.window),
-                saved.part.controller[0],
-                saved.part.controller[1],
-                saved.part.controller[2],
-                i32::from(saved.part.window),
-                i32::from(saved.part.update_connectivity),
-                i32::from(saved.multi.is_some()),
-            ]
-        })
-        .collect();
-    if !v.is_empty() {
-        data.insert("tank_entities".into(), Tag::IntArray(v));
-        put_keys(&mut data, "tank_entities", codes);
+    for (p, saved) in w.column_tanks(0, column.0, column.1) {
+        let part = saved.part;
+        let mut c = Compound::from([
+            ("Controller".into(), Tag::IntArray(part.controller.to_vec())),
+            ("Window".into(), byte(part.window)),
+            ("Uninitialized".into(), byte(part.update_connectivity)),
+        ]);
+        if let Some(m) = saved.multi {
+            c.insert("Contents".into(), Tag::Compound(multi_to_tag(&m)));
+        }
+        out.entry(p)
+            .or_default()
+            .insert(TANK.into(), Tag::Compound(c));
+    }
+    for (p, b) in w.column_boilers(0, column.0, column.1) {
+        let c = Compound::from([
+            ("Supply".into(), Tag::Float(b.water_supply.to_bits())),
+            ("ActiveHeat".into(), Tag::Int(b.active_heat)),
+            ("PassiveHeat".into(), byte(b.passive_heat)),
+            ("Engines".into(), Tag::Int(b.attached_engines)),
+            ("Whistles".into(), Tag::Int(b.attached_whistles)),
+            ("Update".into(), byte(b.needs_heat_level_update)),
+        ]);
+        out.entry(p)
+            .or_default()
+            .insert(BOILER.into(), Tag::Compound(c));
+    }
+    let plumbing = &w.dims[0].plumbing;
+    for (p, f) in plumbing.filters.iter().filter(|(p, _)| here(p)) {
+        let mut c = Compound::from([("Item".into(), Tag::String(f.item.clone()))]);
+        put_fluid(&mut c, f.fluid);
+        out.entry(*p)
+            .or_default()
+            .insert(SMART_PIPE.into(), Tag::Compound(c));
+    }
+    let hoses = plumbing.hoses.iter().map(|(p, h)| (p, h.offset, h.tank));
+    let staged = plumbing.hose_saved.iter().map(|(p, s)| (p, s.0, s.1));
+    for (p, offset, tank) in hoses.chain(staged).filter(|(p, _, _)| here(p)) {
+        let mut c = fluid_tank(tank.fluid.map(|f| (f, tank.amount)), None);
+        c.insert("Offset".into(), Tag::Float(offset.to_bits()));
+        out.entry(*p)
+            .or_default()
+            .insert(HOSE.into(), Tag::Compound(c));
+    }
+    let creative = plumbing.creative.iter().chain(&plumbing.creative_saved);
+    for (p, f) in creative.filter(|(p, _)| here(p)) {
+        let mut c = Compound::new();
+        put_fluid(&mut c, *f);
+        out.entry(*p)
+            .or_default()
+            .insert(CREATIVE.into(), Tag::Compound(c));
+    }
+    for (p, m) in w.column_creative_tanks(0, column.0, column.1) {
+        let entry = out.entry(p).or_default();
+        let Tag::Compound(c) = entry
+            .entry(CREATIVE.into())
+            .or_insert_with(|| Tag::Compound(Compound::new()))
+        else {
+            continue;
+        };
+        c.extend([
+            ("Size".into(), Tag::Int(i32::from(m.width))),
+            ("Height".into(), Tag::Int(i32::from(m.height))),
+            ("Window".into(), byte(m.window)),
+        ]);
     }
     let d = &w.dims[0];
-    let p = &d.plumbing;
-    let mut filters: Vec<_> = p.filters.iter().filter(|(p, _)| here(p)).collect();
-    filters.sort_by_key(|(p, _)| **p);
-    let mut hoses: Vec<_> = p
-        .hoses
-        .iter()
-        .filter(|(p, _)| here(p))
-        .map(|(p, h)| (*p, h.offset, h.tank))
-        .chain(
-            p.hose_saved
-                .iter()
-                .filter(|(p, _)| here(p))
-                .map(|(p, (o, t))| (*p, *o, *t)),
-        )
-        .collect();
-    hoses.sort_by_key(|v| v.0);
-    let mut creative: Vec<_> = p
-        .creative
-        .iter()
-        .chain(p.creative_saved.iter())
-        .filter(|(p, _)| here(p))
-        .collect();
-    creative.sort_by_key(|(p, _)| **p);
-    // Match the glue's guard, including its treatment of a column with only pending multis.
-    if !filters.is_empty() || !hoses.is_empty() || !creative.is_empty() {
-        let mut own = Compound::new();
-        let mut codes = Codes::default();
-        own.insert(
-            "filters".into(),
-            Tag::IntArray(
-                filters
-                    .iter()
-                    .flat_map(|(p, f)| [p[0], p[1], p[2], codes.code(f.fluid)])
-                    .collect(),
-            ),
-        );
-        own.insert(
-            "filter_items".into(),
-            Tag::List(
-                filters
-                    .iter()
-                    .map(|(_, f)| Tag::String(f.item.clone()))
-                    .collect(),
-            ),
-        );
-        own.insert(
-            "hoses".into(),
-            Tag::IntArray(
-                hoses
-                    .iter()
-                    .flat_map(|(p, o, t)| {
-                        [
-                            p[0],
-                            p[1],
-                            p[2],
-                            (o * 1000.) as i32,
-                            codes.code(t.fluid),
-                            t.amount as i32,
-                        ]
-                    })
-                    .collect(),
-            ),
-        );
-        own.insert(
-            "creative_tanks".into(),
-            Tag::IntArray(
-                creative
-                    .iter()
-                    .flat_map(|(p, f)| [p[0], p[1], p[2], codes.code(**f)])
-                    .collect(),
-            ),
-        );
-        own.insert(
-            "creative_multis".into(),
-            Tag::IntArray(
-                w.column_creative_tanks(0, column.0, column.1)
-                    .iter()
-                    .flat_map(|(p, m)| {
-                        [
-                            p[0],
-                            p[1],
-                            p[2],
-                            i32::from(m.width),
-                            i32::from(m.height),
-                            i32::from(m.window),
-                        ]
-                    })
-                    .collect(),
-            ),
-        );
-        put_keys(&mut own, "create_fluids", codes);
-        data.insert("create_fluids".into(), Tag::Compound(own));
+    for (p, s) in d.spouts.iter().filter(|(p, _)| here(p)) {
+        let c = fluid_tank(s.fluid, Some(s.processing));
+        out.entry(*p)
+            .or_default()
+            .insert(SPOUT.into(), Tag::Compound(c));
     }
-    let mut spouts: Vec<_> = d.spouts.iter().filter(|(p, _)| here(p)).collect();
-    spouts.sort_by_key(|(p, _)| **p);
-    let mut drains: Vec<_> = d.drains.iter().filter(|(p, _)| here(p)).collect();
-    drains.sort_by_key(|(p, _)| **p);
-    if !spouts.is_empty() || !drains.is_empty() {
-        let mut codes = Codes::default();
-        // glue/fluids/machines.rs `chunk_data_save`: a `spout::record` each.
-        let spouts: Vec<i32> = spouts
-            .iter()
-            .flat_map(|(p, s)| spout::record(**p, s, &mut codes))
-            .collect();
-        let mut tank = |p: &Pos, f: Option<(Fluid, u32)>| {
-            [
-                p[0],
-                p[1],
-                p[2],
-                codes.code(f.map(|v| v.0)),
-                f.map_or(0, |v| v.1 as i32),
-            ]
-        };
-        let fluids = drains.iter().flat_map(|(p, s)| tank(p, s.fluid)).collect();
-        let items = drains
-            .iter()
-            .filter_map(|(p, d)| {
-                let h = d.held.as_ref()?;
-                Some(Tag::Compound(Compound::from([
-                    ("Pos".into(), Tag::IntArray(p.to_vec())),
+    for (p, dr) in d.drains.iter().filter(|(p, _)| here(p)) {
+        let mut c = fluid_tank(dr.fluid, Some(dr.processing));
+        if let Some(h) = &dr.held {
+            c.insert(
+                "HeldItem".into(),
+                Tag::Compound(Compound::from([
                     ("Item".into(), Tag::String(h.item.clone())),
                     ("Count".into(), Tag::Int(i32::from(h.count))),
                     ("BeltPosition".into(), Tag::Float(h.position.to_bits())),
                     ("From".into(), Tag::Int(h.from as i32)),
-                    ("ProcessingTicks".into(), Tag::Int(d.processing)),
-                ])))
-            })
-            .collect();
-        let mut own = Compound::from([
-            ("spout_records".into(), Tag::IntArray(spouts)),
-            ("drains".into(), Tag::IntArray(fluids)),
-            ("drain_items".into(), Tag::List(items)),
-        ]);
-        put_keys(&mut own, "create_machines", codes);
-        data.insert("create_machines".into(), Tag::Compound(own));
-    }
-    let records = d
-        .fluid_transport
-        .pipes
-        .iter()
-        .filter(|(p, _)| here(p))
-        .map(|(p, b)| {
-            let mut data = super::connections::encode(b);
-            data.insert("Pos".into(), Tag::IntArray(p.to_vec()));
-            Tag::Compound(data)
-        })
-        .collect();
-    data.insert("Connections".into(), Tag::List(records));
-    data
-}
-
-pub fn load_column(w: &mut CreateWorld, data: &Compound) {
-    let k = keys(data, "tank_multis");
-    let tank = |c: &[i32]| Tank {
-        fluid: Codes::fluid(&k, c[3]),
-        amount: c[4].max(0) as u32,
-    };
-    let saved: Vec<_> = ints(data, "tank_multis")
-        .as_chunks::<8>()
-        .0
-        .iter()
-        .map(|c| {
-            (
-                [c[0], c[1], c[2]],
-                Multi {
-                    tank: tank(c),
-                    width: c[5].clamp(1, MAX_WIDTH) as u8,
-                    height: c[6].clamp(1, MAX_HEIGHT) as u8,
-                    window: c[7] != 0,
-                },
-            )
-        })
-        .chain(ints(data, "tanks").as_chunks::<5>().0.iter().map(|c| {
-            (
-                [c[0], c[1], c[2]],
-                Multi {
-                    tank: tank(c),
-                    ..Default::default()
-                },
-            )
-        }))
-        .collect();
-    let saved = if data.contains_key("tank_entities") {
-        let keys = keys(data, "tank_entities");
-        ints(data, "tank_entities")
-            .as_chunks::<14>()
-            .0
-            .iter()
-            .map(|c| {
-                (
-                    [c[0], c[1], c[2]],
-                    create_engine::tank::SavedTank {
-                        part: create_engine::tank::Part {
-                            controller: [c[8], c[9], c[10]],
-                            window: c[11] != 0,
-                            update_connectivity: c[12] != 0,
-                        },
-                        multi: (c[13] != 0).then_some(Multi {
-                            tank: Tank {
-                                fluid: Codes::fluid(&keys, c[3]),
-                                amount: c[4].max(0) as u32,
-                            },
-                            width: c[5] as u8,
-                            height: c[6] as u8,
-                            window: c[7] != 0,
-                        }),
-                    },
-                )
-            })
-            .collect::<Vec<_>>()
-    } else {
-        saved
-            .into_iter()
-            .map(|(p, m)| (p, create_engine::tank::SavedTank::controller(p, m)))
-            .collect()
-    };
-    w.load_tanks(0, saved.into_iter());
-    if let Some(Tag::Compound(own)) = data.get("create_fluids") {
-        let k = keys(own, "create_fluids");
-        let p = &mut w.dims[0].plumbing;
-        let items = match own.get("filter_items") {
-            Some(Tag::List(v)) => v.as_slice(),
-            _ => &[],
-        };
-        for (i, c) in ints(own, "filters").as_chunks::<4>().0.iter().enumerate() {
-            let fluid = Codes::fluid(&k, c[3]);
-            let item = match items.get(i) {
-                Some(Tag::String(s)) => s.clone(),
-                Some(_) => String::new(),
-                None => fluid.and_then(Fluid::bucket).unwrap_or_default().into(),
-            };
-            let pos = [c[0], c[1], c[2]];
-            p.filters
-                .insert(pos, create_engine::fluids::SmartFilter { item, fluid });
-            p.filter_changes.push(pos);
-        }
-        for c in ints(own, "hoses").as_chunks::<6>().0 {
-            p.hose_saved.insert(
-                [c[0], c[1], c[2]],
-                (
-                    c[3].max(0) as f32 / 1000.,
-                    Tank {
-                        fluid: Codes::fluid(&k, c[4]),
-                        amount: c[5].clamp(0, create_engine::hose::CAPACITY as i32) as u32,
-                    },
-                ),
+                ])),
             );
         }
-        for c in ints(own, "creative_tanks").as_chunks::<4>().0 {
-            p.creative_saved
-                .insert([c[0], c[1], c[2]], Codes::fluid(&k, c[3]));
+        out.entry(*p)
+            .or_default()
+            .insert(DRAIN.into(), Tag::Compound(c));
+    }
+    for (p, b) in d.fluid_transport.pipes.iter().filter(|(p, _)| here(p)) {
+        out.entry(*p)
+            .or_default()
+            .extend(super::connections::encode(b));
+    }
+}
+
+/// glue/fluids/saved.rs `load`.
+pub fn load(w: &mut CreateWorld, pos: Pos, block: create_engine::Block, tag: &Compound) {
+    let compound = |k: &str| match tag.get(k) {
+        Some(Tag::Compound(c)) => Some(c),
+        _ => None,
+    };
+    let transport = super::connections::decode(tag);
+    if let Some(c) = compound(TANK) {
+        let part = create_engine::tank::Part {
+            controller: match c.get("Controller") {
+                Some(Tag::IntArray(v)) if v.len() == 3 => [v[0], v[1], v[2]],
+                _ => pos,
+            },
+            window: flag(c, "Window"),
+            update_connectivity: flag(c, "Uninitialized"),
+        };
+        let multi = match c.get("Contents") {
+            Some(Tag::Compound(m)) => Some(multi_of(m)),
+            _ => None,
+        };
+        let saved = create_engine::tank::SavedTank { part, multi };
+        w.read_tank(0, pos, saved);
+    }
+    if let Some(c) = compound(BOILER) {
+        let b = create_engine::steam::SavedBoiler {
+            water_supply: float(c, "Supply"),
+            active_heat: int(c, "ActiveHeat"),
+            passive_heat: flag(c, "PassiveHeat"),
+            attached_engines: int(c, "Engines"),
+            attached_whistles: int(c, "Whistles"),
+            needs_heat_level_update: flag(c, "Update"),
+        };
+        w.load_boilers(0, std::iter::once((pos, b)));
+    }
+    if block == create_engine::Block::CreativeFluidTank
+        && let Some(c) = compound(CREATIVE)
+    {
+        w.dims[0].plumbing.creative_saved.insert(pos, fluid_of(c));
+        if c.contains_key("Size") {
+            let m = Multi {
+                tank: Tank::default(),
+                ..multi_of(c)
+            };
+            w.load_creative_tanks(0, std::iter::once((pos, m)));
         }
-        w.load_creative_tanks(
-            0,
-            ints(own, "creative_multis")
-                .as_chunks::<6>()
-                .0
-                .iter()
-                .map(|c| {
-                    (
-                        [c[0], c[1], c[2]],
-                        Multi {
-                            width: c[3].clamp(1, MAX_WIDTH) as u8,
-                            height: c[4].clamp(1, MAX_HEIGHT) as u8,
-                            window: c[5] != 0,
-                            tank: Tank::default(),
-                        },
-                    )
-                }),
+    }
+    let p = &mut w.dims[0].plumbing;
+    if let Some(c) = compound(SMART_PIPE) {
+        let item = match c.get("Item") {
+            Some(Tag::String(s)) => s.clone(),
+            _ => String::new(),
+        };
+        p.filters.insert(
+            pos,
+            create_engine::fluids::SmartFilter {
+                item,
+                fluid: fluid_of(c),
+            },
+        );
+        p.filter_changes.push(pos);
+    }
+    if let Some(c) = compound(HOSE) {
+        let tank = Tank {
+            fluid: fluid_of(c),
+            amount: int(c, "Amount").clamp(0, create_engine::hose::CAPACITY as i32) as u32,
+        };
+        p.hose_saved.insert(pos, (float(c, "Offset").max(0.), tank));
+    }
+    let d = &mut w.dims[0];
+    if let Some(c) = compound(SPOUT) {
+        d.spouts.insert(
+            pos,
+            spout::Spout {
+                fluid: fluid_tank_of(c),
+                processing: int(c, "ProcessingTicks"),
+            },
         );
     }
-    if let Some(Tag::Compound(own)) = data.get("create_machines") {
-        let k = keys(own, "create_machines");
-        let fluid = |c: &[i32]| Codes::fluid(&k, c[3]).map(|f| (f, c[4].max(0) as u32));
-        let d = &mut w.dims[0];
-        let legacy = ints(own, "spouts")
-            .as_chunks::<{ spout::LEGACY_RECORD }>()
-            .0
-            .iter();
-        let records = ints(own, "spout_records")
-            .as_chunks::<{ spout::RECORD }>()
-            .0;
-        for r in legacy
-            .map(|r| r.as_slice())
-            .chain(records.iter().map(|r| r.as_slice()))
-        {
-            let (pos, s) = spout::read(r, &k);
-            d.spouts.insert(pos, s);
-        }
-        for c in ints(own, "drains").as_chunks::<5>().0 {
-            d.drains.entry([c[0], c[1], c[2]]).or_default().fluid = fluid(c);
-        }
-        if let Some(Tag::List(items)) = own.get("drain_items") {
-            for t in items {
-                let Tag::Compound(c) = t else { continue };
-                let (p, Some(Tag::String(item))) = (ints(c, "Pos"), c.get("Item")) else {
-                    continue;
+    if let Some(c) = compound(DRAIN) {
+        let dr = d.drains.entry(pos).or_default();
+        dr.fluid = fluid_tank_of(c);
+        dr.processing = int(c, "ProcessingTicks");
+        dr.held = match c.get("HeldItem") {
+            Some(Tag::Compound(h)) => {
+                let item = match h.get("Item") {
+                    Some(Tag::String(s)) => s.clone(),
+                    _ => String::new(),
                 };
-                let &[x, y, z] = p else { continue };
-                let int = |key: &str| match c.get(key) {
-                    Some(Tag::Int(i)) => *i,
-                    _ => 0,
-                };
-                let position = match c.get("BeltPosition") {
-                    Some(Tag::Float(v)) => f32::from_bits(*v),
-                    _ => 0.,
-                };
-                let dr = d.drains.entry([x, y, z]).or_default();
-                dr.processing = int("ProcessingTicks");
-                dr.held = Some(create_engine::drain::Held {
-                    item: item.clone(),
-                    count: int("Count").clamp(1, 64) as u8,
+                let position = float(h, "BeltPosition");
+                (!item.is_empty()).then(|| create_engine::drain::Held {
+                    item,
+                    count: int(h, "Count").clamp(1, 64) as u8,
                     position,
                     prev: position,
-                    from: Dir::ALL[int("From").clamp(0, 5) as usize],
-                });
+                    from: Dir::ALL[int(h, "From").clamp(0, 5) as usize],
+                })
             }
-        }
+            _ => None,
+        };
     }
-    if let Some(Tag::List(records)) = data.get("Connections") {
-        for record in records {
-            let Tag::Compound(d) = record else {
-                continue;
-            };
-            let Some(Tag::IntArray(p)) = d.get("Pos") else {
-                continue;
-            };
-            let [x, y, z] = p.as_slice() else {
-                continue;
-            };
-            if let Some(b) = super::connections::decode(d) {
-                w.dims[0].fluid_transport.pipes.insert([*x, *y, *z], b);
-            }
-        }
-    }
-    if data.contains_key("Connections") {
-        return;
-    }
-    let k = keys(data, "open_ends");
-    for c in ints(data, "open_ends").as_chunks::<7>().0 {
-        let tank = Codes::fluid(&k, c[4])
-            .map(|f| (f, c[5].max(0) as u32))
-            .filter(|t| t.1 > 0);
-        let pos = [c[0], c[1], c[2]];
-        let side = Dir::ALL[c[3].clamp(0, 5) as usize];
-        let pipe = w.dims[0]
-            .fluid_transport
-            .pipes
-            .entry(pos)
-            .or_insert_with(|| {
-                create_engine::fluids::transport::FluidTransportBehaviour::new(side.bit())
-            });
-        if pipe.connection(side).is_none() {
-            pipe.interfaces.push((side, Default::default()));
-        }
-        if let Some(connection) = pipe.connection(side) {
-            connection.set_source(create_engine::fluids::transport::Source::open(
-                create_engine::open_end::OpenEnd {
-                    tank,
-                    pulling: c[6] != 0,
-                },
-            ));
-        }
-        w.dims[0]
-            .fluid_transport
-            .changed
-            .push(create_engine::fluids::runtime::Change::Pipe(pos));
+    if let Some(b) = transport {
+        d.fluid_transport.pipes.insert(pos, b);
     }
 }

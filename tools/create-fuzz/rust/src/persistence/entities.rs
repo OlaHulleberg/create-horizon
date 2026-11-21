@@ -34,10 +34,12 @@ pub fn save_column(w: &CreateWorld, column: (i32, i32), now: u64) -> BTreeMap<Po
             .or_default()
             .insert("TransferCooldown".into(), Tag::Int(cooldown as i32));
     }
+    super::fluids::save_entities(w, column, &mut out);
     out
 }
 
 pub fn load(w: &mut CreateWorld, p: Pos, block: Block, tag: &Compound, now: u64) {
+    super::fluids::load(w, p, block, tag);
     match block {
         Block::CreativeMotor | Block::RotationSpeedController => {
             if let Some(Tag::Int(rpm)) = tag.get("ScrollValue") {

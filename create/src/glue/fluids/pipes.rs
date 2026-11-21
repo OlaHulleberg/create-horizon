@@ -449,28 +449,6 @@ fn fill_end(lv: &mut ServerLevel<'_>, pos: [i32; 3], fluid: Fluid, n: u32) -> u3
     .unwrap_or(0)
 }
 
-/// Each column owns its pipe Connections compounds, including dry pressure.
-pub(super) fn chunk_data_save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
-    let pipes = with_world(|w| {
-        w.dims[dim]
-            .fluid_transport
-            .pipes
-            .iter()
-            .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]))
-            .map(|(p, b)| (*p, b.clone()))
-            .collect::<Vec<_>>()
-    })
-    .unwrap_or_default();
-    let records = pipes
-        .into_iter()
-        .map(|(p, b)| {
-            let mut d = super::connections::encode(&b);
-            d.insert("Pos".into(), Tag::IntArray(p.to_vec()));
-            Tag::Compound(d)
-        })
-        .collect();
-    data.insert("Connections".into(), Tag::List(records));
-}
 pub(super) fn chunk_load(dim: usize, data: &Compound) {
     if let Some(Tag::List(records)) = data.get(&"Connections".into()) {
         for record in records {

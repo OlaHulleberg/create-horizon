@@ -12,7 +12,6 @@ pub(super) struct Store {
     pub valve_pointers: HashMap<Pos, Compound>,
     pub depots: HashMap<Pos, Compound>,
     pub belts: HashMap<Pos, Compound>,
-    pub fluid_columns: BTreeMap<(i32, i32), Compound>,
     pub fluid_entities: HashMap<Pos, Compound>,
     pub chain_entities: HashMap<Pos, Compound>,
     /// Powered shafts' engines, as their block entity data holds them
@@ -40,7 +39,6 @@ type ReloadData = (
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct FluidReload {
-    columns: Vec<((i32, i32), Compound)>,
     entities: Vec<(Pos, Compound)>,
 }
 
@@ -217,12 +215,6 @@ impl Run {
                     (cx, cz),
                     now,
                 ));
-            let data = crate::persistence::fluids::save_column(&self.w, (cx, cz));
-            if data.is_empty() {
-                self.persisted.fluid_columns.remove(&(cx, cz));
-            } else {
-                self.persisted.fluid_columns.insert((cx, cz), data);
-            }
         }
     }
     /// A save and reload of the running world: the Java side saves live block entities
@@ -335,12 +327,6 @@ impl Run {
             self.persisted.depots.iter().collect::<Vec<_>>(),
             self.persisted.belts.iter().collect::<Vec<_>>(),
             FluidReload {
-                columns: self
-                    .persisted
-                    .fluid_columns
-                    .iter()
-                    .map(|(&p, d)| (p, d.clone()))
-                    .collect(),
                 entities: self
                     .persisted
                     .fluid_entities
@@ -381,10 +367,6 @@ impl Run {
         self.w.dims[0].ejector_saved.extend(ejectors);
         // The Java adapter recreates the isolated case's network namespace too.
         self.w.dims[0].kinetics = create_engine::kinetics::Kinetics::new();
-        // ensure_column runs every subsystem's chunk_load before the first entity callback.
-        for (_, data) in &fluids.columns {
-            crate::persistence::fluids::load_column(&mut self.w, data);
-        }
         self.persisted.fluid_entities = fluids.entities.into_iter().collect();
         // entity_data::load: each block entity's fields once its column's data is in.
         let records: HashMap<Pos, Compound> = serde_json::from_slice(
