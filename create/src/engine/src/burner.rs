@@ -88,10 +88,10 @@ impl Burner {
         let mut time = time;
         if fuel == self.fuel {
             if self.remaining <= INSERTION_THRESHOLD {
-                time += self.remaining;
+                time = time.wrapping_add(self.remaining);
             } else if overflow && fuel == Fuel::Normal {
                 time = if self.remaining < MAX_HEAT_CAPACITY {
-                    (self.remaining + time).min(MAX_HEAT_CAPACITY)
+                    self.remaining.wrapping_add(time).min(MAX_HEAT_CAPACITY)
                 } else {
                     self.remaining
                 };
@@ -168,6 +168,28 @@ mod tests {
         }
         assert_eq!((b.fuel, b.heat()), (Fuel::None, Heat::Smouldering));
         assert!(!b.burning());
+    }
+
+    #[test]
+    fn fuel_times_wrap_as_java_ints() {
+        let mut b = Burner {
+            fuel: Fuel::Normal,
+            remaining: 1,
+            creative: None,
+        };
+        assert!(b.try_fuel(Fuel::Normal, i32::MAX, false));
+        assert_eq!(b.remaining, -2147483648);
+        assert_eq!(b.heat(), Heat::Fading);
+        b.tick();
+        assert_eq!((b.fuel, b.remaining), (Fuel::None, -2147483648));
+
+        let mut b = Burner {
+            fuel: Fuel::Normal,
+            remaining: 600,
+            creative: None,
+        };
+        assert!(b.try_fuel(Fuel::Normal, i32::MAX, true));
+        assert_eq!(b.remaining, -2147483049);
     }
 
     #[test]

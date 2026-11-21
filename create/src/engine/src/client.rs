@@ -340,22 +340,18 @@ pub fn draws_from_source(
         Block::Belt => s
             .belt
             .map(|seg| {
-                let mut v = vec![Draw {
-                    slot: 0,
-                    model: Model::Belt(seg, false),
-                    axis: Axis::Y,
-                    rpm: 0.0,
-                    phase: 0.0,
-                }];
-                if crate::belt::partial(&seg, true).is_some() {
-                    v.push(Draw {
-                        slot: 1,
-                        model: Model::Belt(seg, true),
+                let mut v: Vec<Draw> = [false, true]
+                    .into_iter()
+                    .filter(|&bottom| crate::belt::partial(&seg, bottom).is_some())
+                    .enumerate()
+                    .map(|(slot, bottom)| Draw {
+                        slot: slot as u8,
+                        model: Model::Belt(seg, bottom),
                         axis: Axis::Y,
                         rpm: 0.0,
                         phase: 0.0,
-                    });
-                }
+                    })
+                    .collect();
                 if seg.has_pulley() {
                     let axis = seg.rotation_axis();
                     v.push(Draw {

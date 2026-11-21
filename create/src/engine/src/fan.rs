@@ -226,7 +226,7 @@ pub fn advance(p: &mut Progress, kind: Kind, count: u32, can: bool) -> bool {
         return false;
     }
     let was = p.time;
-    p.time -= 1;
+    p.time = p.time.wrapping_sub(1);
     was <= 0
 }
 
@@ -287,12 +287,17 @@ pub fn push(
     out
 }
 
-/// `FanProcessing.canProcess` for an item entity: its own progress decides once it has some.
+/// `FanProcessing.canProcess` for an item entity: its own progress decides once it has some,
+/// except below -1, where only `can` does.
 pub fn entity_can(p: &Progress, kind: Kind, can: bool) -> bool {
-    if p.by == Some(kind) {
-        return p.time >= 0;
+    if p.by != Some(kind) {
+        return can;
     }
-    can
+    match p.time {
+        0.. => true,
+        -1 => false,
+        _ => can,
+    }
 }
 
 /// `decrementProcessingTime` for an item entity, one tick: true when done now. Unlike a stack on
@@ -302,7 +307,7 @@ pub fn advance_entity(p: &mut Progress, kind: Kind, count: u32) -> bool {
         p.by = Some(kind);
         p.time = PROCESSING_TIME * ((count.max(1) as i32 - 1) / 16 + 1) + 1;
     }
-    p.time -= 1;
+    p.time = p.time.wrapping_sub(1);
     p.time == 0
 }
 
@@ -756,6 +761,25 @@ mod tests {
         assert!(entity_can(&p, Kind::Splashing, false));
         advance_entity(&mut p, Kind::Splashing, 1);
         assert!(!entity_can(&p, Kind::Splashing, true));
+    }
+
+    #[test]
+    fn an_entity_timer_below_minus_one_runs_on_while_the_type_can_process() {
+        let mut p = Progress {
+            by: Some(Kind::Blasting),
+            time: -3,
+        };
+        assert!(!entity_can(&p, Kind::Blasting, false));
+        let mut times = Vec::new();
+        for _ in 0..4 {
+            assert!(entity_can(&p, Kind::Blasting, true));
+            assert!(!advance_entity(&mut p, Kind::Blasting, 17));
+            times.push(p.time);
+        }
+        assert_eq!(times, [-4, -5, -6, -7]);
+        p.time = i32::MIN;
+        advance_entity(&mut p, Kind::Blasting, 17);
+        assert_eq!(p.time, i32::MAX);
     }
 
     #[test]

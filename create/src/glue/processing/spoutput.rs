@@ -16,7 +16,6 @@ use crate::glue::server::{ServerLevel, update_all};
 use crate::glue::world::with_world;
 use create_engine::basin;
 use create_engine::kinetics::Dir;
-use create_engine::processing::Slot;
 use create_engine::tank::{Codes, Fluid};
 use mod_api::{Compound, Tag};
 use std::cell::RefCell;
@@ -324,31 +323,13 @@ pub fn accepts(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> bool {
     d == Dir::Down || has_target(lv, pos, d)
 }
 
-/// `acceptOutputs` after a recipe put its item results into `after`'s outputs: facing a side,
-/// what it added there goes into the spout's buffer instead.
-pub fn route(lv: &mut ServerLevel<'_>, pos: [i32; 3], before: &[Slot], after: &mut [Slot]) {
-    if facing(lv, pos) == Dir::Down {
-        return;
-    }
-    let mut added: Vec<(String, u8)> = Vec::new();
-    for i in basin::OUTPUTS {
-        let was = before.get(i).cloned().flatten();
-        let now = after.get(i).cloned().flatten();
-        let Some((id, n)) = now else { continue };
-        let had = was.filter(|(w, _)| *w == id).map_or(0, |(_, m)| m);
-        if n > had {
-            match added.iter_mut().find(|(a, _)| *a == id) {
-                Some((_, m)) => *m = m.saturating_add(n - had),
-                None => added.push((id.clone(), n - had)),
-            }
-            after[i] = (had > 0).then_some((id, had));
-        }
-    }
-    if added.is_empty() {
+/// `acceptOutputs` facing a side: a recipe's item results go into the spout's buffer.
+pub fn route(lv: &mut ServerLevel<'_>, pos: [i32; 3], results: Vec<(String, u8)>) {
+    if results.is_empty() {
         return;
     }
     let mut list = data(lv, pos).map(|d| overflow(&d)).unwrap_or_default();
-    list.extend(added);
+    list.extend(results);
     super::basin::set_shown(lv, pos, &[(OVERFLOW_KEY, Some(overflow_tag(&list)))]);
     BUSY.with_borrow_mut(|b| b.insert((lv.dim, pos), ()));
 }
