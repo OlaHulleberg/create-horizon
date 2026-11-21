@@ -1426,7 +1426,7 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
             .unwrap_or_default()
     });
     let carried = crate::glue::contraptions::actors::with_extras(
-        crate::glue::contraptions::actors::bearing_actors(&blocks),
+        crate::glue::contraptions::actors::bearing_actors(&*lv.host, &blocks),
         &extras,
     );
     crate::glue::advancements::assembled(lv, pos, &blocks);
@@ -1934,7 +1934,7 @@ fn contraption_of(
     let mut extras = crate::glue::contraptions::actors::extras_from_nbt(c);
     extras.glue.clear();
     let carried = crate::glue::contraptions::actors::with_extras(
-        crate::glue::contraptions::actors::bearing_actors(&m.blocks),
+        crate::glue::contraptions::actors::bearing_actors(host, &m.blocks),
         &extras,
     );
     Some(OnCart {

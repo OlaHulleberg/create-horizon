@@ -1959,9 +1959,11 @@ pub(super) fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
             // Its actors found again from its blocks, with what it carried besides.
             let extras = actors::extras_from_nbt(c);
             let carried = match &held {
-                Held::Pulley(x) => actors::with_extras(actors::bearing_actors(&x.blocks), &extras),
+                Held::Pulley(x) => {
+                    actors::with_extras(actors::bearing_actors(&*lv.host, &x.blocks), &extras)
+                }
                 Held::Elevator(e) => {
-                    actors::with_extras(actors::bearing_actors(&e.blocks), &extras)
+                    actors::with_extras(actors::bearing_actors(&*lv.host, &e.blocks), &extras)
                 }
                 Held::Clock(_) => extras,
             };

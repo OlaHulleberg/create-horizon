@@ -250,6 +250,9 @@ impl Subsystem for Items {
             let key = r.item_key(id);
             r.item_part(key, filters::FilterPart);
         }
+        for menu in [filter_screen::FILTER_MENU, filter_screen::ATTRIBUTE_MENU] {
+            r.menu_part(menu, filter_screen::FilterScreen);
+        }
         for id in sandpaper::IDS {
             let key = r.item_key(id);
             r.item_part(key, sandpaper::SandPaper);
@@ -296,6 +299,20 @@ impl Subsystem for Items {
     fn attack_entity(&self, host: &mut dyn ServerHost, event: &mut AttackEntityEvent<'_>) -> Flow {
         wrench_hits_minecart(host, event);
         sword::attack(host, event)
+    }
+
+    fn player_tick(&self, host: mod_api::HostSide, event: &mut mod_api::PlayerTickPostEvent) {
+        if let mod_api::HostSide::Server(host) = host {
+            filters::player_tick(host, event.player);
+        }
+    }
+
+    fn menu_clicked(&self, host: &mut dyn ServerHost, event: &mut mod_api::MenuClickedEvent) {
+        filters::menu_clicked(host, event);
+    }
+
+    fn menu_closed(&self, host: &mut dyn ServerHost, event: &mut mod_api::MenuClosedEvent) {
+        filters::menu_closed(host, event);
     }
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {

@@ -1,7 +1,7 @@
 //! What moving contraptions carry besides their blocks, and Create's glue and stickers: super
 //! glue areas the structure search reads (set by the glue item, `superglue`, or
 //! `/create_debug glue`), the sticker's redstone, actors (drills, saws, harvesters, ploughs,
-//! rollers, deployers, redstone contacts, interfaces) ticked only while their contraption moves, mounted storage (chests,
+//! rollers, deployers, redstone contacts, interfaces, lit campfires) ticked only while their contraption moves, mounted storage (chests,
 //! barrels, item vaults and toolboxes) that keeps its items and takes what the actors collect
 //! (a toolbox takes nothing), and contraption controls
 //! (`/create_debug controls`). Create's rules are in `create_engine::glue` and
@@ -21,7 +21,7 @@ use create_engine::glue::{self, Glue};
 use create_engine::kinetics::Dir;
 use mod_api::{
     BlockHit, BlockPart, BlockShapeKind, Command, CommandArgumentValue, CommandSource, Compound,
-    Flow, Hand, HostBlockStates, HostTransaction, Identifier, InteractionResult, ItemKey,
+    Flow, Hand, Host, HostBlockStates, HostTransaction, Identifier, InteractionResult, ItemKey,
     ItemStack, PlayerAction, PlayerActionSetup, RegisterCommandsEvent, Registrar,
     RunModCommandEvent, ServerHost, SetPlacedByEvent, SoundSource, Tag, UseItemOnEvent,
 };
@@ -128,6 +128,8 @@ pub(super) fn forget() {
 }
 
 pub(super) fn register(r: &mut dyn Registrar) {
+    let _ = COSY_SMOKE.set(r.particle_key("minecraft:campfire_cosy_smoke"));
+    let _ = SIGNAL_SMOKE.set(r.particle_key("minecraft:campfire_signal_smoke"));
     r.block_part(key(Block::ContraptionControls), MountedPart);
     let roller = key(Block::MechanicalRoller);
     r.block_part(roller, MountedPart);
@@ -681,12 +683,8 @@ pub(super) fn carry(
     let at = |o: [i32; 3]| add(origin, o);
     let mut carried = carry_extras(lv, origin, blocks, skip);
     for (o, state) in blocks {
-        let Some((block, info)) = create_info(*state) else {
-            continue;
-        };
-        if let (Some(kind), Some(facing)) = (Kind::of(block), info.facing) {
-            let mut a = Actor::new(*o, kind, facing, -next_breaker());
-            if kind == Kind::Roller
+        if let Some(mut a) = actor_of(&*lv.host, *o, *state) {
+            if a.kind == Kind::Roller
                 && let Some((filter, mode)) =
                     with_world(|w| w.dims[dim].rollers.remove(&at(*o))).flatten()
             {
@@ -1917,20 +1915,30 @@ fn collect(lv: &mut ServerLevel<'_>, key: [i32; 3], actor: &Actor, stack: ItemSt
 /// The actors of a bearing's structure (its blocks' offsets from the bearing and states):
 /// breakers, harvesters, ploughs and rollers, each a breaker of its own, and interfaces. Its
 /// storage rides it apart (`carry_storage`); its glue and controls don't.
-pub(crate) fn bearing_actors(blocks: &[([i32; 3], u32)]) -> Carried {
-    let mut carried = Carried::default();
-    for (o, state) in blocks {
-        let Some((block, info)) = create_info(*state) else {
-            continue;
-        };
-        let (Some(kind), Some(facing)) = (Kind::of(block), info.facing) else {
-            continue;
-        };
-        carried
-            .actors
-            .push(Actor::new(*o, kind, facing, -next_breaker()));
+pub(crate) fn bearing_actors(host: &dyn Host, blocks: &[([i32; 3], u32)]) -> Carried {
+    Carried {
+        actors: blocks
+            .iter()
+            .filter_map(|(o, state)| actor_of(host, *o, *state))
+            .collect(),
+        ..Carried::default()
     }
-    carried
+}
+
+/// The actor of the block of state `state` at offset `o` (`MovementBehaviour.REGISTRY`): a
+/// Create block's, or a lit campfire's (`AllMovementBehaviours`).
+fn actor_of(host: &dyn Host, o: [i32; 3], state: u32) -> Option<Actor> {
+    if let Some((block, info)) = create_info(state) {
+        let (kind, facing) = (Kind::of(block)?, info.facing?);
+        return Some(Actor::new(o, kind, facing, -next_breaker()));
+    }
+    let (name, props) = super::name_props(host, state)?;
+    let props: Vec<(&str, &str)> = props
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let kind = Kind::of_vanilla(&name, &props)?;
+    Some(Actor::new(o, kind, Dir::Up, -next_breaker()))
 }
 
 /// A turning contraption's actors stop (`stopMoving`): what they were breaking is left as it
@@ -2166,9 +2174,49 @@ fn apply(lv: &mut ServerLevel<'_>, key: [i32; 3], a: &Actor, e: Effect) -> Optio
         Effect::ContactLeft(p) => contact_left(lv, p),
         Effect::Redeploy => return Some(deploy(lv, key, a, None)),
         Effect::Entities { pos, damage, boost } => hit_entities(lv, a, pos, damage, boost),
+        Effect::Smoke { at, signal } => campfire_smoke(lv, at, signal),
     }
     None
 }
+
+/// `CampfireMovementBehaviour.tick` (`CampfireBlock.makeParticles`' smoke): two or three puffs,
+/// one tick in nine, from the campfire's block on the moving structure. Create adds them on each
+/// client; here the structure moves on the server, which sends them to the players near.
+fn campfire_smoke(lv: &mut ServerLevel<'_>, at: [f64; 3], signal: bool) {
+    let key = if signal { &SIGNAL_SMOKE } else { &COSY_SMOKE };
+    let Some(&key) = key.get() else {
+        return;
+    };
+    if lv.random_float() >= 0.11 {
+        return;
+    }
+    let options = mod_api::ParticleOptions::simple(key);
+    let n = 2 + usize::from(lv.random_float() < 0.5);
+    for _ in 0..n {
+        let mut side = || {
+            let d = f64::from(lv.random_float());
+            if lv.random_float() < 0.5 {
+                d / 3.0
+            } else {
+                d / -3.0
+            }
+        };
+        let (dx, dz) = (side(), side());
+        let dy = f64::from(lv.random_float()) + f64::from(lv.random_float());
+        let _ = lv.level.send_particles(
+            &mut *lv.host,
+            &options,
+            None,
+            [at[0] + dx, at[1] + dy, at[2] + dz],
+            [0.0, 0.07, 0.0],
+            1.0,
+            0,
+        );
+    }
+}
+
+static COSY_SMOKE: std::sync::OnceLock<mod_api::ParticleKey> = std::sync::OnceLock::new();
+static SIGNAL_SMOKE: std::sync::OnceLock<mod_api::ParticleKey> = std::sync::OnceLock::new();
 
 /// The channel a thrown player's client is told its push on (`throwEntity` runs on the client
 /// for players).

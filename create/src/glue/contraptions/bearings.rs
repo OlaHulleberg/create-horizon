@@ -514,7 +514,7 @@ pub(super) fn tick_bearing_actors(lv: &mut ServerLevel<'_>) {
         })
         .unwrap_or_default();
         for (pos, blocks, extras) in fresh {
-            let carried = actors::with_extras(actors::bearing_actors(&blocks), &extras);
+            let carried = actors::with_extras(actors::bearing_actors(&*lv.host, &blocks), &extras);
             if carried.actors.is_empty() && carried.controls.is_empty() {
                 continue;
             }
@@ -568,7 +568,9 @@ pub(super) fn take_turning(
     let facing = super::create_info(lv.block(pos)).and_then(|(_, i)| i.facing)?;
     let carried = BEARING_CARRIED
         .with_borrow(|c| c.get(&(dim, pos)).cloned())
-        .unwrap_or_else(|| actors::with_extras(actors::bearing_actors(&w.blocks), &w.extras));
+        .unwrap_or_else(|| {
+            actors::with_extras(actors::bearing_actors(&*lv.host, &w.blocks), &w.extras)
+        });
     let angle = f64::from(w.turn.angle_at(now));
     let axis = facing.axis();
     let place = move |o: [i32; 3]| {
@@ -1669,8 +1671,10 @@ fn pistons_from_nbt(
                 return None;
             };
             let blocks = structure_from_nbt(lv, c)?;
-            let carried =
-                actors::with_extras(actors::bearing_actors(&blocks), &actors::extras_from_nbt(c));
+            let carried = actors::with_extras(
+                actors::bearing_actors(&*lv.host, &blocks),
+                &actors::extras_from_nbt(c),
+            );
             let pos = [*p.first()?, *p.get(1)?, *p.get(2)?];
             actors::storage_from_nbt(lv, pos, c.get(&"storage".into()));
             let limit = super::limit_from_nbt(lv.dim, pos, c);
@@ -1750,7 +1754,7 @@ fn gantries_from_nbt(lv: &ServerLevel<'_>, data: &Compound) -> Vec<create_engine
                 // Shown again at the speed of its first tick.
                 per_tick: 0.0,
                 carried: actors::with_extras(
-                    actors::bearing_actors(&blocks),
+                    actors::bearing_actors(&*lv.host, &blocks),
                     &actors::extras_from_nbt(c),
                 ),
                 // Its limit is set as it starts only (`limitMovement`), so no speed check resets it.

@@ -16,9 +16,9 @@ use mod_api::{
     AttackEntityEvent, BreakBlockEvent, CameraPoseEvent, ClientHost, Compound, EntityInteractEvent,
     EntityJoinLevelEvent, EntityMountEvent, EntityPlaceEvent, Flow, HostSide, InputKeyEvent,
     InteractionKeyMappingTriggeredEvent, InteractionResult, KeyMappingPreEvent,
-    LeftClickBlockEvent, LevelSaveEvent, MenuClosedEvent, MouseScrollingEvent, MovementInputEvent,
-    PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerRef, PlayerTickPostEvent,
-    RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
+    LeftClickBlockEvent, LevelSaveEvent, MenuClickedEvent, MenuClosedEvent, MouseScrollingEvent,
+    MovementInputEvent, PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerRef,
+    PlayerTickPostEvent, RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
     RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ScreenCharTypedPreEvent,
     ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
     ScreenMouseButtonReleasedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
@@ -487,7 +487,9 @@ pub trait Subsystem: Sync {
         _event: &mut PlayerContainerCloseEvent<'_>,
     ) {
     }
-    /// `Hooks::menu_closed`: a menu a mod opened (`open_menu`) closed.
+    /// `Hooks::menu_clicked`: a click in a menu a mod opened, heard raw.
+    fn menu_clicked(&self, _host: &mut dyn ServerHost, _event: &mut MenuClickedEvent) {}
+    /// `Hooks::menu_closed`: a menu a mod opened (`open_menu`, `open_mod_menu`) closed.
     fn menu_closed(&self, _host: &mut dyn ServerHost, _event: &mut MenuClosedEvent) {}
 
     /// `Hooks::screen_render_post`: draw over the open screen (the mod's own, `mod_screen`).

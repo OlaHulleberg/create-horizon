@@ -1,9 +1,10 @@
 //! Filters (`FilterItemStack`, `create-engine`'s `filter`): what a filter slot's stack is, a
 //! stack tested against it, a filter taken from a hand into a slot and given back
 //! (`FilteringBehaviour.onShortInteract`), the filter items of broken blocks dropped
-//! (`FilteringBehaviour.destroy`), and the list and attribute filters' screens opened from the
-//! hand (`FilterItem.use`, drawn by `filter_screen`) and what they chose written back
-//! (`FilterScreenPacket`, the menus' `saveData`). A filter's settings are kept in the stack's
+//! (`FilteringBehaviour.destroy`), and the list and attribute filters' menus opened from the
+//! hand (`FilterItem.use`; `FilterMenu`, `AttributeFilterMenu`, clicked as `ghost_menu` rules,
+//! drawn by `filter_screen`) with their settings (`FilterScreenPacket`) written back as they
+//! close (`saveData`). A filter's settings are kept in the stack's
 //! custom data under Create's component names, its list as `ItemContainerContents` (`Slot` and
 //! the stack's own NBT). `/create_debug filter` sets a filter in a slot or hand for tests, and
 //! sets a package filter's address too (its screen is the stock glue's, `stock::package_filter`).
@@ -33,10 +34,12 @@ use create_engine::filter::{
     self, ATTRIBUTES_KEY, Attribute, BLACKLIST_KEY, Filter, ITEMS_KEY, LIST_SLOTS, MODE_KEY, Mode,
     Passes, Probe, RESPECT_NBT_KEY, Spec,
 };
+use create_engine::ghost_menu;
+use mod_api::HostTransaction;
 use mod_api::{
     CommandArgumentValue, CommandSource, Compound, CreativeModeTabs, CreativeTabPermissions, Hand,
     Host, HostSide, Identifier, InteractionResult, ItemPart, ItemStack, PlayerRef,
-    RunModCommandEvent, ServerHost, SoundSource, Tag, UseItemEvent, UseOnEvent,
+    RunModCommandEvent, ServerHost, SoundSource, Tag, Text, UseItemEvent, UseOnEvent,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -847,7 +850,7 @@ fn used(host: HostSide, player: u128, hand: Hand) -> Option<InteractionResult> {
             if super::sneaking(&*host, player) {
                 return None;
             }
-            open_screen(host, player);
+            open_menu(host, player);
         }
         HostSide::Client(host) => {
             let player = host.local_player()?;
@@ -859,92 +862,351 @@ fn used(host: HostSide, player: u128, hand: Hand) -> Option<InteractionResult> {
     Some(InteractionResult::Success)
 }
 
-/// What the server keeps of a screen it opened: the filter's item, the inventory sent, the
-/// filter's own list and the attributes it had.
+/// A stack in a ghost item menu, with its item's stack size. `count` may be 0, which
+/// an `ItemStack` can't be: the menu empties such a slot.
+#[derive(Clone, Debug)]
+struct Held {
+    stack: ItemStack,
+    count: u32,
+    max: u32,
+}
+
+impl Held {
+    fn of(host: &dyn Host, stack: ItemStack) -> Held {
+        let max = host.max_stack_size(stack.item()).unwrap_or(64).max(1);
+        Held {
+            count: stack.count(),
+            stack,
+            max,
+        }
+    }
+}
+
+impl ghost_menu::Stack for Held {
+    fn count(&self) -> u32 {
+        self.count
+    }
+    fn with_count(&self, count: u32) -> Self {
+        let mut stack = self.stack.clone();
+        if count > 0 {
+            let _ = stack.set_count(count);
+        }
+        Held {
+            stack,
+            count,
+            max: self.max,
+        }
+    }
+    fn max(&self) -> u32 {
+        self.max
+    }
+    fn same(&self, other: &Self) -> bool {
+        self.stack.item() == other.stack.item()
+            && components(&self.stack) == components(&other.stack)
+    }
+}
+
+/// An open filter menu (`FilterMenu`, `AttributeFilterMenu`): the ghost slots and their rules,
+/// the stack it is of, and its settings until `saveData`.
 struct Session {
-    item: mod_api::ItemKey,
-    attribute: bool,
-    inventory: Vec<(u32, ItemStack)>,
-    list: Vec<Option<ItemStack>>,
-    had: Vec<(String, Option<String>)>,
+    window: i32,
+    stack: ItemStack,
+    menu: ghost_menu::Menu<Held>,
+    deny: bool,
+    respect: bool,
+    mode: Mode,
+    chosen: Vec<(String, Option<String>, bool)>,
+    /// What the attribute selector offers for the reference item (`getAllAttributes`).
+    options: Vec<(String, Option<String>)>,
 }
 
 thread_local! {
     static SESSIONS: std::cell::RefCell<std::collections::HashMap<u128, Session>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+    static MENU_KEYS: std::cell::RefCell<Option<[mod_api::MenuKey; 2]>> =
+        const { std::cell::RefCell::new(None) };
 }
 
-/// `player.openMenu(filter)`: the screen, with the held filter's settings and a copy of the
-/// inventory.
-fn open_screen(host: &mut dyn ServerHost, player: PlayerRef) {
+/// The menu types `create:filter` and `create:attribute_filter`.
+fn menu_key(host: &dyn Host, kind: ghost_menu::Kind) -> Option<mod_api::MenuKey> {
+    let keys = MENU_KEYS.with_borrow_mut(|k| {
+        if k.is_none() {
+            let find = |id: &str| host.menu_keys().into_iter().find(|m| m.id(host) == id);
+            *k = find(filter_screen::FILTER_MENU)
+                .zip(find(filter_screen::ATTRIBUTE_MENU))
+                .map(|(a, b)| [a, b]);
+        }
+        *k
+    })?;
+    Some(keys[usize::from(kind == ghost_menu::Kind::AttributeFilter)])
+}
+
+/// `AttributeFilterMenu.init`: the selected attributes' slot shows a name tag.
+fn selected_tags(host: &dyn Host) -> Option<ItemStack> {
+    let mut tag = ItemStack::of(host.item_key(&Identifier::parse("minecraft:name_tag").ok()?)?);
+    let mut name = Compound::new();
+    name.insert("text".into(), Tag::String("Selected Tags".into()));
+    name.insert("color".into(), Tag::String("blue".into()));
+    let mut patch = Compound::new();
+    patch.insert("minecraft:custom_name".into(), Tag::Compound(name));
+    tag.apply_components(&patch).ok()?;
+    Some(tag)
+}
+
+/// `player.openMenu(filter)`, with the held filter's settings as the screen's extra data.
+fn open_menu(host: &mut dyn ServerHost, player: PlayerRef) {
     let Some(stack) = held(&*host, player, Hand::Main) else {
         return;
     };
-    let attribute = match filter::FilterItem::of(&stack.item().id(&*host)) {
-        Some(filter::FilterItem::List) => false,
-        Some(filter::FilterItem::Attribute) => true,
+    let kind = match filter::FilterItem::of(&stack.item().id(&*host)) {
+        Some(filter::FilterItem::List) => ghost_menu::Kind::Filter,
+        Some(filter::FilterItem::Attribute) => ghost_menu::Kind::AttributeFilter,
         _ => return,
     };
-    let h: &dyn Host = &*host;
-    let inventory: Vec<(u32, ItemStack)> = player
-        .inventory_slots(h)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|(slot, _)| *slot < 36)
-        .collect();
-    let c = custom(&stack);
-    let list = if attribute {
-        Vec::new()
-    } else {
-        decode_items(h, c.get(&ITEMS_KEY.into()), LIST_SLOTS)
+    let Some(key) = menu_key(&*host, kind) else {
+        return;
     };
+    let h: &dyn Host = &*host;
+    let c = custom(&stack);
+    let ghost: Vec<Option<Held>> = match kind {
+        ghost_menu::Kind::Filter => decode_items(h, c.get(&ITEMS_KEY.into()), LIST_SLOTS),
+        ghost_menu::Kind::AttributeFilter => vec![None, selected_tags(h)],
+    }
+    .into_iter()
+    .map(|s| s.map(|s| Held::of(h, s)))
+    .collect();
     let s = spec(h, &stack);
-    let had: Vec<(String, Option<String>, bool)> = s.attributes.clone().unwrap_or_default();
+    let mode = s
+        .mode
+        .as_deref()
+        .and_then(Mode::parse)
+        .unwrap_or(Mode::WhitelistDisj);
+    let chosen = s.attributes.clone().unwrap_or_default();
     let opened = filter_screen::Opened {
-        attribute,
-        selected: player.selected_slot(h).unwrap_or(0) as u8,
-        inventory: inventory
-            .iter()
-            .filter_map(|(slot, st)| {
-                let attrs = if attribute {
-                    attributes_of(h, st)
-                } else {
-                    Vec::new()
-                };
-                Some((*slot as u8, filter_screen::stack_bytes(h, st)?, attrs))
-            })
-            .collect(),
-        list: list
-            .iter()
-            .enumerate()
-            .filter_map(|(i, st)| Some((i as u8, filter_screen::stack_bytes(h, st.as_ref()?)?)))
-            .collect(),
         deny: s.blacklist,
         respect: s.respect_nbt,
-        mode: s
-            .mode
-            .as_deref()
-            .and_then(Mode::parse)
-            .and_then(|m| Mode::ALL.iter().position(|a| *a == m))
-            .unwrap_or(0) as u8,
-        chosen: had
+        mode: Mode::ALL.iter().position(|a| *a == mode).unwrap_or(0) as u8,
+        chosen: chosen
             .iter()
             .map(|(kind, value, inverted)| (attr_line(kind, value.clone()), *inverted))
             .collect(),
     };
-    SESSIONS.with_borrow_mut(|m| {
-        m.insert(
-            player.uuid(),
-            Session {
-                item: stack.item(),
-                attribute,
-                inventory,
-                list,
-                had: had.into_iter().map(|(k, v, _)| (k, v)).collect(),
-            },
-        )
+    let selected = player.selected_slot(h).unwrap_or(0);
+    let title = match kind {
+        ghost_menu::Kind::Filter => "item.create.filter",
+        ghost_menu::Kind::AttributeFilter => "item.create.attribute_filter",
+    };
+    let title = Text::translate(title, Vec::new());
+    let Ok(Some(window)) = player.open_mod_menu(
+        host,
+        key,
+        title,
+        opened.encode(),
+        None,
+        mod_api::MenuReplace::InPlace,
+    ) else {
+        return;
+    };
+    let menu = ghost_menu::Menu::new(kind, ghost, Vec::new(), selected);
+    let session = Session {
+        window,
+        stack,
+        menu,
+        deny: s.blacklist,
+        respect: s.respect_nbt,
+        mode,
+        chosen,
+        options: Vec::new(),
+    };
+    show_ghosts(host, player.uuid(), &session, None);
+    SESSIONS.with_borrow_mut(|m| m.insert(player.uuid(), session));
+}
+
+/// Shows the ghost slots in the open menu's own slots, when they changed since `before`.
+fn show_ghosts(
+    host: &mut dyn ServerHost,
+    uuid: u128,
+    session: &Session,
+    before: Option<&[Option<Held>]>,
+) {
+    let changed = before.is_none_or(|b| {
+        b.iter()
+            .zip(&session.menu.ghost)
+            .any(|(a, b)| !same_slot(a.as_ref(), b.as_ref()))
     });
-    net::send_to_player(host, player, filter_screen::CHANNEL, &opened.encode());
+    if changed {
+        let items = session
+            .menu
+            .ghost
+            .iter()
+            .map(|g| g.as_ref().map(|g| g.stack.clone()));
+        let _ = host.menu_set_items(uuid, session.window, items.collect());
+    }
+}
+
+fn same_slot(a: Option<&Held>, b: Option<&Held>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => ghost_menu::Stack::same(a, b) && a.stack.count() == b.stack.count(),
+        _ => false,
+    }
+}
+
+/// Empties `place` and puts `to` there.
+fn replace(
+    host: &mut dyn ServerHost,
+    tx: &mod_api::Transaction,
+    place: &mod_api::ItemPlace,
+    to: Option<&Held>,
+) -> Result<(), ()> {
+    if let Some(old) = place.stack(host) {
+        let n = old.count();
+        if place.extract(host, tx, &mod_api::ItemResource::of(&old), n) != n {
+            return Err(());
+        }
+    }
+    if let Some(to) = to {
+        let n = to.stack.count();
+        if place.insert(host, tx, &mod_api::ItemResource::of(&to.stack), n) != n {
+            return Err(());
+        }
+    }
+    Ok(())
+}
+
+/// The player's inventory, offhand and cursor as the menu shows them now.
+fn refresh(
+    host: &dyn Host,
+    player: PlayerRef,
+    cursor: Option<ItemStack>,
+    menu: &mut ghost_menu::Menu<Held>,
+) {
+    menu.inventory = vec![None; ghost_menu::PLAYER_SLOTS];
+    menu.offhand = None;
+    for (slot, stack) in player.inventory_slots(host).unwrap_or_default() {
+        let held = Some(Held::of(host, stack));
+        match slot as usize {
+            i if i < ghost_menu::PLAYER_SLOTS => menu.inventory[i] = held,
+            i if i == ghost_menu::OFFHAND as usize => menu.offhand = held,
+            _ => {}
+        }
+    }
+    menu.carried = cursor.map(|s| Held::of(host, s));
+    menu.selected = player.selected_slot(host).unwrap_or(menu.selected);
+    menu.creative = creative(host, player);
+}
+
+/// A click on an open filter menu (`AbstractContainerMenu.clicked`), done on the server's copy
+/// of the menu and written back: the inventory, the cursor and the ghost slots.
+pub(super) fn menu_clicked(host: &mut dyn ServerHost, event: &mod_api::MenuClickedEvent) {
+    let Some(mut session) =
+        SESSIONS.with_borrow_mut(|m| m.remove(&event.uuid).filter(|s| s.window == event.window))
+    else {
+        return;
+    };
+    let uuid = event.uuid;
+    let Some(player) = host.player(uuid) else {
+        return;
+    };
+    let Some(menu) = host.menu(uuid, session.window) else {
+        return;
+    };
+    let size = session.menu.ghost.len();
+    let cursor = menu.carried(&*host).flatten();
+    refresh(&*host, player, cursor, &mut session.menu);
+    if !still_valid(&*host, player, &session) {
+        SESSIONS.with_borrow_mut(|m| m.insert(uuid, session));
+        host.close_menu(uuid);
+        return;
+    }
+    let Some(click) = ghost_menu::Click::of(event.mode) else {
+        SESSIONS.with_borrow_mut(|m| m.insert(uuid, session));
+        return;
+    };
+    // Create's menus number the player's slots first, Sunrise's the menu's own.
+    let index = match usize::try_from(event.slot) {
+        Ok(s) if s < size => (ghost_menu::PLAYER_SLOTS + s) as i32,
+        Ok(s) => (s - size) as i32,
+        Err(_) => event.slot,
+    };
+    let before = session.menu.clone();
+    let thrown = session.menu.click(index, event.button, click);
+    let written = host.transaction(|host, tx| {
+        for i in 0..ghost_menu::PLAYER_SLOTS {
+            let (old, new) = (
+                before.inventory[i].as_ref(),
+                session.menu.inventory[i].as_ref(),
+            );
+            if !same_slot(old, new) {
+                player
+                    .set_inventory_slot(host, i as u32, new.map(|h| h.stack.clone()))
+                    .map_err(|_| ())?;
+            }
+        }
+        if !same_slot(before.offhand.as_ref(), session.menu.offhand.as_ref()) {
+            let new = session.menu.offhand.as_ref().map(|h| h.stack.clone());
+            player
+                .set_inventory_slot(host, ghost_menu::OFFHAND as u32, new)
+                .map_err(|_| ())?;
+        }
+        if !same_slot(before.carried.as_ref(), session.menu.carried.as_ref()) {
+            replace(host, tx, &menu.cursor(), session.menu.carried.as_ref())?;
+        }
+        Ok::<(), ()>(())
+    });
+    if written.is_err() {
+        session.menu = before;
+        SESSIONS.with_borrow_mut(|m| m.insert(uuid, session));
+        return;
+    }
+    show_ghosts(host, uuid, &session, Some(&before.ghost));
+    if let Some(living) = host.living(player.entity()) {
+        for h in thrown {
+            let _ = living.drop(host, h.stack, false, true);
+        }
+    }
+    if session.menu.kind == ghost_menu::Kind::AttributeFilter
+        && !same_slot(before.ghost[0].as_ref(), session.menu.ghost[0].as_ref())
+    {
+        reference_changed(host, player, &mut session);
+    }
+    SESSIONS.with_borrow_mut(|m| m.insert(uuid, session));
+}
+
+/// `AttributeFilterScreen.referenceItemChanged`: the reference item's attributes, read on the
+/// server where the recipes are, sent for the selector.
+fn reference_changed(host: &mut dyn ServerHost, player: PlayerRef, session: &mut Session) {
+    let lines = session.menu.ghost[0]
+        .as_ref()
+        .map(|r| attributes_of(&*host, &r.stack))
+        .unwrap_or_default();
+    session.options = lines
+        .iter()
+        .map(|l| (l.kind.clone(), l.value.clone()))
+        .collect();
+    let message = filter_screen::ToClient::Options(lines);
+    net::send_to_player(host, player, filter_screen::CHANNEL, &message.encode());
+}
+
+/// `HeldItemGhostItemMenu.stillValid`: the selected slot still holds the filter it is of.
+fn still_valid(host: &dyn Host, player: PlayerRef, session: &Session) -> bool {
+    let selected = player.selected_slot(host);
+    selected.is_some()
+        && session.menu.holder == selected
+        && held(host, player, Hand::Main).is_some_and(|s| {
+            s.item() == session.stack.item() && components(&s) == components(&session.stack)
+        })
+}
+
+/// The open filter menu's `stillValid`, asked each tick.
+pub(super) fn player_tick(host: &mut dyn ServerHost, player: PlayerRef) {
+    let invalid = SESSIONS.with_borrow(|m| {
+        m.get(&player.uuid())
+            .map(|s| !still_valid(&*host, player, s))
+    });
+    if invalid == Some(true) {
+        host.close_menu(player.uuid());
+    }
 }
 
 /// How an attribute reads (`getTranslationKey`, `getTranslationParameters`).
@@ -1244,68 +1506,115 @@ fn attributes_of(host: &dyn Host, stack: &ItemStack) -> Vec<filter_screen::AttrL
     out
 }
 
-/// What the screen chose, written into the held filter (`FilterScreenPacket` and `saveData`):
-/// only while the main hand still holds the filter it opened for (`stillValid`).
+/// `FilterScreenPacket` and `ClearMenuPacket` on the player's open filter menu.
 pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8]) {
-    let Some(chosen) = filter_screen::Chosen::decode(data) else {
+    let Some(message) = filter_screen::ToServer::decode(data) else {
         return;
     };
-    let Some(session) = SESSIONS.with_borrow_mut(|m| m.remove(&player.uuid())) else {
-        return;
-    };
-    let Some(mut stack) = held(&*host, player, Hand::Main) else {
-        return;
-    };
-    if stack.item() != session.item || chosen.attribute != session.attribute {
-        return;
+    SESSIONS.with_borrow_mut(|m| {
+        let Some(s) = m.get_mut(&player.uuid()) else {
+            return;
+        };
+        let attribute = s.menu.kind == ghost_menu::Kind::AttributeFilter;
+        use filter_screen::ToServer as M;
+        match message {
+            M::Option(o) if !attribute => match o {
+                filter_screen::WHITELIST => s.deny = false,
+                filter_screen::BLACKLIST => s.deny = true,
+                filter_screen::RESPECT_DATA => s.respect = true,
+                filter_screen::IGNORE_DATA => s.respect = false,
+                _ => {}
+            },
+            M::Option(o) => match o {
+                filter_screen::WHITELIST => s.mode = Mode::WhitelistDisj,
+                filter_screen::WHITELIST2 => s.mode = Mode::WhitelistConj,
+                filter_screen::BLACKLIST => s.mode = Mode::Blacklist,
+                _ => {}
+            },
+            M::Add {
+                inverted,
+                kind,
+                value,
+            } if attribute => {
+                if s.options.iter().any(|(k, v)| *k == kind && *v == value) {
+                    s.chosen.push((kind, value, inverted));
+                }
+            }
+            M::Add { .. } => {}
+            M::Clear if attribute => s.chosen.clear(),
+            M::Clear => {}
+        }
+    });
+    let cleared = matches!(
+        filter_screen::ToServer::decode(data),
+        Some(filter_screen::ToServer::Clear)
+    );
+    if cleared {
+        clear_list(host, player);
     }
-    if session.attribute {
-        let mode = Mode::ALL
-            .get(usize::from(chosen.mode))
-            .copied()
-            .unwrap_or(Mode::WhitelistDisj);
-        // The attributes offered (or kept from before): nothing else is written.
-        let tests: Vec<(String, Option<String>, bool)> = chosen
-            .attributes
-            .into_iter()
-            .filter(|(kind, value, _)| {
-                session.had.iter().any(|(k, v)| k == kind && v == value)
-                    || Attribute::parse(kind, value.as_deref()).is_ok()
-            })
-            .collect();
-        write_attributes(&mut stack, mode, &tests);
-    } else {
-        let h: &dyn Host = &*host;
-        let slots: Vec<Option<ItemStack>> = (0..LIST_SLOTS)
-            .map(|i| {
-                let mut s = match chosen.list.get(i).copied().flatten()? {
-                    filter_screen::Ghost::Inventory(slot) => session
-                        .inventory
-                        .iter()
-                        .find(|(s, _)| *s == u32::from(slot))
-                        .map(|(_, st)| st.clone()),
-                    filter_screen::Ghost::Own(j) => {
-                        session.list.get(usize::from(j)).cloned().flatten()
-                    }
-                }?;
-                let _ = s.set_count(1);
-                Some(s)
-            })
-            .collect();
-        let list = slots
-            .iter()
-            .any(Option::is_some)
-            .then(|| encode_items(h, &slots));
-        set_custom(
-            &mut stack,
-            &[
-                (ITEMS_KEY, list),
-                (RESPECT_NBT_KEY, Some(Tag::Byte(i8::from(chosen.respect)))),
-                (BLACKLIST_KEY, Some(Tag::Byte(i8::from(chosen.deny)))),
-            ],
-        );
+}
+
+/// `IClearableMenu.clearContents` of a list filter's menu.
+fn clear_list(host: &mut dyn ServerHost, player: PlayerRef) {
+    let Some(mut session) = SESSIONS.with_borrow_mut(|m| m.remove(&player.uuid())) else {
+        return;
+    };
+    let before = session.menu.ghost.clone();
+    session.menu.clear();
+    show_ghosts(host, player.uuid(), &session, Some(&before));
+    SESSIONS.with_borrow_mut(|m| m.insert(player.uuid(), session));
+}
+
+/// `MenuBase.removed` → `saveData`: the settings written into the filter, wherever the menu's
+/// clicks left it.
+pub(super) fn menu_closed(host: &mut dyn ServerHost, event: &mod_api::MenuClosedEvent) {
+    let Some(session) =
+        SESSIONS.with_borrow_mut(|m| m.remove(&event.uuid).filter(|s| s.window == event.window))
+    else {
+        return;
+    };
+    let Some(player) = host.player(event.uuid) else {
+        return;
+    };
+    let Some(slot) = session.menu.holder else {
+        return;
+    };
+    let now = player
+        .inventory_slots(&*host)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|(s, _)| *s as usize == slot)
+        .map(|(_, s)| s);
+    let Some(mut stack) = now.filter(|s| s.item() == session.stack.item()) else {
+        return;
+    };
+    let h: &dyn Host = &*host;
+    match session.menu.kind {
+        ghost_menu::Kind::AttributeFilter => {
+            write_attributes(&mut stack, session.mode, &session.chosen);
+        }
+        ghost_menu::Kind::Filter => {
+            let slots: Vec<Option<ItemStack>> = session
+                .menu
+                .ghost
+                .iter()
+                .map(|g| g.as_ref().map(|g| g.stack.clone()))
+                .collect();
+            let list = slots
+                .iter()
+                .any(Option::is_some)
+                .then(|| encode_items(h, &slots));
+            set_custom(
+                &mut stack,
+                &[
+                    (ITEMS_KEY, list),
+                    (RESPECT_NBT_KEY, Some(Tag::Byte(i8::from(session.respect)))),
+                    (BLACKLIST_KEY, Some(Tag::Byte(i8::from(session.deny)))),
+                ],
+            );
+        }
     }
-    set_held(host, player, Hand::Main, Some(stack));
+    let _ = player.set_inventory_slot(host, slot as u32, Some(stack));
 }
 
 #[cfg(test)]

@@ -47,6 +47,7 @@ pub mod funnel;
 pub mod gantry;
 pub mod gauge;
 pub mod generated;
+pub mod ghost_menu;
 pub mod glue;
 pub mod graph;
 pub mod gzip;
