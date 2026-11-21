@@ -1454,12 +1454,6 @@ pub fn carry_local_player(host: &mut dyn mod_api::ClientHost, player: PlayerRef)
     }) else {
         return;
     };
-    if seg.slope != belt::Slope::Horizontal {
-        if e.is_shift_key_down(&*host) != Some(true) {
-            push_on_slope(host, level, feet, contact);
-        }
-        return;
-    }
     let boots = host
         .living(e)
         .and_then(|living| living.equipment(&*host, mod_api::EquipmentSlot::Feet));
@@ -1473,6 +1467,10 @@ pub fn carry_local_player(host: &mut dyn mod_api::ClientHost, player: PlayerRef)
         && (!boots.is_some_and(|s| s.item().id(&*host) == "create:cardboard_boots")
             || !super::super::advancements::hiding_in_cardboard(&*host, player))
     {
+        return;
+    }
+    if seg.slope != belt::Slope::Horizontal {
+        push_on_slope(host, level, feet, contact);
         return;
     }
     let rpm = super::super::kinetics::shown_speeds(&*host, level, pos)[0];
