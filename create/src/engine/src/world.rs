@@ -6526,6 +6526,36 @@ mod tests {
     }
 
     #[test]
+    fn read_turns_a_running_bearing_and_takes_no_structure_for_an_idle_one() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = world();
+        let saved = |angle: f32| Windmill {
+            blocks: vec![([0, 1, 0], 2)],
+            sails: 8,
+            clockwise: true,
+            kind: BearingKind::Windmill,
+            turn: crate::contraption::Turn {
+                angle,
+                ..Default::default()
+            },
+            extras: Default::default(),
+        };
+        let running = [0, 8, 0];
+        w.dims[0].windmills.insert(running, saved(10.0));
+        w.read_windmill(0, running, saved(90.0));
+        assert_eq!(w.dims[0].windmills[&running].turn.angle, 90.0);
+        let idle = [4, 8, 0];
+        w.apply_block_change(0, idle, 0, 2, false);
+        w.read_windmill(0, idle, saved(45.0));
+        assert!(!w.dims[0].windmills.contains_key(&idle));
+        assert!(!w.dims[0].windmill_saved.contains_key(&idle));
+        let unloaded = [8, 8, 0];
+        w.read_windmill(0, unloaded, saved(45.0));
+        assert!(w.dims[0].windmill_saved.contains_key(&unloaded));
+        states::clear_range();
+    }
+
+    #[test]
     fn a_reloaded_funnel_goes_on_counting_down_its_saved_cooldown() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
