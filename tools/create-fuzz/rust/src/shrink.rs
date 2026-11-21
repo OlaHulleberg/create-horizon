@@ -71,20 +71,25 @@ fn candidates(sc: &Scenario) -> Vec<Scenario> {
     out
 }
 
-/// The differences a case shows now (empty when it matches).
-pub fn diffs(dir: &Path, cases: &[Scenario]) -> Vec<Vec<String>> {
-    cases
-        .iter()
-        .map(|sc| {
-            let mut snapshots = java::run(dir, std::slice::from_ref(sc));
-            let java = snapshots.pop().unwrap();
-            compare::diff(&java, &engine::run_like(sc, &java))
-        })
-        .collect()
+/// The differences a case shows now (empty when it matches), or `None` when Java refuses it.
+pub fn diffs(dir: &Path, sc: &Scenario) -> Option<Vec<String>> {
+    let java = java::try_run(dir, std::slice::from_ref(sc))
+        .ok()?
+        .pop()
+        .unwrap();
+    Some(compare::diff(&java, &engine::run_like(sc, &java)))
 }
 
-pub fn shrink(dir: &Path, mut sc: Scenario, required: Option<&str>) -> (Scenario, Vec<String>) {
-    let mut last = diffs(dir, std::slice::from_ref(&sc)).remove(0);
+pub fn shrink(dir: &Path, sc: Scenario, required: Option<&str>) -> (Scenario, Vec<String>) {
+    reduce(sc, required, |candidate| diffs(dir, candidate))
+}
+
+fn reduce(
+    mut sc: Scenario,
+    required: Option<&str>,
+    mut diffs: impl FnMut(&Scenario) -> Option<Vec<String>>,
+) -> (Scenario, Vec<String>) {
+    let mut last = diffs(&sc).expect("Java refuses the case to shrink");
     if last.is_empty() {
         eprintln!("seed {}: matches now, nothing to shrink", sc.seed);
         return (sc, last);
@@ -110,7 +115,9 @@ pub fn shrink(dir: &Path, mut sc: Scenario, required: Option<&str>) -> (Scenario
         // maps are much larger than the candidate scenario or the difference strings.
         let mut hit = None;
         for candidate in cands {
-            let differences = diffs(dir, std::slice::from_ref(&candidate)).pop().unwrap();
+            let Some(differences) = diffs(&candidate) else {
+                continue;
+            };
             if !differences.is_empty()
                 && differences.iter().all(|item| witness.contains(item))
                 && differences
@@ -136,4 +143,55 @@ pub fn shrink(dir: &Path, mut sc: Scenario, required: Option<&str>) -> (Scenario
         }
     }
     (sc, last)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::scenario::{Placed, Scenario};
+
+    fn placed(pos: [i32; 3], state: &str) -> Placed {
+        Placed {
+            pos,
+            state: state.into(),
+            motor: None,
+        }
+    }
+
+    #[test]
+    fn refused_candidates_do_not_reproduce() {
+        let lava = [0, 1, 0];
+        let wall = [1, 1, 0];
+        let fan = [0, 2, 0];
+        let sc = Scenario {
+            version: 3,
+            seed: 439,
+            checkpoints: vec![],
+            ticks: 40,
+            day_time: 0,
+            blocks: vec![
+                placed(lava, "minecraft:lava"),
+                placed(wall, "minecraft:stone"),
+                placed(fan, "create:encased_fan[facing=down]"),
+                placed([3, 1, 0], "minecraft:stone"),
+            ],
+            events: vec![],
+        };
+        let mut refused = 0;
+        let (min, last) = super::reduce(sc, None, |c| {
+            let at = |p| c.blocks.iter().any(|b| b.pos == p);
+            if at(lava) && !at(wall) {
+                refused += 1;
+                return None;
+            }
+            Some(if at(lava) && at(fan) {
+                vec!["fan".into()]
+            } else {
+                vec![]
+            })
+        });
+        assert!(refused > 0);
+        assert_eq!(last, vec!["fan".to_string()]);
+        let kept: Vec<_> = min.blocks.iter().map(|b| b.pos).collect();
+        assert_eq!(kept, vec![lava, wall, fan]);
+    }
 }

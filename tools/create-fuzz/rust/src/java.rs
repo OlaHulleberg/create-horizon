@@ -9,8 +9,26 @@ use std::time::{Duration, Instant};
 static SEQ: AtomicU64 = AtomicU64::new(0);
 static BOOT: OnceLock<String> = OnceLock::new();
 
+/// A batch the Java side would not run: one of its scenarios is outside what the harness accepts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refused(pub String);
+
 pub fn run(dir: &Path, cases: &[Scenario]) -> Vec<Snapshot> {
-    exchange(dir, cases, false, None).0
+    expect(try_run(dir, cases))
+}
+
+pub fn try_run(dir: &Path, cases: &[Scenario]) -> Result<Vec<Snapshot>, Refused> {
+    exchange(dir, cases, false, None).map(|(snapshots, _)| snapshots)
+}
+
+/// The harness rejects the scenarios it cannot run with `IllegalArgumentException`; anything
+/// else is the harness or the server failing.
+fn refusal(error: String) -> Refused {
+    if error.starts_with("java.lang.IllegalArgumentException") {
+        Refused(error)
+    } else {
+        panic!("java side: {error}")
+    }
 }
 
 /// Repeat in a different slot and a separate batch, retaining the full comparison.
@@ -29,7 +47,7 @@ pub fn varied(dir: &Path, cases: &[Scenario], offset: usize, phase: u8) -> Vec<S
         };
         let mut shifted = vec![empty; offset];
         shifted.extend_from_slice(cases);
-        return exchange(dir, &shifted, false, Some(phase))
+        return expect(exchange(dir, &shifted, false, Some(phase)))
             .0
             .into_iter()
             .skip(offset)
@@ -38,14 +56,18 @@ pub fn varied(dir: &Path, cases: &[Scenario], offset: usize, phase: u8) -> Vec<S
     let rotation = offset % cases.len();
     let mut shifted = cases.to_vec();
     shifted.rotate_right(rotation);
-    let mut snapshots = exchange(dir, &shifted, false, Some(phase)).0;
+    let mut snapshots = expect(exchange(dir, &shifted, false, Some(phase))).0;
     snapshots.rotate_left(rotation);
     snapshots
 }
 
 pub fn covered(dir: &Path, case: &Scenario) -> (Snapshot, std::path::PathBuf) {
-    let (mut snapshots, path) = exchange(dir, std::slice::from_ref(case), true, None);
+    let (mut snapshots, path) = expect(exchange(dir, std::slice::from_ref(case), true, None));
     (snapshots.remove(0), path)
+}
+
+fn expect<T>(answer: Result<T, Refused>) -> T {
+    answer.unwrap_or_else(|Refused(error)| panic!("java side: {error}"))
 }
 
 fn exchange(
@@ -53,7 +75,7 @@ fn exchange(
     cases: &[Scenario],
     coverage: bool,
     phase: Option<u8>,
-) -> (Vec<Snapshot>, std::path::PathBuf) {
+) -> Result<(Vec<Snapshot>, std::path::PathBuf), Refused> {
     for sc in cases {
         crate::catalogue::scenario(sc);
     }
@@ -126,7 +148,7 @@ fn exchange(
                 );
                 let snapshots = serde_json::from_reader(reader).expect("snapshots");
                 let _ = std::fs::remove_file(&out);
-                return (snapshots, dir.join("outbox").join(format!("{name}.exec")));
+                return Ok((snapshots, dir.join("outbox").join(format!("{name}.exec"))));
             }
             #[derive(serde::Deserialize)]
             struct ErrorResponse {
@@ -134,7 +156,7 @@ fn exchange(
             }
             let error: ErrorResponse = serde_json::from_reader(reader).expect("outbox error");
             let _ = std::fs::remove_file(&out);
-            panic!("java side: {}", error.error);
+            return Err(refusal(error.error));
         }
         if let Ok(pid) = std::fs::read_to_string(dir.join("server.pid"))
             && std::fs::read_to_string(format!("/proc/{}/stat", pid.trim()))
@@ -182,6 +204,16 @@ pub fn batches(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_rejected_scenarios_are_refusals() {
+        let error = "java.lang.IllegalArgumentException: fluid reaches the scenario boundary; provide a contained fixture";
+        assert_eq!(super::refusal(error.into()), super::Refused(error.into()));
+        let failure = std::panic::catch_unwind(|| {
+            super::refusal("java.lang.IllegalStateException: case isolation: leaked fluid".into())
+        });
+        assert!(failure.is_err());
+    }
+
     #[test]
     fn large_histories_run_alone_and_batching_keeps_order() {
         let mut heavy = crate::fluid_world::generate(17);
