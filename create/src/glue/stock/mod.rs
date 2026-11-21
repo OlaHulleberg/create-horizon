@@ -2191,9 +2191,9 @@ const SAVED: [(&str, &str); 4] = [
     ("links", "StockLink"),
     ("tickers", "StockTicker"),
     ("requesters", "Requester"),
-    ("gauges", "FactoryPanels"),
+    ("gauges", "GaugePanels"),
 ];
-const CLOTHS: [(&str, &str); 1] = [(shop::SAVED, "TableCloth")];
+const CLOTHS: [(&str, &str); 1] = [(shop::SAVED, "ClothState")];
 const SAVED_KEYS: [&str; 5] = [SAVED[0].1, SAVED[1].1, SAVED[2].1, SAVED[3].1, CLOTHS[0].1];
 
 fn freq(net: Option<Network>) -> Tag {

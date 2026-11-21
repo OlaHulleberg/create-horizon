@@ -126,7 +126,8 @@ fn with_prop(
 
 pub struct Copycats;
 
-/// What a moving structure carries for a copycat (`Subsystem::carry_out`).
+/// What a moving structure carries for a copycat (`Subsystem::carry_out`), and its block entity
+/// keeps.
 const CARRIED_MATERIAL: &str = "CopycatMaterial";
 const CARRIED_ITEM: &str = "CopycatItem";
 
@@ -278,7 +279,7 @@ impl Subsystem for Copycats {
 
     fn saved_keys(&self, block: Block) -> &'static [&'static str] {
         if matches!(block, Block::CopycatPanel | Block::CopycatStep) {
-            &[ITEM, MATERIAL]
+            &[CARRIED_ITEM, CARRIED_MATERIAL]
         } else {
             &[]
         }
@@ -463,10 +464,8 @@ fn set_material(lv: &mut ServerLevel<'_>, pos: [i32; 3], material: BlockState) {
 /// A column's copycats (`CopycatBlockEntity.write`: `Material` and `Item`), as `create_copycat`:
 /// `Pos` (three ints each), `Materials` (state text, empty for none) and `Items` (one compound
 /// each, empty for none).
-const ITEM: &str = "Item";
-
-/// `CopycatBlockEntity.write` of column `chunk`'s copycats: `Item` and `Material` (its state's
-/// text, the copycat's own drawing key).
+/// `CopycatBlockEntity.write` of column `chunk`'s copycats: its `Item` and `Material` (its
+/// state's text), under the keys a moving structure carries them by.
 fn save_entities(lv: &ServerLevel<'_>, chunk: [i32; 2], out: &mut super::entity_data::Entities) {
     let inside = |p: &[i32; 3]| [p[0] >> 4, p[2] >> 4] == chunk;
     let host = &*lv.host;
@@ -481,8 +480,11 @@ fn save_entities(lv: &ServerLevel<'_>, chunk: [i32; 2], out: &mut super::entity_
                 .unwrap_or_default();
             let item = c.item.as_ref().and_then(|s| s.to_nbt(host));
             out.entry(*p).or_default().extend([
-                (ITEM.into(), Tag::Compound(item.unwrap_or_default())),
-                (MATERIAL.into(), Tag::String(material.as_str().into())),
+                (CARRIED_ITEM.into(), Tag::Compound(item.unwrap_or_default())),
+                (
+                    CARRIED_MATERIAL.into(),
+                    Tag::String(material.as_str().into()),
+                ),
             ]);
         }
     });
@@ -490,11 +492,11 @@ fn save_entities(lv: &ServerLevel<'_>, chunk: [i32; 2], out: &mut super::entity_
 
 /// `CopycatBlockEntity.read`.
 fn load_entity(lv: &mut ServerLevel<'_>, pos: [i32; 3], tag: &Compound) {
-    let material = match tag.get(&MATERIAL.into()) {
+    let material = match tag.get(&CARRIED_MATERIAL.into()) {
         Some(Tag::String(s)) => s.to_string_lossy(),
         _ => String::new(),
     };
-    let item = match tag.get(&ITEM.into()) {
+    let item = match tag.get(&CARRIED_ITEM.into()) {
         Some(Tag::Compound(c)) if !c.is_empty() => ItemStack::from_nbt(&*lv.host, c),
         _ => None,
     };
