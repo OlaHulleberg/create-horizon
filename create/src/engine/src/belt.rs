@@ -326,6 +326,49 @@ pub fn movement_facing(rpm: f32, facing: Dir) -> Dir {
     Dir::from_axis(axis, !negative)
 }
 
+/// `getMovementDirection(true, true)` (`getBeltChainDirection`) of the segment `c` turning at
+/// `rpm`: the way items go along it, up or down its slope; none while it stands still.
+pub fn chain_direction(rpm: f32, c: &Segment) -> [i32; 3] {
+    if rpm == 0.0 {
+        return [0; 3];
+    }
+    let axis = c.facing.axis();
+    let mut movement = Dir::from_axis(axis, axis != Axis::X);
+    if rpm < 0.0 {
+        movement = movement.opposite();
+    }
+    let o = movement.offset();
+    if c.slope == Slope::Horizontal {
+        return o;
+    }
+    let up = c.slope
+        == if movement == c.facing {
+            Slope::Upward
+        } else {
+            Slope::Downward
+        };
+    [o[0], if up { 1 } else { -1 }, o[2]]
+}
+
+/// `BeltInventory.eject`: an item thrown off the belt whose controller `c` at `controller`
+/// heads a chain `length` long turning at `rpm`, from `position` along it. Where it starts
+/// and its motion: along the chain at least an eighth of a block a tick, and an eighth up.
+pub fn eject(
+    controller: [i32; 3],
+    c: &Segment,
+    length: i32,
+    rpm: f32,
+    position: f32,
+) -> ([f64; 3], [f64; 3]) {
+    let d = chain_direction(rpm, c).map(f64::from);
+    let speed = f64::from(movement_speed(rpm).abs().max(1.0 / 8.0));
+    let motion = [d[0] * speed, d[1] * speed + 1.0 / 8.0, d[2] * speed];
+    let len = motion.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let at = vector_for_offset(controller, c, length, position);
+    let at = [0, 1, 2].map(|a| at[a] + motion[a] / len * 0.001);
+    ([at[0], at[1] + 6.0 / 16.0, at[2]], motion)
+}
+
 /// `BeltMovementHandler.transportEntity`: how far an entity standing on the belt segment `seg`
 /// at `pos` (feet at `feet`) moves this tick, the belt turning at `rpm`; None when the belt
 /// leaves it be (too slow, the entity not on top or off to the side). `steering`: a living
@@ -1697,6 +1740,26 @@ pub fn decode(mut d: &[u8]) -> Vec<Contents> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eject_goes_along_the_chain_from_just_past_its_end() {
+        let flat = Segment {
+            facing: Dir::South,
+            slope: Slope::Horizontal,
+            part: Part::Start,
+        };
+        let (at, motion) = eject([0, 8, 0], &flat, 7, 16.0, 7.0);
+        let o = 0.001 / 2f64.sqrt();
+        assert_eq!(motion, [0.0, 0.125, 0.125]);
+        assert!((at[1] - (8.875 + o)).abs() < 1e-12 && (at[2] - (7.0 + o)).abs() < 1e-12);
+        assert_eq!(eject([0, 8, 0], &flat, 7, 0.0, 3.0).1, [0.0, 0.125, 0.0]);
+        let up = Segment {
+            slope: Slope::Upward,
+            ..flat
+        };
+        assert_eq!(chain_direction(16.0, &up), [0, 1, 1]);
+        assert_eq!(chain_direction(-16.0, &up), [0, -1, -1]);
+    }
 
     #[test]
     fn processing_copy_clears_the_source_stack_lock() {
