@@ -29,6 +29,8 @@ pub const TRAIN_CHANNEL: &str = create_engine::trains::CHANNEL;
 /// client: each id, then its state as `/setblock` writes it.
 pub const STATES_CHANNEL: &str = "create:train_states";
 
+const CONNECTIONS: &str = "Connections";
+
 pub struct Trains;
 
 thread_local! {
@@ -112,11 +114,10 @@ impl Subsystem for Trains {
 
     fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
         let dim = lv.dim;
-        let Some((trains, names, curves)) = with_world(|w| {
+        let Some((trains, names)) = with_world(|w| {
             (
                 w.column_trains(dim, chunk[0], chunk[1]),
                 w.dims[dim].railway.column_stations(chunk[0], chunk[1]),
-                w.dims[dim].track_curves.column(chunk[0], chunk[1]),
             )
         }) else {
             return;
@@ -132,8 +133,54 @@ impl Subsystem for Trains {
         if !names.is_empty() {
             data.insert("station_names".into(), saved::stations_to_nbt(&names));
         }
-        if !curves.is_empty() {
-            data.insert("track_curves".into(), saved::curves_to_nbt(&curves));
+    }
+
+    /// `TrackBlockEntity.write`'s `Connections`: the curves whose primary end is the track.
+    fn save_entities(
+        &self,
+        lv: &ServerLevel<'_>,
+        chunk: [i32; 2],
+        out: &mut crate::glue::entity_data::Entities,
+    ) {
+        let dim = lv.dim;
+        let curves =
+            with_world(|w| w.dims[dim].track_curves.column(chunk[0], chunk[1])).unwrap_or_default();
+        let mut by_track: std::collections::BTreeMap<[i32; 3], Vec<_>> = Default::default();
+        for c in curves {
+            by_track.entry(c.from).or_default().push(c);
+        }
+        for (p, list) in by_track {
+            out.entry(p)
+                .or_default()
+                .insert(CONNECTIONS.into(), saved::curves_to_nbt(&list));
+        }
+    }
+
+    /// `TrackBlockEntity.read`.
+    fn load_entity(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        _pos: [i32; 3],
+        block: create_engine::Block,
+        tag: &Compound,
+    ) {
+        if block != create_engine::Block::Track {
+            return;
+        }
+        let curves = saved::curves_of(tag.get(&CONNECTIONS.into()));
+        let dim = lv.dim;
+        with_world(|w| {
+            for c in curves {
+                w.dims[dim].track_curves.add(c);
+            }
+        });
+    }
+
+    fn saved_keys(&self, block: create_engine::Block) -> &'static [&'static str] {
+        if block == create_engine::Block::Track {
+            &[CONNECTIONS]
+        } else {
+            &[]
         }
     }
 
