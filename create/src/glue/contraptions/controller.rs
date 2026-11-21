@@ -275,8 +275,27 @@ impl Subsystem for Controller {
         }
     }
 
-    fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
-        chunk_save(lv.dim, chunk, data);
+    fn save_entities(
+        &self,
+        lv: &ServerLevel<'_>,
+        chunk: [i32; 2],
+        out: &mut crate::glue::entity_data::Entities,
+    ) {
+        save_entities(lv.dim, chunk, out);
+    }
+
+    fn load_entity(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, tag: &Compound) {
+        if block == Block::LecternController {
+            load_entity(lv.dim, pos, tag);
+        }
+    }
+
+    fn saved_keys(&self, block: Block) -> &'static [&'static str] {
+        if block == Block::LecternController {
+            &[CONTROLLER_DATA]
+        } else {
+            &[]
+        }
     }
 
     /// A column left a level: its lecterns are forgotten (kept in its save).
@@ -1101,50 +1120,48 @@ fn show_users(lv: &mut ServerLevel<'_>) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Saved with the column
+// Saved with the block entity
 
-/// Lecterns of a column (`LecternControllerBlockEntity.write`: `ControllerData`; the user is
-/// not kept, as Create's leaves it once its player is gone).
-fn chunk_save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
+const CONTROLLER_DATA: &str = "ControllerData";
+
+/// `LecternControllerBlockEntity.write` of column `chunk`'s lecterns: `ControllerData`; the user
+/// is not kept, as Create's leaves it once its player is gone.
+fn save_entities(dim: usize, chunk: [i32; 2], out: &mut crate::glue::entity_data::Entities) {
     let inside = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]);
-    let Some(mut list) = with_world(|w| {
-        w.dims[dim]
-            .lecterns
-            .iter()
-            .filter(|(p, _)| inside(p))
-            .map(|(p, l)| (*p, l.items.clone()))
-            .collect::<Vec<_>>()
-    }) else {
-        return;
-    };
-    if list.is_empty() {
-        return;
-    }
-    list.sort_by_key(|x| x.0);
-    let tags = list
-        .into_iter()
-        .map(|(p, items)| {
-            Tag::Compound(Compound::from([
-                ("Pos".into(), Tag::IntArray(p.to_vec())),
-                (
-                    "Items".into(),
-                    Tag::List(
-                        items
-                            .iter()
-                            .map(|i| Tag::String(i.as_str().into()))
-                            .collect(),
-                    ),
-                ),
-            ]))
-        })
-        .collect();
-    data.insert(
-        KEY.into(),
-        Tag::Compound(Compound::from([("lecterns".into(), Tag::List(tags))])),
-    );
+    with_world(|w| {
+        for (p, l) in w.dims[dim].lecterns.iter().filter(|(p, _)| inside(p)) {
+            let items = l
+                .items
+                .iter()
+                .map(|i| Tag::String(i.as_str().into()))
+                .collect();
+            out.entry(*p)
+                .or_default()
+                .insert(CONTROLLER_DATA.into(), Tag::List(items));
+        }
+    });
 }
 
-/// A column joined a level: its lecterns back (`read`).
+/// `LecternControllerBlockEntity.read`.
+fn load_entity(dim: usize, pos: [i32; 3], tag: &Compound) {
+    let items = match tag.get(&CONTROLLER_DATA.into()) {
+        Some(Tag::List(l)) => l
+            .iter()
+            .map(|t| match t {
+                Tag::String(s) => s.to_string_lossy(),
+                _ => String::new(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    with_world(|w| {
+        let lectern = w.dims[dim].lecterns.entry(pos).or_default();
+        lectern.items = items;
+    });
+    BUSY.set(true);
+}
+
+/// The `lecterns` an older version saved with the column, back (`read`).
 fn chunk_load(dim: usize, data: &Compound) {
     let Some(Tag::Compound(data)) = data.get(&KEY.into()) else {
         return;
