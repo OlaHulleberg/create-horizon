@@ -1428,7 +1428,7 @@ pub(super) fn flush_ejectors(lv: &mut ServerLevel<'_>) {
     })
     .unwrap_or_default();
     for (at, v, item, n) in drops {
-        items::drop_item(lv, at, v, &item, u32::from(n), 0);
+        items::drop_item(lv, at, v, &item, u32::from(n), 10);
     }
     if !changes.is_empty() {
         let players = lv.players();
