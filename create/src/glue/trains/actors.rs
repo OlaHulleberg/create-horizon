@@ -72,7 +72,12 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
                 })
                 .flatten()
                 .unwrap_or_default();
-                actors::bearing_actors(&blocks)
+                let mut carried = actors::bearing_actors(&blocks);
+                // A carriage's interfaces never stall it (`onCarriage`): `cargo` runs them.
+                carried
+                    .actors
+                    .retain(|a| !matches!(a.kind, create_engine::actors::Kind::Interface { .. }));
+                carried
             }
         };
         if carried.actors.is_empty() {

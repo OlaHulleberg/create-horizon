@@ -1915,8 +1915,8 @@ fn collect(lv: &mut ServerLevel<'_>, key: [i32; 3], actor: &Actor, stack: ItemSt
 }
 
 /// The actors of a bearing's structure (its blocks' offsets from the bearing and states):
-/// breakers, harvesters, ploughs and rollers, each a breaker of its own. Its storage rides it
-/// apart (`carry_storage`); its glue and controls don't.
+/// breakers, harvesters, ploughs and rollers, each a breaker of its own, and interfaces. Its
+/// storage rides it apart (`carry_storage`); its glue and controls don't.
 pub(crate) fn bearing_actors(blocks: &[([i32; 3], u32)]) -> Carried {
     let mut carried = Carried::default();
     for (o, state) in blocks {
@@ -1926,9 +1926,6 @@ pub(crate) fn bearing_actors(blocks: &[([i32; 3], u32)]) -> Carried {
         let (Some(kind), Some(facing)) = (Kind::of(block), info.facing) else {
             continue;
         };
-        if matches!(kind, Kind::Interface { .. }) {
-            continue;
-        }
         carried
             .actors
             .push(Actor::new(*o, kind, facing, -next_breaker()));
@@ -2000,6 +1997,10 @@ pub fn tick_posed_actors(
         let a = &mut carried.actors[i];
         a.turns = *turns;
         let position = actors::posed_position(a, pivot, turns);
+        if let Kind::Interface { fluid } = a.kind {
+            stalled |= tick_interface(lv, key, a, position, fluid);
+            continue;
+        }
         let facing = actors::posed_facing(a.facing, turns);
         let mut stall = a.tick(
             position,
@@ -2625,7 +2626,8 @@ fn tick_interface(
 ) -> bool {
     let dim = lv.dim;
     let grid = position.map(|v| v.floor() as i32);
-    let mut near = vec![grid, add(grid, a.facing.offset())];
+    let mut near = vec![grid];
+    near.extend(actors::facing_if_valid(a.facing, &a.turns).map(|f| add(grid, f.offset())));
     near.extend(a.interface.working);
     let mut world = Interfaces {
         fluid,

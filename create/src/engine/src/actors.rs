@@ -411,6 +411,18 @@ pub fn posed_facing(facing: Dir, turns: &Turns) -> Dir {
     Dir::from_offset(n).unwrap_or(facing)
 }
 
+/// `PortableStorageInterfaceMovement.getCurrentFacingIfValid`: the direction `facing` points
+/// turned by `turns`, none when it is more than half a block from the nearest direction.
+pub fn facing_if_valid(facing: Dir, turns: &Turns) -> Option<Dir> {
+    let v = turn_all(facing.offset().map(f64::from), turns);
+    let nearest = posed_facing(facing, turns);
+    let n = nearest.offset();
+    let off = (0..3)
+        .map(|i| (v[i] - f64::from(n[i])).powi(2))
+        .sum::<f64>();
+    (off <= 0.25).then_some(nearest)
+}
+
 /// One turn of `deg` about `axis`.
 pub fn one_turn(axis: crate::kinetics::Axis, deg: f64) -> Turns {
     [(axis, deg), NO_TURNS[1], NO_TURNS[2]]
@@ -472,9 +484,10 @@ impl Actor {
         if !self.active() {
             return false;
         }
+        let facing = facing_if_valid(self.facing, &self.turns);
         if visit {
             self.interface
-                .visit(world, contraption, grid, position, self.facing);
+                .visit(world, contraption, grid, position, facing);
             self.first_movement = false;
         }
         self.stall = self.interface.tick(
@@ -482,7 +495,7 @@ impl Actor {
             contraption,
             position,
             self.motion,
-            self.facing,
+            facing,
             self.stall,
         );
         self.stall
@@ -1902,5 +1915,60 @@ mod tests {
         e.clear();
         a.cancel(&mut e);
         assert_eq!(e, vec![Effect::ContactLeft([2, 0, 1])]);
+    }
+
+    #[test]
+    fn an_interface_points_somewhere_only_near_a_direction() {
+        use crate::kinetics::Axis;
+        let at = |deg| facing_if_valid(Dir::East, &one_turn(Axis::Y, deg));
+        assert_eq!(at(0.0), Some(Dir::East));
+        assert_eq!(at(28.0), Some(Dir::East));
+        assert_eq!(at(30.0), None);
+        assert_eq!(at(90.0), Some(Dir::North));
+        assert_eq!(at(-90.0), Some(Dir::South));
+        assert_eq!(at(135.0), None);
+    }
+
+    /// A stationary interface at `[3, 0, 0]` facing west.
+    struct Interfaces(crate::psi::Stationary);
+    impl crate::psi::World for Interfaces {
+        fn interface_at(&self, pos: [i32; 3], facing: Dir) -> bool {
+            pos == [3, 0, 0] && facing == Dir::East && !self.0.powered
+        }
+        fn stationary(&mut self, pos: [i32; 3]) -> Option<&mut crate::psi::Stationary> {
+            (pos == [3, 0, 0]).then_some(&mut self.0)
+        }
+    }
+
+    #[test]
+    fn an_interface_on_a_turning_structure_stops_it_facing_a_stationary_one() {
+        use crate::kinetics::Axis;
+        let key = [7, 7, 7];
+        let mut world = Interfaces(crate::psi::Stationary::default());
+        let mut a = Actor::new([1, 0, 0], Kind::Interface { fluid: false }, Dir::East, -1);
+        let mut deg = 300.0f64;
+        let mut stalled_at = None;
+        let mut connected = false;
+        let mut released = false;
+        for _ in 0..200 {
+            a.turns = one_turn(Axis::Y, deg);
+            let position = posed_position(&a, [0.5; 3], &a.turns);
+            let stall = a.tick_interface(position, &mut world, key);
+            connected |= world.0.can_transfer() == Some(key);
+            if stall && stalled_at.is_none() {
+                stalled_at = Some(deg);
+            }
+            if stalled_at.is_some() && !stall {
+                released = true;
+            }
+            world.0.tick();
+            if !stall {
+                deg += 4.8;
+            }
+        }
+        let stalled_at = stalled_at.expect("it never stopped");
+        assert!((stalled_at - 360.0).abs() <= 4.8, "stopped at {stalled_at}");
+        assert!(connected && released);
+        assert_eq!(world.0.connected, None, "let go once it turned away");
     }
 }
