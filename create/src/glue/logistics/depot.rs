@@ -1,6 +1,7 @@
 //! Depots on the server: the held stack sliding to the centre (`DepotBehaviour.tick`), what a
-//! player puts down and takes (`SharedDepotBlockMethods.onUse`), what hoppers change, and the
-//! contents clients draw (`create:depot`).
+//! player puts down and takes (`SharedDepotBlockMethods.onUse`), what hoppers change, an
+//! ejector's stacks merging onto what it holds (`insert`, `incoming`), and the contents clients
+//! draw (`create:depot`).
 
 use super::super::net;
 use super::super::server::ServerLevel;
@@ -149,8 +150,130 @@ pub fn player_yaw(lv: &ServerLevel<'_>, p: PlayerRef) -> Option<f32> {
     p.entity().rotation(&*lv.host).map(|r| r[0])
 }
 
-/// One depot's block-entity turn in the shared transport walk.
+/// `new TransportedItemStack(stack)` for a stack put onto the depot at `pos` through its item
+/// handler (`DepotItemHandler.insertItem`): from above, at the edge of nothing (position 0), at
+/// a random angle (180 for upright items).
+pub(super) fn handler_motion(lv: &ServerLevel<'_>, pos: [i32; 3], item: &str) -> depot::Held {
+    depot::Held {
+        position: 0.0,
+        ..depot::Held::new(random_angle(lv, pos), upright(&*lv.host, item))
+    }
+}
+
+/// `DepotBehaviour.insert` on the merging depot (an ejector's) at `pos`: `count` of `item`
+/// arriving with `motion`. Only while charged (`canAcceptItems`); as much as
+/// `getRemainingSpace` leaves (`depot::merge_take`, the stacks still sliding in counted). With
+/// nothing held it is the held stack; else it slides in on its own (`incoming.add`) and joins
+/// at the centre. The count left.
+pub(super) fn merge_insert(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    item: &str,
+    count: u8,
+    motion: depot::Held,
+    simulate: bool,
+) -> u8 {
+    let dim = lv.dim;
+    let Some(max_stack) = with_world(|w| {
+        w.dims[dim]
+            .ejectors
+            .get(&pos)
+            .filter(|e| e.state == create_engine::ejector::State::Charged)
+            .map(|e| e.max_stack)
+    })
+    .flatten() else {
+        return count;
+    };
+    let stacks = depot_items(lv, pos);
+    let held = stacks
+        .iter()
+        .find(|s| s.0 == 0)
+        .map(|(_, key, n)| depot::HeldStack {
+            same: key == item,
+            count: *n,
+            max: items::stack_limit(&*lv.host, key),
+        });
+    let incoming: u32 = with_world(|w| {
+        w.depot_incoming(dim, pos)
+            .iter()
+            .map(|i| u32::from(i.count))
+            .sum()
+    })
+    .unwrap_or(0);
+    let used = stacks.iter().map(|s| u32::from(s.2)).sum::<u32>() + incoming;
+    let n = depot::merge_take(max_stack, held, used, count);
+    if n == 0 || simulate {
+        return count - n;
+    }
+    if held.is_some() {
+        let i = depot::Incoming {
+            item: item.to_owned(),
+            count: n,
+            motion,
+        };
+        with_world(|w| w.depot_add_incoming(dim, pos, i));
+    } else {
+        let stack = items::stack_of(&*lv.host, item, u32::from(n));
+        if stack.is_none() || !items::set_slot(lv, pos, 0, stack) {
+            return count;
+        }
+        with_world(|w| w.depot_put(dim, pos, Some(motion)));
+    }
+    count - n
+}
+
+/// `DepotBehaviour.tick`'s incoming stacks: each slides, and one at the centre becomes the
+/// held stack (none was held) or joins it; one that cannot stack with it
+/// (`canItemStackAmountsStack`) drops at the centre, half a block up
+/// (`Containers.dropItemStack`).
+fn land_incoming(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let arrivals = {
+        let host = &*lv.host;
+        with_world(|w| w.tick_incoming(dim, pos, |item| upright(host, item))).unwrap_or_default()
+    };
+    for a in arrivals {
+        match a {
+            depot::Arrival::Held { item, count } => {
+                let stack = items::stack_of(&*lv.host, &item, u32::from(count));
+                items::set_slot(lv, pos, 0, stack);
+            }
+            depot::Arrival::Onto { item, count } => {
+                let held = items::slot(lv, pos, 0);
+                let joins = held.as_ref().is_some_and(|h| {
+                    let key = items::key_of(&*lv.host, h);
+                    depot::joins(
+                        depot::HeldStack {
+                            same: key == item,
+                            count: h.count().min(255) as u8,
+                            max: items::stack_limit(&*lv.host, &key),
+                        },
+                        count,
+                    )
+                });
+                match held {
+                    Some(h) if joins => {
+                        let grown = items::with_count(&h, h.count() + u32::from(count));
+                        items::set_slot(lv, pos, 0, grown);
+                    }
+                    _ => {
+                        let at = [
+                            f64::from(pos[0]) + 0.5,
+                            f64::from(pos[1] + 1),
+                            f64::from(pos[2]) + 0.5,
+                        ];
+                        lv.spawn_items(at, &item, u32::from(count));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One depot's block-entity turn in the shared transport walk: its incoming stacks first, then
+/// the held one.
 pub(super) fn tick_depot(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    land_incoming(lv, pos);
     let standing = depot_items(lv, pos)
         .first()
         .is_some_and(|(slot, item, _)| *slot == 0 && upright(&*lv.host, item));
@@ -187,6 +310,13 @@ fn process_held(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 /// Publish client notifications after the shared block-entity walk.
 pub fn send_changed_depots(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
+    // `DepotBehaviour.destroy`: a removed depot's incoming stacks drop where it was.
+    let drops = with_world(|w| std::mem::take(&mut w.dims[dim].depot_drops)).unwrap_or_default();
+    for (pos, item, count) in drops {
+        if let Some(stack) = items::stack_of(&*lv.host, &item, u32::from(count)) {
+            let _ = lv.level.pop_resource(&mut *lv.host, pos, stack);
+        }
+    }
     let changed = with_world(|w| w.take_depot_changes(dim)).unwrap_or_default();
     if changed.is_empty() {
         return;
@@ -293,12 +423,33 @@ pub fn depot_contents_changed(lv: &ServerLevel<'_>, pos: [i32; 3]) {
 }
 
 /// `TransportedItemStack.serializeNBT/read` for the engine's depot fields. The host
-/// container separately persists Item and OutputBuffer, including item components.
+/// container separately persists Item and OutputBuffer, including item components; the
+/// incoming stacks (`Incoming`, a merging depot's) live in the engine, so each keeps its item
+/// as the engine names it (`Item`, `Count`).
 pub(crate) fn saved_to_nbt(saved: depot::SavedDepot) -> mod_api::Compound {
     use mod_api::{Compound, Tag};
-    let Some(h) = saved.held else {
-        return Compound::new();
-    };
+    let mut out = Compound::new();
+    if let Some(h) = saved.held {
+        out.insert("HeldItem".into(), Tag::Compound(motion_to_nbt(h)));
+    }
+    if !saved.incoming.is_empty() {
+        let list = saved
+            .incoming
+            .into_iter()
+            .map(|i| {
+                let mut c = motion_to_nbt(i.motion);
+                c.insert("Item".into(), Tag::String(i.item.as_str().into()));
+                c.insert("Count".into(), Tag::Int(i32::from(i.count)));
+                Tag::Compound(c)
+            })
+            .collect();
+        out.insert("Incoming".into(), Tag::List(list));
+    }
+    out
+}
+
+fn motion_to_nbt(h: depot::Held) -> mod_api::Compound {
+    use mod_api::{Compound, Tag};
     let mut held = Compound::from([
         ("Pos".into(), Tag::Float(h.position.to_bits())),
         ("Offset".into(), Tag::Float(h.side_offset.to_bits())),
@@ -320,14 +471,41 @@ pub(crate) fn saved_to_nbt(saved: depot::SavedDepot) -> mod_api::Compound {
         held.insert("FanProcessingType".into(), Tag::String(id.into()));
         held.insert("FanProcessingTime".into(), Tag::Int(h.fan.time));
     }
-    Compound::from([("HeldItem".into(), Tag::Compound(held))])
+    held
 }
 
 pub(crate) fn saved_from_nbt(data: &mod_api::Compound) -> depot::SavedDepot {
     use mod_api::Tag;
-    let Some(Tag::Compound(h)) = data.get(&"HeldItem".into()) else {
-        return depot::SavedDepot { held: None };
+    let held = match data.get(&"HeldItem".into()) {
+        Some(Tag::Compound(h)) => Some(motion_from_nbt(h)),
+        _ => None,
     };
+    let incoming = match data.get(&"Incoming".into()) {
+        Some(Tag::List(list)) => list
+            .iter()
+            .filter_map(|t| {
+                let Tag::Compound(c) = t else { return None };
+                let Some(Tag::String(item)) = c.get(&"Item".into()) else {
+                    return None;
+                };
+                let Some(Tag::Int(count)) = c.get(&"Count".into()) else {
+                    return None;
+                };
+                let count = u8::try_from(*count).ok().filter(|n| *n > 0)?;
+                Some(depot::Incoming {
+                    item: item.to_string_lossy(),
+                    count,
+                    motion: motion_from_nbt(c),
+                })
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    depot::SavedDepot { held, incoming }
+}
+
+fn motion_from_nbt(h: &mod_api::Compound) -> depot::Held {
+    use mod_api::Tag;
     let int = |k: &str| match h.get(&k.into()) {
         Some(Tag::Int(v)) => *v,
         _ => 0,
@@ -336,32 +514,30 @@ pub(crate) fn saved_from_nbt(data: &mod_api::Compound) -> depot::SavedDepot {
         Some(Tag::Float(v)) => f32::from_bits(*v),
         _ => 0.0,
     };
-    depot::SavedDepot {
-        held: Some(depot::Held {
-            position: float("Pos"),
-            side_offset: float("Offset"),
-            angle: int("Angle"),
-            from: u8::try_from(int("InDirection"))
-                .ok()
-                .and_then(depot::Side::from_index),
-            locked: matches!(h.get(&"Locked".into()), Some(Tag::Byte(v)) if *v != 0),
-            fan: create_engine::fan::Progress {
-                by: match h.get(&"FanProcessingType".into()) {
-                    Some(Tag::String(id)) => {
-                        use create_engine::fan::Kind;
-                        match id.to_string_lossy().as_str() {
-                            "create:splashing" => Some(Kind::Splashing),
-                            "create:haunting" => Some(Kind::Haunting),
-                            "create:smoking" => Some(Kind::Smoking),
-                            "create:blasting" => Some(Kind::Blasting),
-                            _ => None,
-                        }
+    depot::Held {
+        position: float("Pos"),
+        side_offset: float("Offset"),
+        angle: int("Angle"),
+        from: u8::try_from(int("InDirection"))
+            .ok()
+            .and_then(depot::Side::from_index),
+        locked: matches!(h.get(&"Locked".into()), Some(Tag::Byte(v)) if *v != 0),
+        fan: create_engine::fan::Progress {
+            by: match h.get(&"FanProcessingType".into()) {
+                Some(Tag::String(id)) => {
+                    use create_engine::fan::Kind;
+                    match id.to_string_lossy().as_str() {
+                        "create:splashing" => Some(Kind::Splashing),
+                        "create:haunting" => Some(Kind::Haunting),
+                        "create:smoking" => Some(Kind::Smoking),
+                        "create:blasting" => Some(Kind::Blasting),
+                        _ => None,
                     }
-                    _ => None,
-                },
-                time: int("FanProcessingTime"),
+                }
+                _ => None,
             },
-        }),
+            time: int("FanProcessingTime"),
+        },
     }
 }
 
@@ -418,13 +594,41 @@ mod persistence_tests {
             time: 37,
         };
         for held in [Some(held), None] {
-            let saved = depot::SavedDepot { held };
-            assert_eq!(saved_from_nbt(&saved_to_nbt(saved)), saved);
+            let saved = depot::SavedDepot {
+                held,
+                incoming: Vec::new(),
+            };
+            assert_eq!(saved_from_nbt(&saved_to_nbt(saved.clone())), saved);
         }
         let mut above = held;
         above.from = None;
         above.fan = Default::default();
-        let saved = depot::SavedDepot { held: Some(above) };
-        assert_eq!(saved_from_nbt(&saved_to_nbt(saved)), saved);
+        let saved = depot::SavedDepot {
+            held: Some(above),
+            incoming: Vec::new(),
+        };
+        assert_eq!(saved_from_nbt(&saved_to_nbt(saved.clone())), saved);
+        // An ejector's stacks still sliding in (`Incoming`), with or without a held one.
+        for held in [Some(above), None] {
+            let saved = depot::SavedDepot {
+                held,
+                incoming: vec![
+                    depot::Incoming {
+                        item: "minecraft:iron_ingot".into(),
+                        count: 16,
+                        motion: depot::Held {
+                            position: 0.125,
+                            ..depot::Held::new(37, false)
+                        },
+                    },
+                    depot::Incoming {
+                        item: "minecraft:diamond".into(),
+                        count: 2,
+                        motion: held.unwrap_or(above),
+                    },
+                ],
+            };
+            assert_eq!(saved_from_nbt(&saved_to_nbt(saved.clone())), saved);
+        }
     }
 }

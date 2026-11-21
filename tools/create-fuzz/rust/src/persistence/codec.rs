@@ -24,10 +24,30 @@ pub fn belt_segment_from_nbt(data: &Compound) -> Option<create_engine::belt::Sav
         length: *length,
     })
 }
+/// glue/logistics/depot.rs `saved_to_nbt`: the held stack's motion (`HeldItem`) and the
+/// incoming stacks (`Incoming`, each with its item as the engine names it).
 pub fn depot_to_nbt(saved: create_engine::depot::SavedDepot) -> Compound {
-    let Some(h) = saved.held else {
-        return Compound::new();
-    };
+    let mut out = Compound::new();
+    if let Some(h) = saved.held {
+        out.insert("HeldItem".into(), Tag::Compound(motion_to_nbt(h)));
+    }
+    if !saved.incoming.is_empty() {
+        let list = saved
+            .incoming
+            .into_iter()
+            .map(|i| {
+                let mut c = motion_to_nbt(i.motion);
+                c.insert("Item".into(), Tag::String(i.item));
+                c.insert("Count".into(), Tag::Int(i32::from(i.count)));
+                Tag::Compound(c)
+            })
+            .collect();
+        out.insert("Incoming".into(), Tag::List(list));
+    }
+    out
+}
+
+fn motion_to_nbt(h: create_engine::depot::Held) -> Compound {
     let mut held = Compound::from([
         ("Pos".into(), Tag::Float(h.position.to_bits())),
         ("Offset".into(), Tag::Float(h.side_offset.to_bits())),
@@ -49,13 +69,39 @@ pub fn depot_to_nbt(saved: create_engine::depot::SavedDepot) -> Compound {
         held.insert("FanProcessingType".into(), Tag::String(id.into()));
         held.insert("FanProcessingTime".into(), Tag::Int(h.fan.time));
     }
-    Compound::from([("HeldItem".into(), Tag::Compound(held))])
+    held
 }
 
 pub fn depot_from_nbt(data: &Compound) -> create_engine::depot::SavedDepot {
-    let Some(Tag::Compound(h)) = data.get("HeldItem") else {
-        return create_engine::depot::SavedDepot { held: None };
+    let held = match data.get("HeldItem") {
+        Some(Tag::Compound(h)) => Some(motion_from_nbt(h)),
+        _ => None,
     };
+    let incoming = match data.get("Incoming") {
+        Some(Tag::List(list)) => list
+            .iter()
+            .filter_map(|t| {
+                let Tag::Compound(c) = t else { return None };
+                let Some(Tag::String(item)) = c.get("Item") else {
+                    return None;
+                };
+                let Some(Tag::Int(count)) = c.get("Count") else {
+                    return None;
+                };
+                let count = u8::try_from(*count).ok().filter(|n| *n > 0)?;
+                Some(create_engine::depot::Incoming {
+                    item: item.clone(),
+                    count,
+                    motion: motion_from_nbt(c),
+                })
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    create_engine::depot::SavedDepot { held, incoming }
+}
+
+fn motion_from_nbt(h: &Compound) -> create_engine::depot::Held {
     let int = |k: &str| match h.get(k) {
         Some(Tag::Int(v)) => *v,
         _ => 0,
@@ -64,32 +110,30 @@ pub fn depot_from_nbt(data: &Compound) -> create_engine::depot::SavedDepot {
         Some(Tag::Float(v)) => f32::from_bits(*v),
         _ => 0.0,
     };
-    create_engine::depot::SavedDepot {
-        held: Some(create_engine::depot::Held {
-            position: float("Pos"),
-            side_offset: float("Offset"),
-            angle: int("Angle"),
-            from: u8::try_from(int("InDirection"))
-                .ok()
-                .and_then(create_engine::depot::Side::from_index),
-            locked: matches!(h.get("Locked"), Some(Tag::Byte(v)) if *v != 0),
-            fan: create_engine::fan::Progress {
-                by: match h.get("FanProcessingType") {
-                    Some(Tag::String(id)) => {
-                        use create_engine::fan::Kind;
-                        match id.as_str() {
-                            "create:splashing" => Some(Kind::Splashing),
-                            "create:haunting" => Some(Kind::Haunting),
-                            "create:smoking" => Some(Kind::Smoking),
-                            "create:blasting" => Some(Kind::Blasting),
-                            _ => None,
-                        }
+    create_engine::depot::Held {
+        position: float("Pos"),
+        side_offset: float("Offset"),
+        angle: int("Angle"),
+        from: u8::try_from(int("InDirection"))
+            .ok()
+            .and_then(create_engine::depot::Side::from_index),
+        locked: matches!(h.get("Locked"), Some(Tag::Byte(v)) if *v != 0),
+        fan: create_engine::fan::Progress {
+            by: match h.get("FanProcessingType") {
+                Some(Tag::String(id)) => {
+                    use create_engine::fan::Kind;
+                    match id.as_str() {
+                        "create:splashing" => Some(Kind::Splashing),
+                        "create:haunting" => Some(Kind::Haunting),
+                        "create:smoking" => Some(Kind::Smoking),
+                        "create:blasting" => Some(Kind::Blasting),
+                        _ => None,
                     }
-                    _ => None,
-                },
-                time: int("FanProcessingTime"),
+                }
+                _ => None,
             },
-        }),
+            time: int("FanProcessingTime"),
+        },
     }
 }
 
@@ -592,8 +636,15 @@ mod depot_tests {
                     by,
                     time: if by.is_some() { 37 } else { 0 },
                 };
-                let saved = SavedDepot { held: Some(h) };
-                let bytes = serde_json::to_vec(&depot_to_nbt(saved)).unwrap();
+                let saved = SavedDepot {
+                    held: Some(h),
+                    incoming: vec![create_engine::depot::Incoming {
+                        item: "minecraft:iron_ingot".into(),
+                        count: 16,
+                        motion: h,
+                    }],
+                };
+                let bytes = serde_json::to_vec(&depot_to_nbt(saved.clone())).unwrap();
                 let restored = depot_from_nbt(&serde_json::from_slice(&bytes).unwrap());
                 assert_eq!(restored, saved);
                 assert_eq!(
@@ -602,7 +653,10 @@ mod depot_tests {
                 );
             }
         }
-        let empty = depot_to_nbt(SavedDepot { held: None });
+        let empty = depot_to_nbt(SavedDepot {
+            held: None,
+            incoming: Vec::new(),
+        });
         assert!(empty.is_empty());
         assert_eq!(depot_from_nbt(&empty).held, None);
     }

@@ -1,8 +1,9 @@
 //! Weighted ejectors, mirroring glue/logistics/arms.rs: their redstone (`ejector_signals`,
 //! before the walk), their tick at their turn in the shared transport walk (`tick_ejector`
 //! with `EjectorSide`: `EjectorBlockEntity.tick`, its depot behaviour first), what lands on
-//! their target (`land`), their depot merging onto what they hold (`depot_insert`), and their
-//! stack size on a value board (interaction/values.rs).
+//! their target (`land`), their depot merging onto what they hold (glue/logistics/depot.rs
+//! `merge_insert`, its incoming stacks landing in `land_incoming`), and their stack size on a
+//! value board (interaction/values.rs).
 use super::*;
 use crate::transport::Stack;
 use create_engine::{Block, belt, depot, ejector, kinetics::Dir};
@@ -11,49 +12,16 @@ impl Run {
     pub(super) fn is_ejector(&self, p: Pos) -> bool {
         self.w.dims[0].ejectors.contains_key(&p)
     }
-    /// `depot_insert` for the ejector at `p`: only while charged, merging onto what it holds
-    /// up to its stack size (`enableMerging`, `getRemainingSpace`); the count left.
-    pub(super) fn ejector_insert(&mut self, p: Pos, s: &Stack, simulate: bool) -> u8 {
-        let Some(e) = self.w.dims[0].ejectors.get(&p) else {
-            return s.count;
-        };
-        let held = self.depot_stacks.get(&p).cloned();
-        if e.state != ejector::State::Charged || held.as_ref().is_some_and(|h| h.item != s.item) {
-            return s.count;
-        }
-        let present: u32 = held.as_ref().map_or(0, |h| u32::from(h.count))
-            + self
-                .depot_outputs
-                .get(&p)
-                .map_or(0, |o| o.iter().map(|x| u32::from(x.count)).sum());
-        // `getRemainingSpace`: the held stack's own max caps the limit, and an empty
-        // depot holds but one (`ItemStack.EMPTY.getMaxStackSize()`).
-        let held_max = held.as_ref().map(|_| s.limit());
-        let n = depot::merge_take(e.max_stack, held_max, present, s.count);
-        if n == 0 {
-            return s.count;
-        }
-        if !simulate {
-            let had = held.as_ref().map_or(0, |h| h.count);
-            self.depot_stacks.insert(
-                p,
-                Stack {
-                    item: s.item.clone(),
-                    count: had + n,
-                },
-            );
-            if held.is_none() {
-                self.w.depot_put(0, p, Some(depot::Held::new(180, false)));
-            } else {
-                self.w.depot_changed(0, p);
-            }
-        }
-        s.count - n
-    }
-    /// `handlers::DepotItems.insert` into an ejector: only while charged, into the held slot up
-    /// to its stack size less its outputs; a new held stack arrives at the edge
-    /// (`depot_contents_changed`). The count left.
-    pub(super) fn ejector_handler_insert(&mut self, p: Pos, s: &Stack, simulate: bool) -> u8 {
+    /// glue/logistics/depot.rs `merge_insert` for the ejector at `p`, the stack arriving with
+    /// `motion`: only while charged, as much as `getRemainingSpace` leaves (its incoming stacks
+    /// counted); onto an empty one as the held stack, else into `incoming`. The count left.
+    pub(super) fn ejector_insert(
+        &mut self,
+        p: Pos,
+        s: &Stack,
+        motion: depot::Held,
+        simulate: bool,
+    ) -> u8 {
         let Some(e) = self.w.dims[0].ejectors.get(&p) else {
             return s.count;
         };
@@ -61,51 +29,94 @@ impl Run {
             return s.count;
         }
         let held = self.depot_stacks.get(&p).cloned();
-        if held.as_ref().is_some_and(|h| h.item != s.item) {
-            return s.count;
-        }
-        let present: u32 = held.as_ref().map_or(0, |h| u32::from(h.count))
+        let used: u32 = held.as_ref().map_or(0, |h| u32::from(h.count))
             + self
                 .depot_outputs
                 .get(&p)
-                .map_or(0, |o| o.iter().map(|x| u32::from(x.count)).sum());
-        // `getRemainingSpace` (mirrors `ejector_insert`): the held stack's own max caps the
-        // limit, and an empty depot holds but one (`ItemStack.EMPTY.getMaxStackSize()`).
-        let held_max = held.as_ref().map(|_| s.limit());
-        let n = depot::merge_take(e.max_stack, held_max, present, s.count);
-        if n == 0 {
-            return s.count;
+                .map_or(0, |o| o.iter().map(|x| u32::from(x.count)).sum())
+            + self
+                .w
+                .depot_incoming(0, p)
+                .iter()
+                .map(|i| u32::from(i.count))
+                .sum::<u32>();
+        let held_stack = held.as_ref().map(|h| depot::HeldStack {
+            same: h.item == s.item,
+            count: h.count,
+            max: h.limit(),
+        });
+        let n = depot::merge_take(e.max_stack, held_stack, used, s.count);
+        if n == 0 || simulate {
+            return s.count - n;
         }
-        if !simulate {
-            let had = held.as_ref().map_or(0, |h| h.count);
+        if held.is_some() {
+            let i = depot::Incoming {
+                item: s.item.clone(),
+                count: n,
+                motion,
+            };
+            self.w.depot_add_incoming(0, p, i);
+        } else {
             self.depot_stacks.insert(
                 p,
                 Stack {
                     item: s.item.clone(),
-                    count: had + n,
+                    count: n,
                 },
             );
-            if held.is_none() {
-                self.w.depot_put(
-                    0,
-                    p,
-                    Some(depot::Held {
-                        position: 0.,
-                        ..depot::Held::new(180, false)
-                    }),
-                );
-            } else {
-                self.w.depot_changed(0, p);
-            }
+            self.w.depot_put(0, p, Some(motion));
         }
         s.count - n
+    }
+    /// `handlers::DepotItems.insert` into an ejector (`DepotItemHandler.insertItem`): the
+    /// merging insert of a stack from above at the edge of nothing (`handler_motion`). The
+    /// count left.
+    pub(super) fn ejector_handler_insert(&mut self, p: Pos, s: &Stack, simulate: bool) -> u8 {
+        let motion = depot::Held {
+            position: 0.,
+            ..depot::Held::new(180, false)
+        };
+        self.ejector_insert(p, s, motion, simulate)
+    }
+    /// glue/logistics/depot.rs `land_incoming`: the depot's incoming stacks slide, and one at
+    /// the centre becomes the held stack or joins it. One that cannot stack with it drops at
+    /// the centre as an item, whose life the driver cannot follow.
+    pub(super) fn land_incoming(&mut self, p: Pos) {
+        for a in self.w.tick_incoming(0, p, |_| false) {
+            match a {
+                depot::Arrival::Held { item, count } => {
+                    self.depot_stacks.insert(p, Stack { item, count });
+                }
+                depot::Arrival::Onto { item, count } => {
+                    let held = self.depot_stacks.get_mut(&p);
+                    match held {
+                        Some(h)
+                            if depot::joins(
+                                depot::HeldStack {
+                                    same: h.item == item,
+                                    count: h.count,
+                                    max: h.limit(),
+                                },
+                                count,
+                            ) =>
+                        {
+                            h.count += count;
+                        }
+                        _ => self.notes.push(format!(
+                            "adapter gap: depot at {p:?} drops {count} {item} (native item flight)"
+                        )),
+                    }
+                }
+            }
+        }
     }
     /// `land`: a stack thrown at `target` into what takes items there from above: an ejector
     /// merges it, a depot takes it while empty, the others by their `handleInsertion(UP)`, a
     /// belt on its segment (`put_on_from_above`). None when nothing there takes items.
     fn ejector_land(&mut self, target: Pos, s: &Stack, simulate: bool) -> Option<u8> {
         if self.is_ejector(target) {
-            return Some(self.ejector_insert(target, s, simulate));
+            let motion = depot::Held::new(180, false);
+            return Some(self.ejector_insert(target, s, motion, simulate));
         }
         if self.w.dims[0].depots.contains_key(&target) {
             let empty = !self.depot_stacks.contains_key(&target)
@@ -207,6 +218,7 @@ impl Run {
         // `KineticBlockEntity.tick` first (`attachKinetics`), then `DepotBehaviour.tick`
         // inside `super.tick()`: the slide, then what its arrival asks.
         self.w.kinetic_base_ticks_through(0, pos);
+        self.land_incoming(pos);
         if self.w.tick_depot(0, pos, false) {
             // The glue's `process_held` (via `depot::tick_depot`).
             self.depot_process_held(pos);
@@ -224,9 +236,16 @@ impl Run {
             d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
         }
     }
-    /// Ejectors after the walk: the change journal settles.
+    /// Ejectors after the walk: the change journal settles. Removed depots' incoming stacks
+    /// drop as items (`send_changed_depots`, `DepotBehaviour.destroy`), whose life the driver
+    /// cannot follow.
     pub(super) fn ejectors_ticked(&mut self) {
         self.w.dims[0].ejector_changes.clear();
+        for (p, item, count) in std::mem::take(&mut self.w.dims[0].depot_drops) {
+            self.notes.push(format!(
+                "adapter gap: removed depot at {p:?} drops {count} {item} (native item flight)"
+            ));
+        }
     }
     /// interaction/values.rs `B::WeightedEjector`: row 0's value is `maxStackSize`.
     pub(super) fn ejector_stack_size(&mut self, p: Pos, pick: create_engine::board::Settings) {
@@ -321,6 +340,23 @@ impl ejector::World for EjectorSide<'_> {
         None
     }
     fn take_all(&mut self) -> Vec<(String, u8)> {
+        // `launchItems` with a pulling belt funnel on top facing its back exports instead.
+        let above = add(self.pos, [0, 1, 0]);
+        let facing = self
+            .run
+            .w
+            .table
+            .get(self.run.at(self.pos))
+            .and_then(|(_, i)| i.facing);
+        if let (Some(facing), Some((_, info))) = (facing, self.run.funnel_at(above))
+            && info.facing == Some(facing.opposite())
+        {
+            self.run.notes.push(format!(
+                "adapter gap: belt funnel on the ejector at {:?}",
+                self.pos
+            ));
+        }
+        // The held stack, every incoming one, then each output.
         let mut taken: Vec<(String, u8)> = self
             .run
             .depot_stacks
@@ -330,6 +366,13 @@ impl ejector::World for EjectorSide<'_> {
             .collect();
         taken.extend(
             self.run
+                .w
+                .depot_incoming(0, self.pos)
+                .iter()
+                .map(|i| (i.item.clone(), i.count)),
+        );
+        taken.extend(
+            self.run
                 .depot_outputs
                 .remove(&self.pos)
                 .unwrap_or_default()
@@ -337,6 +380,7 @@ impl ejector::World for EjectorSide<'_> {
                 .map(|s| (s.item, s.count)),
         );
         if !taken.is_empty() {
+            self.run.w.depot_set_incoming(0, self.pos, Vec::new());
             self.run.w.depot_put(0, self.pos, None);
         }
         taken

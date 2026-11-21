@@ -404,6 +404,15 @@ pub fn insert_room(
                 .map_or(0, |left| u32::from(count - left)),
         );
     }
+    // So does an ejector's (`DepotItemHandler` merging): what goes onto a held stack slides in
+    // in the engine (`incoming`).
+    if super::arms::is_ejector(lv.dim, pos) && items_at(lv, pos, Some(side)).is_some() {
+        let key = key_of(&*lv.host, stack);
+        let count = stack.count().min(u32::from(u8::MAX)) as u8;
+        let motion = super::depot::handler_motion(lv, pos, &key);
+        let left = super::depot::merge_insert(lv, pos, &key, count, motion, true);
+        return Some(u32::from(count - left));
+    }
     let to = items_at(lv, pos, Some(side))?;
     let resource = ItemResource::of(stack);
     let limit = u32::from(stack_limit(&*lv.host, &id_of(&*lv.host, stack)));

@@ -93,10 +93,42 @@ pub struct Held {
     pub fan: crate::fan::Progress,
 }
 
-/// `DepotBehaviour.write/read`'s held transport state, independent of host inventory slots.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// `DepotBehaviour.write/read`'s held transport state, independent of host inventory slots,
+/// and its `Incoming` stacks (saved only by a merging depot, the only one that has them).
+#[derive(Clone, Debug, PartialEq)]
 pub struct SavedDepot {
     pub held: Option<Held>,
+    pub incoming: Vec<Incoming>,
+}
+
+/// One of `DepotBehaviour.incoming`: a stack put on a merging depot (an ejector's) that already
+/// held one. It slides to the centre on its own and joins the held stack there; until then it
+/// is not among the depot's slots (`getPresentStackSize`, the comparator, an item handler do
+/// not see it), but it takes room (`getRemainingSpace`). The item as the engine's belts name it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Incoming {
+    pub item: String,
+    pub count: u8,
+    pub motion: Held,
+}
+
+/// What an incoming stack did on reaching the centre (`DepotBehaviour.tick`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Arrival {
+    /// Nothing was held: it is the held stack now, its motion the depot's.
+    Held { item: String, count: u8 },
+    /// Something was held: it grows by this when the two stack
+    /// (`ItemHelper.canItemStackAmountsStack`), else this drops at the depot's centre.
+    Onto { item: String, count: u8 },
+}
+
+/// The held stack as `DepotBehaviour.insert` compares an arriving stack with it: whether it is
+/// the same item with the same components, its count and its own stack size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HeldStack {
+    pub same: bool,
+    pub count: u8,
+    pub max: u8,
 }
 
 impl Held {
@@ -170,23 +202,40 @@ impl Held {
     }
 }
 
-/// `DepotBehaviour.getRemainingSpace` with merging enabled (an ejector's depot), and how
-/// much of an incoming stack that lets `insert` take: the stack-size getter's limit
-/// (`max_stack`, with 0 standing for 64, as the ejector's scroll value formats it) capped by
-/// the held stack's own stack size — `ItemStack.EMPTY.getMaxStackSize()`, 1, with nothing
-/// held (`held_max` is None) — less what already lies on the depot (`getPresentStackSize`:
-/// the held stack and the output buffer).
+/// `DepotBehaviour.insert` on a merging depot (an ejector's): how much of an arriving stack of
+/// `count` it takes. `getRemainingSpace` first: the stack-size getter's limit (`max_stack`, with
+/// 0 standing for 64, as the ejector's scroll value formats it) capped by the held stack's own
+/// stack size — `ItemStack.EMPTY.getMaxStackSize()`, 1, with nothing held — less what lies on
+/// the depot and slides onto it (`used`: `getPresentStackSize`, the held stack and the output
+/// buffer, and every incoming stack). None when there is no room, or when the held stack cannot
+/// take the whole arriving stack (`canItemStackAmountsStack(heldItem.stack, inserted)`, its
+/// whole count, though only the room's worth goes on).
 ///
 /// ```java
-/// int fromGetter =
-///     Math.min(maxStackSize.get() == 0 ? 64 : maxStackSize.get(), getHeldItemStack().getMaxStackSize());
-/// return (fromGetter) - cumulativeStackSize;
+/// int remainingSpace = getRemainingSpace();
+/// ItemStack inserted = heldItem.stack;
+/// if (remainingSpace <= 0)
+///     return inserted;
+/// if (this.heldItem != null && !ItemHelper.canItemStackAmountsStack(this.heldItem.stack, inserted))
+///     return inserted;
 /// ```
-pub fn merge_take(max_stack: u8, held_max: Option<u8>, present: u32, count: u8) -> u8 {
+pub fn merge_take(max_stack: u8, held: Option<HeldStack>, used: u32, count: u8) -> u8 {
     let from_getter = i32::from(if max_stack == 0 { 64 } else { max_stack })
-        .min(i32::from(held_max.unwrap_or(1)));
-    let room = from_getter.saturating_sub(present as i32);
-    count.min(room.max(0) as u8)
+        .min(i32::from(held.map_or(1, |h| h.max)));
+    let room = from_getter.saturating_sub(used.min(i32::MAX as u32) as i32);
+    if room <= 0 {
+        return 0;
+    }
+    if held.is_some_and(|h| !h.same || u32::from(h.count) + u32::from(count) > u32::from(h.max)) {
+        return 0;
+    }
+    count.min(room.min(255) as u8)
+}
+
+/// `ItemHelper.canItemStackAmountsStack(held, arriving)` for an incoming stack that reached the
+/// centre: the same item and components, and both together within the held stack's size.
+pub fn joins(held: HeldStack, count: u8) -> bool {
+    held.same && u32::from(held.count) + u32::from(count) <= u32::from(held.max)
 }
 
 /// `DepotRenderer.renderItem`'s copies of a stack: one more for each two doublings of its count.
@@ -393,6 +442,13 @@ mod tests {
 
     #[test]
     fn an_empty_merging_depot_takes_one_item_of_a_landing_stack() {
+        let iron = |count| {
+            Some(HeldStack {
+                same: true,
+                count,
+                max: 64,
+            })
+        };
         // e1-ejector-empty-takes-one: a 12-stack lands on an empty, charged ejector. Java
         // keeps 11 in the entity: with no held stack, `getHeldItemStack().getMaxStackSize()`
         // is `ItemStack.EMPTY`'s 1, so however much the value board allows, only one goes on.
@@ -400,15 +456,48 @@ mod tests {
         assert_eq!(merge_take(64, None, 0, 12), 1);
         // With one iron already held (its own stack size 64), the scroll value 16 leaves
         // room for 15 more; 12 all go on.
-        assert_eq!(merge_take(16, Some(64), 1, 12), 12);
+        assert_eq!(merge_take(16, iron(1), 1, 12), 12);
         // Five held of the same 16: 11 fit, the 12th stays in the entity.
-        assert_eq!(merge_take(16, Some(64), 5, 12), 11);
+        assert_eq!(merge_take(16, iron(5), 5, 12), 11);
         // The value 0 stands for 64: four more join 60 held.
-        assert_eq!(merge_take(0, Some(64), 60, 12), 4);
+        assert_eq!(merge_take(0, iron(60), 60, 12), 0, "60 + 12 cannot stack");
+        assert_eq!(merge_take(0, iron(60), 60, 4), 4);
         // Full already: none.
-        assert_eq!(merge_take(0, Some(64), 64, 12), 0);
+        assert_eq!(merge_take(0, iron(64), 64, 12), 0);
         // What it holds also counts the output buffer (`getPresentStackSize`).
-        assert_eq!(merge_take(16, Some(64), 16, 12), 0);
+        assert_eq!(merge_take(16, iron(1), 16, 12), 0);
+        // Another item: none.
+        let gold = Some(HeldStack {
+            same: false,
+            count: 1,
+            max: 64,
+        });
+        assert_eq!(merge_take(0, gold, 1, 1), 0);
+    }
+
+    #[test]
+    fn incoming_stacks_take_room_on_a_merging_depot() {
+        // Issue #202, seed 126: an ejector (stack size 0, so 64) holds one iron ingot; a
+        // handler inserts 16 (`DepotItemHandler.insertItem`), and all 16 go into `incoming`.
+        let one = HeldStack {
+            same: true,
+            count: 1,
+            max: 64,
+        };
+        assert_eq!(merge_take(0, Some(one), 1, 16), 16);
+        // 16 more while those slide in: `getRemainingSpace` counts them, 64 - 1 - 16 = 47.
+        assert_eq!(merge_take(0, Some(one), 1 + 16, 16), 16);
+        assert_eq!(merge_take(0, Some(one), 1 + 16 + 32, 16), 15);
+        // `canItemStackAmountsStack` on arrival: 1 + 16 stack, 60 + 16 do not.
+        assert!(joins(one, 16));
+        assert!(!joins(
+            HeldStack {
+                same: true,
+                count: 60,
+                max: 64
+            },
+            16
+        ));
     }
 
     #[test]
