@@ -354,6 +354,8 @@ impl Subsystem for Schematics {
             .block_entity_type("create:schematic_table")
             .blocks(&["create:schematic_table"])
             .build();
+        super::entity_data::attach(r, &cannon);
+        super::entity_data::attach(r, &table);
         let _ = KINDS.set((cannon, table));
         // Their slots: Create gives them no item handler, so no face reaches them; their menus
         // are a hopper's five slots (the table's screen shows its two).

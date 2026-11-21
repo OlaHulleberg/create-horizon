@@ -33,6 +33,8 @@ pub const THEORY: &str = "Theory";
 pub const OVER: &str = "Over";
 /// Whether a speed controller shows its bracket (`SpeedControllerBlockEntity.hasBracket`).
 pub(crate) const BRACKET: &str = "Bracket";
+/// `ScrollValueBehaviour`'s saved value.
+pub(crate) const SCROLL_VALUE: &str = "ScrollValue";
 /// A speed setting a moving structure carries (`Subsystem::carry_out`).
 const CARRIED_SPEED: &str = "Speed";
 /// Server-only KineticBlockEntity.write data, one compound per engine port.
@@ -81,6 +83,7 @@ impl Subsystem for Kinetics {
         let names: Vec<&str> = blocks.iter().map(String::as_str).collect();
         let kind = r.block_entity_type(TYPE).blocks(&names).build();
         let _ = KIND.set(kind);
+        super::entity_data::attach(r, &kind);
         if let Err(e) = r.block_entity_part(&kind, KineticEntity) {
             crate::create_log!("[create] the kinetic block entity's part was refused: {e:?}");
         }
@@ -151,21 +154,45 @@ impl Subsystem for Kinetics {
         super::transmission::wrench_used(lv, pos, block, clicked, sneaking)
     }
 
+    /// The `motors` an older version kept in the column.
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
         let saved = settings_from_nbt(data);
         let dim = lv.dim;
         with_world(|w| w.load_settings(dim, saved.into_iter()));
     }
 
-    fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
+    /// `ScrollValueBehaviour.write` of a creative motor's or speed controller's speed.
+    fn save_entities(
+        &self,
+        lv: &ServerLevel<'_>,
+        chunk: [i32; 2],
+        out: &mut super::entity_data::Entities,
+    ) {
         let settings =
             with_world(|w| w.column_settings(lv.dim, chunk[0], chunk[1])).unwrap_or_default();
-        if !settings.is_empty() {
-            let motors = settings
-                .iter()
-                .flat_map(|(p, rpm)| [p[0], p[1], p[2], *rpm])
-                .collect();
-            data.insert("motors".into(), Tag::IntArray(motors));
+        for (pos, rpm) in settings {
+            out.entry(pos)
+                .or_default()
+                .insert(SCROLL_VALUE.into(), Tag::Int(rpm));
+        }
+    }
+
+    /// `ScrollValueBehaviour.read`.
+    fn load_entity(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, tag: &Compound) {
+        if !has_speed_setting(block) {
+            return;
+        }
+        if let Some(Tag::Int(rpm)) = tag.get(&SCROLL_VALUE.into()) {
+            let dim = lv.dim;
+            with_world(|w| w.load_settings(dim, std::iter::once((pos, *rpm))));
+        }
+    }
+
+    fn saved_keys(&self, block: Block) -> &'static [&'static str] {
+        if has_speed_setting(block) {
+            &[SCROLL_VALUE]
+        } else {
+            &[]
         }
     }
 
@@ -262,6 +289,10 @@ impl Subsystem for Solve {
 }
 
 /// Settings saved with a column: `motors` holds x, y, z and speed for each creative motor.
+fn has_speed_setting(block: Block) -> bool {
+    matches!(block, Block::CreativeMotor | Block::RotationSpeedController)
+}
+
 fn settings_from_nbt(data: &Compound) -> Vec<([i32; 3], i32)> {
     match data.get(&"motors".into()) {
         Some(Tag::IntArray(v)) => v

@@ -1406,6 +1406,7 @@ pub(super) fn register(r: &mut dyn mod_api::Registrar) {
         .collect();
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let kind = r.block_entity_type(TYPE).blocks(&refs).build();
+    super::super::entity_data::attach(r, &kind);
     if let Err(e) = r.block_entity_part(&kind, ClothEntity) {
         crate::create_log!("[create] the table cloth block entity's part was refused: {e:?}");
     }

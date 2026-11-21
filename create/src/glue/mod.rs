@@ -8,6 +8,7 @@ pub mod copycat;
 pub mod decor;
 pub mod display;
 pub(crate) mod drawn;
+pub mod entity_data;
 pub mod equipment;
 pub mod fluids;
 pub mod gauges;
@@ -155,9 +156,29 @@ pub fn ensure_column(host: &mut dyn ServerHost, dimension: &str, chunk: [i32; 2]
     if !COLUMNS.with_borrow_mut(|c| c.insert((lv.dim, chunk))) {
         return;
     }
-    let data = persist::read(&mut lv, chunk);
+    load_column(&mut lv, chunk);
+}
+
+fn load_column(lv: &mut ServerLevel<'_>, chunk: [i32; 2]) {
+    let data = persist::read(lv, chunk);
     for s in SUBSYSTEMS {
-        s.chunk_load(&mut lv, chunk, &data);
+        s.chunk_load(lv, chunk, &data);
+    }
+    if persist::holds_legacy(&data) {
+        persist::mark_unsaved(lv.dim, chunk);
+    }
+    entity_data::load(lv, chunk);
+}
+
+/// Has the subsystems read the data block entities of `lv` loaded since they last asked: a
+/// column's when it comes in, then each one `/data` or a placement gives a block entity.
+pub fn load_entities(lv: &mut ServerLevel<'_>) {
+    for chunk in entity_data::pending_columns(lv) {
+        if COLUMNS.with_borrow_mut(|c| c.insert((lv.dim, chunk))) {
+            load_column(lv, chunk);
+        } else {
+            entity_data::load(lv, chunk);
+        }
     }
 }
 

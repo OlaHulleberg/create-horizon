@@ -1,5 +1,6 @@
 //! Shared server-save fields of KineticBlockEntity; runtime network identity is excluded.
 pub mod codec;
+pub mod entities;
 pub mod fluids;
 pub mod payload;
 use crate::scenario::Pos;

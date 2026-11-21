@@ -941,7 +941,7 @@ pub fn filter_slot_click(
     super::filtering::hit(block, &info, flipped, click.pos, face, click.hit.point)
 }
 
-/// `FilteringRenderer` for the basin, upward saw and deployer: the filter (`logistics::FILTER`)
+/// `FilteringRenderer` for the basin, upward saw and deployer: the filter (`logistics::FILTER_SHOWN`)
 /// in each slot, at half the value box's half scale for a flat item and its half scale for a
 /// block.
 fn draw_machine_filter(
@@ -952,7 +952,7 @@ fn draw_machine_filter(
     state: mod_api::BlockState,
     nbt: &Compound,
 ) {
-    let Some(Tag::String(id)) = nbt.get(&crate::glue::logistics::FILTER.into()) else {
+    let Some(Tag::String(id)) = nbt.get(&crate::glue::logistics::FILTER_SHOWN.into()) else {
         return;
     };
     let id = id.to_string_lossy();

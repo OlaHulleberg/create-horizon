@@ -21,6 +21,7 @@ pub(super) fn register(r: &mut dyn Registrar) {
         .block_entity_type(TYPE)
         .blocks(&["create:placard"])
         .build();
+    super::super::entity_data::attach(r, &kind);
     if let Err(e) = r.block_entity_part(&kind, PlacardEntity) {
         crate::create_log!("[create] the placard block entity's part was refused: {e:?}");
     }

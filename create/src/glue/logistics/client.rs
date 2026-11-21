@@ -1829,7 +1829,7 @@ fn draw_ejector(
 }
 
 /// Draws the filter a brass funnel or a smart chute shows in its slot (`FilteringRenderer`),
-/// from its block entity's `FILTER`: on each side the slot is on, turned to face out of it
+/// from its block entity's `FILTER_SHOWN`: on each side the slot is on, turned to face out of it
 /// (`ValueBoxTransform.Sided.rotate`; a horizontal funnel's tilted back 22.5°), at half the
 /// value box's half scale for a flat item and its half scale for a block.
 fn draw_filter(
@@ -1858,7 +1858,7 @@ fn draw_filter(
         }
         return;
     }
-    let Some(Tag::String(id)) = nbt.get(&super::FILTER.into()) else {
+    let Some(Tag::String(id)) = nbt.get(&super::FILTER_SHOWN.into()) else {
         return;
     };
     let id = id.to_string_lossy();

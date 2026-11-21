@@ -4243,6 +4243,19 @@ impl CreateWorld {
         self.dims[dim].diode_saved.extend(saved);
     }
 
+    /// `BrassDiodeBlockEntity.read` (`State`, and the delay's `ScrollValue`): a placed diode
+    /// takes them at once, one not found yet when it is.
+    pub fn read_diode(&mut self, dim: usize, pos: [i32; 3], state: i32, max: i32) {
+        let d = &mut self.dims[dim];
+        let Some(x) = d.diodes.get_mut(&pos) else {
+            d.diode_saved.insert(pos, (state, max));
+            return;
+        };
+        x.set_delay(max);
+        x.state = state.clamp(0, x.max);
+        d.diode_checks.push((pos, crate::diode::PLACED_DELAY));
+    }
+
     /// The diodes of a column not at rest at their default delay (`BrassDiodeBlockEntity.write`:
     /// `State`, and the delay), to save.
     pub fn column_diodes(&self, dim: usize, cx: i32, cz: i32) -> Vec<([i32; 3], i32, i32)> {
@@ -4276,6 +4289,42 @@ impl CreateWorld {
         saved: impl Iterator<Item = ([i32; 3], (crate::link::Key, i32))>,
     ) {
         self.dims[dim].link_saved.extend(saved);
+    }
+
+    /// `EjectorBlockEntity.read`: a placed ejector takes `e` at once, one not found yet when it
+    /// is.
+    pub fn read_ejector(&mut self, dim: usize, pos: [i32; 3], e: crate::ejector::Ejector) {
+        let d = &mut self.dims[dim];
+        match d.ejectors.get_mut(&pos) {
+            Some(live) => {
+                *live = e;
+                d.ejector_changes.push(pos);
+            }
+            None => {
+                d.ejector_saved.insert(pos, e);
+            }
+        }
+    }
+
+    /// `RedstoneLinkBlockEntity.read`: a placed link takes its frequencies and `Transmit` at
+    /// once, leaving its network for the new one; one not found yet when it is.
+    pub fn read_link(&mut self, dim: usize, pos: [i32; 3], key: crate::link::Key, transmit: i32) {
+        let d = &mut self.dims[dim];
+        let Some(live) = d.links.links.get(&pos).cloned() else {
+            d.link_saved.insert(pos, (key, transmit));
+            return;
+        };
+        let mut changed = d.links.remove(pos);
+        changed.extend(d.links.add(
+            pos,
+            crate::link::Link {
+                key,
+                transmit,
+                ..live
+            },
+        ));
+        d.link_changes.extend(changed);
+        d.link_shown.push(pos);
     }
 
     /// The links of a column (`LinkBehaviour.write`: frequencies; `Transmit`), to save.

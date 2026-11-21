@@ -190,6 +190,8 @@ impl Subsystem for Logistics {
         }
     }
 
+    /// What an older version kept in the column: `vaults`, `chute_filters`, `tunnel_filters`,
+    /// `filter_amounts`, `belts`, `brass`, `chutes` and `funnels`.
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
         let (vaults, filters) = vaults_from_nbt(&*lv.host, data);
         let side_filters = tunnel_filters_from_nbt(&*lv.host, data);
@@ -227,69 +229,21 @@ impl Subsystem for Logistics {
         });
     }
 
-    fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
-        let dim = lv.dim;
-        let (cx, cz) = (chunk[0], chunk[1]);
-        let side_filters = with_world(|w| {
-            let mut v: Vec<(([i32; 3], Dir), create_engine::filter::Filter)> = w.dims[dim]
-                .tunnel_filters
-                .iter()
-                .filter(|((p, _), _)| (p[0] >> 4, p[2] >> 4) == (cx, cz))
-                .map(|(k, f)| (*k, f.clone()))
-                .collect();
-            v.sort_by_key(|e| (e.0.0, e.0.1 as u8));
-            v
-        })
-        .unwrap_or_default();
-        tunnel_filters_to_nbt(&*lv.host, data, &side_filters);
-        let now = lv.game_time().max(0) as u64;
-        let Some((vaults, filters, belts, brass, chutes, funnels)) = with_world(|w| {
-            let mut filters: Vec<([i32; 3], create_engine::filter::Filter)> = w.dims[dim]
-                .chute_filters
-                .iter()
-                .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (cx, cz))
-                .map(|(p, f)| (*p, f.clone()))
-                .collect();
-            filters.sort_by_key(|e| e.0);
-            (
-                w.dims[dim].vaults.column(cx, cz),
-                filters,
-                w.column_belts(dim, cx, cz),
-                w.column_brass(dim, cx, cz),
-                w.column_chutes(dim, cx, cz),
-                w.column_funnels(dim, cx, cz, now),
-            )
-        }) else {
-            return;
-        };
-        vaults_to_nbt(&*lv.host, data, &vaults, &filters);
-        // `FilterAmount` and `UpTo` of the filter slots set: x, y, z, count, up to.
-        let mut amounts: Vec<[i32; 5]> = with_world(|w| {
-            w.dims[dim]
-                .filter_amounts
-                .iter()
-                .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (cx, cz))
-                .map(|(p, a)| [p[0], p[1], p[2], i32::from(a.count), i32::from(a.up_to)])
-                .collect()
-        })
-        .unwrap_or_default();
-        if !amounts.is_empty() {
-            amounts.sort();
-            let flat = amounts.into_iter().flatten().collect();
-            data.insert(FILTER_AMOUNTS.into(), Tag::IntArray(flat));
-        }
-        if !belts.is_empty() {
-            data.insert("belts".into(), belts_to_nbt(&belts));
-        }
-        if !brass.is_empty() {
-            data.insert("brass".into(), brass_to_nbt(&brass));
-        }
-        if !chutes.is_empty() {
-            data.insert(CHUTES.into(), chutes_to_nbt(&chutes));
-        }
-        if !funnels.is_empty() {
-            data.insert(FUNNELS.into(), funnels_to_nbt(&funnels));
-        }
+    fn save_entities(
+        &self,
+        lv: &ServerLevel<'_>,
+        chunk: [i32; 2],
+        out: &mut super::entity_data::Entities,
+    ) {
+        save_entities(lv, chunk, out);
+    }
+
+    fn load_entity(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, tag: &Compound) {
+        load_entity(lv, pos, block, tag);
+    }
+
+    fn saved_keys(&self, block: Block) -> &'static [&'static str] {
+        saved_keys(block)
     }
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
@@ -505,7 +459,7 @@ pub struct Entities;
 
 /// A block entity key holding the item a brass funnel's or smart chute's filter slot shows
 /// (an empty string: none), synced for its clients to draw.
-pub(crate) const FILTER: &str = "Filter";
+pub(crate) const FILTER_SHOWN: &str = "FilterShown";
 
 /// A block entity key holding a belt segment's dye (`BeltBlockEntity.color`: a `DyeColor` name,
 /// an empty string or none for an undyed belt), synced for its clients to draw.
@@ -516,24 +470,14 @@ pub(crate) const BELT_COLOR: &str = "Dye";
 pub(crate) const BELT_CASING: &str = "Casing";
 pub(crate) const BELT_COVERED: &str = "Covered";
 
-/// The key of the filter slots' amounts in a column's saved data.
+/// The key of the filter slots' amounts an older version saved with the column.
 const FILTER_AMOUNTS: &str = "filter_amounts";
 
-/// Chutes' stack positions saved with a column (`ChuteBlockEntity.write`'s `ItemPosition`): x,
-/// y, z and the position's float bits of each.
+/// Chutes' stack positions an older version saved with a column (`ItemPosition`): x, y, z and
+/// the position's float bits of each.
 const CHUTES: &str = "chutes";
 
-/// `CHUTES` of the chutes in a column.
-fn chutes_to_nbt(chutes: &[([i32; 3], f32)]) -> Tag {
-    Tag::IntArray(
-        chutes
-            .iter()
-            .flat_map(|(p, at)| [p[0], p[1], p[2], at.to_bits() as i32])
-            .collect(),
-    )
-}
-
-/// What `chutes_to_nbt` wrote (`ChuteBlockEntity.read`'s `ItemPosition`).
+/// The `chutes` an older version saved (`ChuteBlockEntity.read`'s `ItemPosition`).
 fn chutes_from_nbt(data: &Compound) -> Vec<([i32; 3], f32)> {
     match data.get(&CHUTES.into()) {
         Some(Tag::IntArray(v)) => v
@@ -546,17 +490,8 @@ fn chutes_from_nbt(data: &Compound) -> Vec<([i32; 3], f32)> {
     }
 }
 
-/// `FunnelBlockEntity.write`'s `TransferCooldown`: x, y, z, cooldown.
+/// Funnels' `TransferCooldown` an older version saved with a column: x, y, z, cooldown.
 const FUNNELS: &str = "funnels";
-
-fn funnels_to_nbt(funnels: &[([i32; 3], u32)]) -> Tag {
-    Tag::IntArray(
-        funnels
-            .iter()
-            .flat_map(|(p, c)| [p[0], p[1], p[2], *c as i32])
-            .collect(),
-    )
-}
 
 fn funnels_from_nbt(data: &Compound) -> Vec<([i32; 3], u32)> {
     match data.get(&FUNNELS.into()) {
@@ -570,7 +505,7 @@ fn funnels_from_nbt(data: &Compound) -> Vec<([i32; 3], u32)> {
     }
 }
 
-/// Shows filter `filter` in the slot of the block at `pos` (`FILTER`).
+/// Shows filter `filter` in the slot of the block at `pos` (`FILTER_SHOWN`).
 pub(crate) fn show_filter(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
@@ -581,7 +516,7 @@ pub(crate) fn show_filter(
         .map(|s| items::id_of(&*lv.host, &s))
         .unwrap_or_default();
     if let Some(entity) = lv.host.block_entity(lv.level, pos) {
-        let data = Compound::from([(FILTER.into(), Tag::String(id.as_str().into()))]);
+        let data = Compound::from([(FILTER_SHOWN.into(), Tag::String(id.as_str().into()))]);
         let _ = entity.merge_data(&mut *lv.host, data);
     }
 }
@@ -601,7 +536,7 @@ impl Subsystem for Entities {
     fn synced_keys(&self) -> &'static [&'static str] {
         &[
             super::drawn::SHOWN,
-            FILTER,
+            FILTER_SHOWN,
             BELT_COLOR,
             BELT_CASING,
             BELT_COVERED,
@@ -993,47 +928,256 @@ fn item_landed(
     }
 }
 
-/// Vault blocks' parts (`ItemVaultBlockEntity.write`: `Controller`, `Size`, `Length`,
-/// `Uninitialized`) and smart chutes' filters saved with a column: `vaults` holds x, y, z, the
-/// controller's x, y, z, width, length and 1 when it still looks for its vault, for each block;
-/// `chute_filters` the positions and the filter stacks (an item id in saves from before filter
-/// items).
-fn vaults_to_nbt(
-    host: &dyn mod_api::Host,
-    own: &mut Compound,
-    vaults: &[([i32; 3], create_engine::vault::Part)],
-    filters: &[([i32; 3], create_engine::filter::Filter)],
-) {
-    if !vaults.is_empty() {
-        let v = vaults
-            .iter()
-            .flat_map(|(p, x)| {
-                let c = x.controller.unwrap_or(*p);
-                [
-                    p[0],
-                    p[1],
-                    p[2],
-                    c[0],
-                    c[1],
-                    c[2],
-                    x.width,
-                    x.length,
-                    i32::from(x.dirty),
-                ]
-            })
-            .collect();
-        own.insert("vaults".into(), Tag::IntArray(v));
+const INVENTORY: &str = "Inventory";
+const BRASS_TUNNEL: &str = "BrassTunnel";
+const SIDE_FILTERS: &str = "Filters";
+const ITEM_POSITION: &str = "ItemPosition";
+const TRANSFER_COOLDOWN: &str = "TransferCooldown";
+const FILTER: &str = "Filter";
+const FILTER_AMOUNT: &str = "FilterAmount";
+const UP_TO: &str = "UpTo";
+const CONTROLLER: &str = "Controller";
+const VAULT_KEYS: [&str; 4] = [CONTROLLER, "Size", "Length", "Uninitialized"];
+
+/// The blocks whose `FilteringBehaviour` the engine keeps in `chute_filters` and
+/// `filter_amounts`.
+fn filter_slot(block: Block) -> bool {
+    matches!(
+        block,
+        Block::Chute
+            | Block::SmartChute
+            | Block::BrassFunnel
+            | Block::BrassBeltFunnel
+            | Block::Basin
+            | Block::MechanicalSaw
+            | Block::Deployer
+    )
+}
+
+fn saved_keys(block: Block) -> &'static [&'static str] {
+    match block {
+        Block::Belt => &[INVENTORY],
+        Block::BrassTunnel => &[BRASS_TUNNEL, SIDE_FILTERS],
+        Block::Chute => &[ITEM_POSITION, FILTER, FILTER_AMOUNT, UP_TO],
+        Block::SmartChute => &[ITEM_POSITION, FILTER, FILTER_AMOUNT, UP_TO],
+        Block::AndesiteFunnel | Block::AndesiteBeltFunnel => &[TRANSFER_COOLDOWN],
+        Block::BrassFunnel | Block::BrassBeltFunnel => {
+            &[TRANSFER_COOLDOWN, FILTER, FILTER_AMOUNT, UP_TO]
+        }
+        Block::ItemVault => &VAULT_KEYS,
+        b if filter_slot(b) => &[FILTER, FILTER_AMOUNT, UP_TO],
+        _ => &[],
     }
-    if !filters.is_empty() {
-        let mut c = Compound::new();
-        let pos = filters.iter().flat_map(|(p, _)| *p).collect();
-        let items = filters
+}
+
+/// `BeltBlockEntity.write`'s `Inventory`, `BrassTunnelBlockEntity.write` and its
+/// `SidedFilteringBehaviour`'s `Filters`, `ChuteBlockEntity.write`'s `ItemPosition`,
+/// `FunnelBlockEntity.write`'s `TransferCooldown`, `ItemVaultBlockEntity.write` and
+/// `FilteringBehaviour.write` of column `chunk`'s block entities.
+fn save_entities(lv: &ServerLevel<'_>, chunk: [i32; 2], out: &mut super::entity_data::Entities) {
+    let dim = lv.dim;
+    let (cx, cz) = (chunk[0], chunk[1]);
+    let inside = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) == (cx, cz);
+    let now = lv.game_time().max(0) as u64;
+    type Filters = Vec<([i32; 3], create_engine::filter::Filter)>;
+    type SideFilters = Vec<(([i32; 3], Dir), create_engine::filter::Filter)>;
+    type Amounts = Vec<([i32; 3], create_engine::board::FilterAmount)>;
+    let Some((vaults, filters, sides, amounts, belts, brass, chutes, funnels)) = with_world(|w| {
+        let d = &w.dims[dim];
+        let filters: Filters = d
+            .chute_filters
             .iter()
-            .map(|(_, f)| filters::filter_to_nbt(host, f).unwrap_or_else(|| Tag::String("".into())))
+            .filter(|(p, _)| inside(p))
+            .map(|(p, f)| (*p, f.clone()))
             .collect();
-        c.insert("pos".into(), Tag::IntArray(pos));
-        c.insert("items".into(), Tag::List(items));
-        own.insert("chute_filters".into(), Tag::Compound(c));
+        let mut sides: SideFilters = d
+            .tunnel_filters
+            .iter()
+            .filter(|((p, _), _)| inside(p))
+            .map(|(k, f)| (*k, f.clone()))
+            .collect();
+        sides.sort_by_key(|e| (e.0.0, e.0.1 as u8));
+        let amounts: Amounts = d
+            .filter_amounts
+            .iter()
+            .filter(|(p, _)| inside(p))
+            .map(|(p, a)| (*p, *a))
+            .collect();
+        (
+            d.vaults.column(cx, cz),
+            filters,
+            sides,
+            amounts,
+            w.column_belts(dim, cx, cz),
+            w.column_brass(dim, cx, cz),
+            w.column_chutes(dim, cx, cz),
+            w.column_funnels(dim, cx, cz, now),
+        )
+    }) else {
+        return;
+    };
+    for (p, x) in vaults {
+        let e = out.entry(p).or_default();
+        if let Some(c) = x.controller {
+            e.insert(CONTROLLER.into(), Tag::IntArray(c.to_vec()));
+        }
+        e.insert(VAULT_KEYS[1].into(), Tag::Int(x.width));
+        e.insert(VAULT_KEYS[2].into(), Tag::Int(x.length));
+        if x.dirty {
+            e.insert(VAULT_KEYS[3].into(), Tag::Byte(1));
+        }
+    }
+    for (p, f) in filters {
+        let stack = filters::filter_to_nbt(&*lv.host, &f).unwrap_or_else(|| Tag::String("".into()));
+        out.entry(p).or_default().insert(FILTER.into(), stack);
+    }
+    for (p, a) in amounts {
+        out.entry(p).or_default().extend([
+            (FILTER_AMOUNT.into(), Tag::Int(i32::from(a.count))),
+            (UP_TO.into(), Tag::Byte(i8::from(a.up_to))),
+        ]);
+    }
+    let mut by_tunnel: std::collections::BTreeMap<[i32; 3], Vec<Tag>> = Default::default();
+    for ((p, side), f) in sides {
+        let Some(stack) = filters::filter_to_nbt(&*lv.host, &f) else {
+            continue;
+        };
+        by_tunnel
+            .entry(p)
+            .or_default()
+            .push(Tag::Compound(Compound::from([
+                ("Side".into(), Tag::Int(side as i32)),
+                (FILTER.into(), stack),
+            ])));
+    }
+    for (p, list) in by_tunnel {
+        out.entry(p)
+            .or_default()
+            .insert(SIDE_FILTERS.into(), Tag::List(list));
+    }
+    for (c, inv) in belts {
+        out.entry(c)
+            .or_default()
+            .insert(INVENTORY.into(), Tag::Compound(belt_to_tag(&inv)));
+    }
+    for (p, b) in brass {
+        out.entry(p)
+            .or_default()
+            .insert(BRASS_TUNNEL.into(), Tag::Compound(brass_entry_to_tag(&b)));
+    }
+    for (p, at) in chutes {
+        out.entry(p)
+            .or_default()
+            .insert(ITEM_POSITION.into(), Tag::Float(at.to_bits()));
+    }
+    for (p, cooldown) in funnels {
+        out.entry(p)
+            .or_default()
+            .insert(TRANSFER_COOLDOWN.into(), Tag::Int(cooldown as i32));
+    }
+}
+
+/// The `read`s of the fields [`save_entities`] writes.
+fn load_entity(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, tag: &Compound) {
+    let dim = lv.dim;
+    let now = lv.game_time().max(0) as u64;
+    if filter_slot(block) {
+        let filter = tag
+            .get(&FILTER.into())
+            .and_then(|t| filters::filter_from_nbt(&*lv.host, t));
+        let amount = match tag.get(&FILTER_AMOUNT.into()) {
+            Some(Tag::Int(n)) => Some(create_engine::board::FilterAmount::new(
+                (*n).clamp(0, 255) as u8,
+                matches!(tag.get(&UP_TO.into()), Some(Tag::Byte(b)) if *b != 0),
+            )),
+            _ => None,
+        };
+        with_world(|w| {
+            let d = &mut w.dims[dim];
+            match filter {
+                Some(f) => d.chute_filters.insert(pos, f),
+                None => d.chute_filters.remove(&pos),
+            };
+            match amount {
+                Some(a) => d.filter_amounts.insert(pos, a),
+                None => d.filter_amounts.remove(&pos),
+            };
+        });
+    }
+    match block {
+        Block::Belt => {
+            if let Some(Tag::Compound(c)) = tag.get(&INVENTORY.into())
+                && let Some(inv) = belt_from_tag(c)
+            {
+                with_world(|w| w.load_belt_items(dim, std::iter::once((pos, inv))));
+            }
+        }
+        Block::BrassTunnel => {
+            let sides: Vec<(Dir, create_engine::filter::Filter)> =
+                match tag.get(&SIDE_FILTERS.into()) {
+                    Some(Tag::List(list)) => list
+                        .iter()
+                        .filter_map(|t| {
+                            let Tag::Compound(c) = t else { return None };
+                            let Some(Tag::Int(side)) = c.get(&"Side".into()) else {
+                                return None;
+                            };
+                            let side = *Dir::ALL.get(usize::try_from(*side).ok()?)?;
+                            let f = filters::filter_from_nbt(&*lv.host, c.get(&FILTER.into())?)?;
+                            Some((side, f))
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
+            let saved = match tag.get(&BRASS_TUNNEL.into()) {
+                Some(Tag::Compound(c)) => Some(brass_entry_from_tag(c)),
+                _ => None,
+            };
+            with_world(|w| {
+                let d = &mut w.dims[dim];
+                d.tunnel_filters.retain(|(p, _), _| *p != pos);
+                d.tunnel_filters
+                    .extend(sides.into_iter().map(|(side, f)| ((pos, side), f)));
+                if let Some(b) = saved {
+                    w.load_brass(dim, std::iter::once((pos, b)));
+                }
+            });
+        }
+        Block::Chute | Block::SmartChute => {
+            if let Some(Tag::Float(bits)) = tag.get(&ITEM_POSITION.into()) {
+                let at = f32::from_bits(*bits);
+                with_world(|w| w.load_chutes(dim, std::iter::once((pos, at))));
+            }
+        }
+        Block::AndesiteFunnel
+        | Block::AndesiteBeltFunnel
+        | Block::BrassFunnel
+        | Block::BrassBeltFunnel => {
+            if let Some(Tag::Int(cooldown)) = tag.get(&TRANSFER_COOLDOWN.into()) {
+                let cooldown = (*cooldown).max(0) as u32;
+                with_world(|w| w.load_funnels(dim, now, std::iter::once((pos, cooldown))));
+            }
+        }
+        Block::ItemVault => {
+            let int = |k: &str| match tag.get(&k.into()) {
+                Some(Tag::Int(v)) => *v,
+                _ => 0,
+            };
+            let controller = match tag.get(&CONTROLLER.into()) {
+                Some(Tag::IntArray(v)) if v.len() == 3 => Some([v[0], v[1], v[2]]),
+                _ => None,
+            };
+            let part = create_engine::vault::Part {
+                axis: Axis::X,
+                controller: controller.filter(|c| *c != pos),
+                width: int(VAULT_KEYS[1]).clamp(1, create_engine::vault::MAX_WIDTH),
+                length: int(VAULT_KEYS[2]).clamp(1, create_engine::vault::max_length(3)),
+                dirty: matches!(tag.get(&VAULT_KEYS[3].into()), Some(Tag::Byte(b)) if *b != 0),
+                large: false,
+            };
+            with_world(|w| w.dims[dim].vaults.load(std::iter::once((pos, part))));
+        }
+        _ => {}
     }
 }
 
@@ -1088,7 +1232,9 @@ pub(super) fn tunnel_filters_from_nbt(
         .collect()
 }
 
-/// What `vaults_to_nbt` wrote.
+/// The `vaults` (x, y, z, the controller's x, y, z, width, length and 1 when it still looks for
+/// its vault, for each block) and `chute_filters` (positions and filter stacks, or item ids in
+/// saves from before filter items) an older version saved with a column.
 #[allow(clippy::type_complexity)]
 fn vaults_from_nbt(
     host: &dyn mod_api::Host,
@@ -1142,72 +1288,78 @@ pub(super) fn belts_to_nbt(belts: &[([i32; 3], create_engine::belt::Inventory)])
         belts
             .iter()
             .map(|(c, inv)| {
-                let mut b = Compound::new();
+                let mut b = belt_to_tag(inv);
                 b.insert("pos".into(), Tag::IntArray(c.to_vec()));
-                let numbers = inv
-                    .items
-                    .iter()
-                    .flat_map(|i| {
-                        [
-                            i.position.to_bits() as i32,
-                            i.side_offset.to_bits() as i32,
-                            i.angle,
-                            i32::from(i.count),
-                            i32::from(i.locked),
-                        ]
-                    })
-                    .collect();
-                b.insert("items".into(), Tag::IntArray(numbers));
-                b.insert(
-                    "ids".into(),
-                    Tag::List(
-                        inv.items
-                            .iter()
-                            .map(|i| {
-                                let id = if i.count == 0 {
-                                    "minecraft:air"
-                                } else {
-                                    i.item.as_str()
-                                };
-                                Tag::String(id.into())
-                            })
-                            .collect(),
-                    ),
-                );
-                b.insert(
-                    "positive".into(),
-                    Tag::IntArray(vec![i32::from(inv.positive)]),
-                );
-                // TransportedItemStack.serializeNBT: insertion context survives a reload.
-                b.insert(
-                    "insertion".into(),
-                    Tag::IntArray(
-                        inv.items
-                            .iter()
-                            .flat_map(|i| [i.inserted_at, i.inserted_from.map_or(6, |d| d as i32)])
-                            .collect(),
-                    ),
-                );
-                // Items in a sequenced assembly: their index and step, and the recipe.
-                let assembly: Vec<Tag> = inv
-                    .items
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(n, i)| {
-                        let p = i.progress.as_ref()?;
-                        let mut a = Compound::new();
-                        a.insert("at".into(), Tag::IntArray(vec![n as i32, p.step as i32]));
-                        a.insert("id".into(), Tag::String(p.id.as_str().into()));
-                        Some(Tag::Compound(a))
-                    })
-                    .collect();
-                if !assembly.is_empty() {
-                    b.insert("assembly".into(), Tag::List(assembly));
-                }
                 Tag::Compound(b)
             })
             .collect(),
     )
+}
+
+/// One belt's items as [`belts_to_nbt`] writes them, without its controller.
+fn belt_to_tag(inv: &create_engine::belt::Inventory) -> Compound {
+    let mut b = Compound::new();
+    let numbers = inv
+        .items
+        .iter()
+        .flat_map(|i| {
+            [
+                i.position.to_bits() as i32,
+                i.side_offset.to_bits() as i32,
+                i.angle,
+                i32::from(i.count),
+                i32::from(i.locked),
+            ]
+        })
+        .collect();
+    b.insert("items".into(), Tag::IntArray(numbers));
+    b.insert(
+        "ids".into(),
+        Tag::List(
+            inv.items
+                .iter()
+                .map(|i| {
+                    let id = if i.count == 0 {
+                        "minecraft:air"
+                    } else {
+                        i.item.as_str()
+                    };
+                    Tag::String(id.into())
+                })
+                .collect(),
+        ),
+    );
+    b.insert(
+        "positive".into(),
+        Tag::IntArray(vec![i32::from(inv.positive)]),
+    );
+    // TransportedItemStack.serializeNBT: insertion context survives a reload.
+    b.insert(
+        "insertion".into(),
+        Tag::IntArray(
+            inv.items
+                .iter()
+                .flat_map(|i| [i.inserted_at, i.inserted_from.map_or(6, |d| d as i32)])
+                .collect(),
+        ),
+    );
+    // Items in a sequenced assembly: their index and step, and the recipe.
+    let assembly: Vec<Tag> = inv
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(n, i)| {
+            let p = i.progress.as_ref()?;
+            let mut a = Compound::new();
+            a.insert("at".into(), Tag::IntArray(vec![n as i32, p.step as i32]));
+            a.insert("id".into(), Tag::String(p.id.as_str().into()));
+            Some(Tag::Compound(a))
+        })
+        .collect();
+    if !assembly.is_empty() {
+        b.insert("assembly".into(), Tag::List(assembly));
+    }
+    b
 }
 
 /// What `belts_to_nbt` wrote.
@@ -1221,62 +1373,66 @@ pub(super) fn belts_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::b
             let Some(Tag::IntArray(pos)) = b.get(&"pos".into()) else {
                 return None;
             };
-            let Some(Tag::IntArray(numbers)) = b.get(&"items".into()) else {
-                return None;
-            };
-            let Some(Tag::List(ids)) = b.get(&"ids".into()) else {
-                return None;
-            };
-            let positive =
-                matches!(b.get(&"positive".into()), Some(Tag::IntArray(v)) if v.first() == Some(&1));
-            let mut items: Vec<create_engine::belt::Item> = numbers
-                .as_chunks::<5>()
-                .0
-                .iter()
-                .zip(ids)
-                .filter_map(|(n, id)| {
-                    let Tag::String(id) = id else { return None };
-                    let mut item = create_engine::belt::Item::from_saved(
-                        id.to_string_lossy(),
-                        n[3],
-                        n[2],
-                        false,
-                    );
-                    item.position = f32::from_bits(n[0] as u32);
-                    item.side_offset = f32::from_bits(n[1] as u32);
-                    item.locked = n[4] != 0;
-                    Some(item)
-                })
-                .collect();
-            if let Some(Tag::IntArray(context)) = b.get(&"insertion".into()) {
-                for (item, pair) in items.iter_mut().zip(context.as_chunks::<2>().0) {
-                    item.inserted_at = pair[0];
-                    item.inserted_from = usize::try_from(pair[1]).ok().and_then(|n| Dir::ALL.get(n)).copied();
-                }
-            }
-            if let Some(Tag::List(assembly)) = b.get(&"assembly".into()) {
-                for a in assembly {
-                    let Tag::Compound(a) = a else { continue };
-                    let (Some(Tag::IntArray(at)), Some(Tag::String(id))) =
-                        (a.get(&"at".into()), a.get(&"id".into()))
-                    else {
-                        continue;
-                    };
-                    let (Some(n), Some(step)) = (at.first(), at.get(1)) else {
-                        continue;
-                    };
-                    if let Some(item) = items.get_mut(*n as usize) {
-                        item.progress = Some(create_engine::sequenced::Progress {
-                            id: id.to_string_lossy().to_string(),
-                            step: (*step).max(0) as u32,
-                        });
-                    }
-                }
-            }
             let c = [*pos.first()?, *pos.get(1)?, *pos.get(2)?];
-            Some((c, create_engine::belt::Inventory::from_saved(items, positive)))
+            Some((c, belt_from_tag(b)?))
         })
         .collect()
+}
+
+/// What [`belt_to_tag`] wrote.
+fn belt_from_tag(b: &Compound) -> Option<create_engine::belt::Inventory> {
+    let Some(Tag::IntArray(numbers)) = b.get(&"items".into()) else {
+        return None;
+    };
+    let Some(Tag::List(ids)) = b.get(&"ids".into()) else {
+        return None;
+    };
+    let positive =
+        matches!(b.get(&"positive".into()), Some(Tag::IntArray(v)) if v.first() == Some(&1));
+    let mut items: Vec<create_engine::belt::Item> = numbers
+        .as_chunks::<5>()
+        .0
+        .iter()
+        .zip(ids)
+        .filter_map(|(n, id)| {
+            let Tag::String(id) = id else { return None };
+            let mut item =
+                create_engine::belt::Item::from_saved(id.to_string_lossy(), n[3], n[2], false);
+            item.position = f32::from_bits(n[0] as u32);
+            item.side_offset = f32::from_bits(n[1] as u32);
+            item.locked = n[4] != 0;
+            Some(item)
+        })
+        .collect();
+    if let Some(Tag::IntArray(context)) = b.get(&"insertion".into()) {
+        for (item, pair) in items.iter_mut().zip(context.as_chunks::<2>().0) {
+            item.inserted_at = pair[0];
+            item.inserted_from = usize::try_from(pair[1])
+                .ok()
+                .and_then(|n| Dir::ALL.get(n))
+                .copied();
+        }
+    }
+    if let Some(Tag::List(assembly)) = b.get(&"assembly".into()) {
+        for a in assembly {
+            let Tag::Compound(a) = a else { continue };
+            let (Some(Tag::IntArray(at)), Some(Tag::String(id))) =
+                (a.get(&"at".into()), a.get(&"id".into()))
+            else {
+                continue;
+            };
+            let (Some(n), Some(step)) = (at.first(), at.get(1)) else {
+                continue;
+            };
+            if let Some(item) = items.get_mut(*n as usize) {
+                item.progress = Some(create_engine::sequenced::Progress {
+                    id: id.to_string_lossy().to_string(),
+                    step: (*step).max(0) as u32,
+                });
+            }
+        }
+    }
+    Some(create_engine::belt::Inventory::from_saved(items, positive))
 }
 
 /// Brass tunnels' saved state (`BrassTunnelBlockEntity.write`: `SyncedOutput`, `ConnectedLeft`,
@@ -1287,44 +1443,50 @@ pub(super) fn brass_to_nbt(brass: &[([i32; 3], create_engine::tunnel::SavedBrass
         brass
             .iter()
             .map(|(p, b)| {
-                let mut c = Compound::from([
-                    ("Pos".into(), Tag::IntArray(p.to_vec())),
-                    ("SelectionMode".into(), Tag::Int(b.mode.index() as i32)),
-                    ("DistributionProgress".into(), Tag::Int(b.progress)),
-                    ("PreviousIndex".into(), Tag::Int(b.previous_output as i32)),
-                    ("SyncedOutput".into(), Tag::Byte(i8::from(b.synced))),
-                    (
-                        "ConnectedLeft".into(),
-                        Tag::Byte(i8::from(b.connected_left)),
-                    ),
-                    (
-                        "ConnectedRight".into(),
-                        Tag::Byte(i8::from(b.connected_right)),
-                    ),
-                ]);
-                if let Some(d) = b.entered_from {
-                    c.insert("StackEnteredFrom".into(), Tag::Int(d as i32));
-                }
-                for (key, list) in [
-                    ("FilteredTargets", &b.targets.filtered),
-                    ("Targets", &b.targets.plain),
-                ] {
-                    if !list.is_empty() {
-                        let v = list
-                            .iter()
-                            .flat_map(|(p, d)| [p[0], p[1], p[2], *d as i32])
-                            .collect();
-                        c.insert(key.into(), Tag::IntArray(v));
-                    }
-                }
-                if let Some((item, n)) = &b.stack {
-                    c.insert("Item".into(), Tag::String(item.as_str().into()));
-                    c.insert("Count".into(), Tag::Int(i32::from(*n)));
-                }
+                let mut c = brass_entry_to_tag(b);
+                c.insert("Pos".into(), Tag::IntArray(p.to_vec()));
                 Tag::Compound(c)
             })
             .collect(),
     )
+}
+
+/// One brass tunnel's state as [`brass_to_nbt`] writes it, without its position.
+fn brass_entry_to_tag(b: &create_engine::tunnel::SavedBrass) -> Compound {
+    let mut c = Compound::from([
+        ("SelectionMode".into(), Tag::Int(b.mode.index() as i32)),
+        ("DistributionProgress".into(), Tag::Int(b.progress)),
+        ("PreviousIndex".into(), Tag::Int(b.previous_output as i32)),
+        ("SyncedOutput".into(), Tag::Byte(i8::from(b.synced))),
+        (
+            "ConnectedLeft".into(),
+            Tag::Byte(i8::from(b.connected_left)),
+        ),
+        (
+            "ConnectedRight".into(),
+            Tag::Byte(i8::from(b.connected_right)),
+        ),
+    ]);
+    if let Some(d) = b.entered_from {
+        c.insert("StackEnteredFrom".into(), Tag::Int(d as i32));
+    }
+    for (key, list) in [
+        ("FilteredTargets", &b.targets.filtered),
+        ("Targets", &b.targets.plain),
+    ] {
+        if !list.is_empty() {
+            let v = list
+                .iter()
+                .flat_map(|(p, d)| [p[0], p[1], p[2], *d as i32])
+                .collect();
+            c.insert(key.into(), Tag::IntArray(v));
+        }
+    }
+    if let Some((item, n)) = &b.stack {
+        c.insert("Item".into(), Tag::String(item.as_str().into()));
+        c.insert("Count".into(), Tag::Int(i32::from(*n)));
+    }
+    c
 }
 
 /// What `brass_to_nbt` wrote, plus the legacy packed-int format.
@@ -1340,85 +1502,90 @@ pub(super) fn brass_from_nbt(
                     return None;
                 };
                 let p = [*pos.first()?, *pos.get(1)?, *pos.get(2)?];
-                let int = |k: &str, default: i32| match c.get(&k.into()) {
-                    Some(Tag::Int(v)) => *v,
-                    _ => default,
-                };
-                let flag = |k: &str| matches!(c.get(&k.into()), Some(Tag::Byte(v)) if *v != 0);
-                let item = match c.get(&"Item".into()) {
-                    Some(Tag::String(s)) => s.to_string_lossy(),
-                    _ => String::new(),
-                };
-                let n = int("Count", 0).clamp(0, 64) as u8;
-                let entered_from = match c.get(&"StackEnteredFrom".into()) {
-                    Some(Tag::Int(v)) => usize::try_from(*v)
-                        .ok()
-                        .and_then(|i| Dir::ALL.get(i))
-                        .copied(),
-                    _ => None,
-                };
-                let mode_idx = int("SelectionMode", 0).clamp(0, 6) as usize;
-                let targets = |k: &str| match c.get(&k.into()) {
-                    Some(Tag::IntArray(v)) => v
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .filter_map(|t| {
-                            let d = Dir::ALL.get(usize::try_from(t[3]).ok()?)?;
-                            Some(([t[0], t[1], t[2]], *d))
-                        })
-                        .collect(),
-                    _ => Vec::new(),
-                };
-                Some((
-                    p,
-                    create_engine::tunnel::SavedBrass {
-                        stack: (!item.is_empty() && n > 0).then_some((item, n)),
-                        entered_from,
-                        progress: int("DistributionProgress", -1),
-                        previous_output: int("PreviousIndex", 0).max(0) as usize,
-                        mode: create_engine::tunnel::Mode::ALL[mode_idx],
-                        synced: flag("SyncedOutput"),
-                        connected_left: flag("ConnectedLeft"),
-                        connected_right: flag("ConnectedRight"),
-                        targets: create_engine::tunnel::Targets {
-                            filtered: targets("FilteredTargets"),
-                            plain: targets("Targets"),
-                        },
-                    },
-                ))
+                Some((p, brass_entry_from_tag(c)))
             })
             .collect(),
-        Some(Tag::Compound(c)) => {
-            let (Some(Tag::IntArray(nums)), Some(Tag::List(items))) =
-                (c.get(&"nums".into()), c.get(&"items".into()))
-            else {
-                return Vec::new();
-            };
-            nums.as_chunks::<6>()
-                .0
-                .iter()
-                .zip(items)
-                .map(|(v, item)| {
-                    let item = match item {
-                        Tag::String(s) => s.to_string_lossy(),
-                        _ => String::new(),
-                    };
-                    let n = v[5].clamp(0, 64) as u8;
-                    (
-                        [v[0], v[1], v[2]],
-                        create_engine::tunnel::SavedBrass {
-                            stack: (!item.is_empty() && n > 0).then_some((item, n)),
-                            entered_from: Dir::ALL.get(v[4].clamp(0, 6) as usize).copied(),
-                            mode: create_engine::tunnel::Mode::ALL[v[3].clamp(0, 6) as usize],
-                            ..Default::default()
-                        },
-                    )
-                })
-                .collect()
-        }
+        Some(Tag::Compound(c)) => brass_from_packed(c),
         _ => Vec::new(),
     }
+}
+
+/// What [`brass_entry_to_tag`] wrote.
+fn brass_entry_from_tag(c: &Compound) -> create_engine::tunnel::SavedBrass {
+    let int = |k: &str, default: i32| match c.get(&k.into()) {
+        Some(Tag::Int(v)) => *v,
+        _ => default,
+    };
+    let flag = |k: &str| matches!(c.get(&k.into()), Some(Tag::Byte(v)) if *v != 0);
+    let item = match c.get(&"Item".into()) {
+        Some(Tag::String(s)) => s.to_string_lossy(),
+        _ => String::new(),
+    };
+    let n = int("Count", 0).clamp(0, 64) as u8;
+    let entered_from = match c.get(&"StackEnteredFrom".into()) {
+        Some(Tag::Int(v)) => usize::try_from(*v)
+            .ok()
+            .and_then(|i| Dir::ALL.get(i))
+            .copied(),
+        _ => None,
+    };
+    let mode_idx = int("SelectionMode", 0).clamp(0, 6) as usize;
+    let targets = |k: &str| match c.get(&k.into()) {
+        Some(Tag::IntArray(v)) => v
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter_map(|t| {
+                let d = Dir::ALL.get(usize::try_from(t[3]).ok()?)?;
+                Some(([t[0], t[1], t[2]], *d))
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    create_engine::tunnel::SavedBrass {
+        stack: (!item.is_empty() && n > 0).then_some((item, n)),
+        entered_from,
+        progress: int("DistributionProgress", -1),
+        previous_output: int("PreviousIndex", 0).max(0) as usize,
+        mode: create_engine::tunnel::Mode::ALL[mode_idx],
+        synced: flag("SyncedOutput"),
+        connected_left: flag("ConnectedLeft"),
+        connected_right: flag("ConnectedRight"),
+        targets: create_engine::tunnel::Targets {
+            filtered: targets("FilteredTargets"),
+            plain: targets("Targets"),
+        },
+    }
+}
+
+/// The packed-int brass format of the oldest saves.
+fn brass_from_packed(c: &Compound) -> Vec<([i32; 3], create_engine::tunnel::SavedBrass)> {
+    let (Some(Tag::IntArray(nums)), Some(Tag::List(items))) =
+        (c.get(&"nums".into()), c.get(&"items".into()))
+    else {
+        return Vec::new();
+    };
+    nums.as_chunks::<6>()
+        .0
+        .iter()
+        .zip(items)
+        .map(|(v, item)| {
+            let item = match item {
+                Tag::String(s) => s.to_string_lossy(),
+                _ => String::new(),
+            };
+            let n = v[5].clamp(0, 64) as u8;
+            (
+                [v[0], v[1], v[2]],
+                create_engine::tunnel::SavedBrass {
+                    stack: (!item.is_empty() && n > 0).then_some((item, n)),
+                    entered_from: Dir::ALL.get(v[4].clamp(0, 6) as usize).copied(),
+                    mode: create_engine::tunnel::Mode::ALL[v[3].clamp(0, 6) as usize],
+                    ..Default::default()
+                },
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]

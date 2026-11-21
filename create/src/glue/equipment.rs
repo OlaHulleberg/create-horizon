@@ -49,6 +49,16 @@ use std::collections::HashMap;
 /// A backtank's air a moving structure carries (`Subsystem::carry_out`).
 const CARRIED_AIR: &str = "BacktankAir";
 const KEY: &str = "create_equipment";
+const AIR: &str = "Air";
+
+fn is_backtank(block: create_engine::Block) -> bool {
+    matches!(
+        block,
+        create_engine::Block::CopperBacktank | create_engine::Block::NetheriteBacktank
+    )
+}
+const TIMER: &str = "Timer";
+const CAPACITY_KEY: &str = "CapacityEnchantment";
 
 const BLOCK_RANGE: &str = "minecraft:block_interaction_range";
 const ENTITY_RANGE: &str = "minecraft:entity_interaction_range";
@@ -294,7 +304,7 @@ impl Subsystem for Equipment {
         }
     }
 
-    /// Backtanks saved with a column (`BacktankBlockEntity.read`).
+    /// The `backtanks` an older version kept in the column.
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
         let Some(Tag::Compound(own)) = data.get(&KEY.into()) else {
             return;
@@ -319,20 +329,55 @@ impl Subsystem for Equipment {
         with_world(|w| w.load_backtanks(dim, saved.into_iter()));
     }
 
-    /// `BacktankBlockEntity.write`: x, y, z, `Air`, `Timer` and `CapacityEnchantment` of each
-    /// backtank holding air.
-    fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
+    /// `BacktankBlockEntity.write`: `Air`, `Timer` and `CapacityEnchantment` of each backtank
+    /// holding air.
+    fn save_entities(
+        &self,
+        lv: &ServerLevel<'_>,
+        chunk: [i32; 2],
+        out: &mut super::entity_data::Entities,
+    ) {
         let dim = lv.dim;
         let tanks = with_world(|w| w.column_backtanks(dim, chunk[0], chunk[1])).unwrap_or_default();
-        if tanks.is_empty() {
+        for (pos, b) in tanks {
+            out.entry(pos).or_default().extend([
+                (AIR.into(), Tag::Int(b.air)),
+                (TIMER.into(), Tag::Int(b.timer)),
+                (CAPACITY_KEY.into(), Tag::Int(b.capacity)),
+            ]);
+        }
+    }
+
+    /// `BacktankBlockEntity.read`.
+    fn load_entity(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        tag: &Compound,
+    ) {
+        if !is_backtank(block) {
             return;
         }
-        let v: Vec<i32> = tanks
-            .iter()
-            .flat_map(|(p, b)| [p[0], p[1], p[2], b.air, b.timer, b.capacity])
-            .collect();
-        let own = Compound::from([("backtanks".into(), Tag::IntArray(v))]);
-        data.insert(KEY.into(), Tag::Compound(own));
+        let int = |k: &str| match tag.get(&k.into()) {
+            Some(Tag::Int(v)) => *v,
+            _ => 0,
+        };
+        let b = eq::Backtank {
+            air: int(AIR).max(0),
+            timer: int(TIMER).clamp(0, 20),
+            capacity: int(CAPACITY_KEY).max(0),
+        };
+        let dim = lv.dim;
+        with_world(|w| w.load_backtanks(dim, std::iter::once((pos, b))));
+    }
+
+    fn saved_keys(&self, block: create_engine::Block) -> &'static [&'static str] {
+        if is_backtank(block) {
+            &[AIR, TIMER, CAPACITY_KEY]
+        } else {
+            &[]
+        }
     }
 
     /// Before the solve: backtanks with something to do fill (`BacktankBlockEntity.tick`).

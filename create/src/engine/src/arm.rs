@@ -760,6 +760,21 @@ impl Arms {
         self.changes.push(pos);
     }
 
+    /// `ArmBlockEntity.read`: a placed arm takes `arm` at once (keeping how it hangs), one not
+    /// found yet when it is.
+    pub fn read(&mut self, pos: [i32; 3], mut arm: Arm) {
+        let Some(old) = self.arms.remove(&pos) else {
+            self.saved.insert(pos, arm);
+            return;
+        };
+        self.unwatch(pos, &old);
+        arm.ceiling = old.ceiling;
+        self.arms.insert(pos, arm);
+        self.watch_points(pos);
+        self.wake(pos);
+        self.changes.push(pos);
+    }
+
     /// An arm gone: what it held, to drop.
     pub fn removed(&mut self, pos: [i32; 3]) -> Option<Stack> {
         let arm = self.arms.remove(&pos)?;
@@ -1199,6 +1214,22 @@ pub fn decode(mut d: &[u8]) -> Vec<Shown> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_keeps_how_a_placed_arm_hangs_and_waits_for_an_unplaced_one() {
+        let mut arms = Arms::default();
+        let p = [0, 64, 0];
+        arms.placed(p, true);
+        let mut saved = Arm::new(false);
+        saved.powered = true;
+        arms.read(p, saved.clone());
+        assert!(arms.arms[&p].powered && arms.arms[&p].ceiling);
+        let q = [3, 64, 0];
+        arms.read(q, saved);
+        assert!(!arms.arms.contains_key(&q));
+        arms.placed(q, false);
+        assert!(arms.arms[&q].powered && !arms.arms[&q].ceiling);
+    }
 
     #[test]
     fn the_rainbow_goes_red_yellow_green() {

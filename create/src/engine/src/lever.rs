@@ -162,6 +162,23 @@ impl Levers {
         self.saved.extend(saved);
     }
 
+    /// `AnalogLeverBlockEntity.read`: a placed lever takes `l` at once, one not found yet when
+    /// it is.
+    pub fn read(&mut self, pos: [i32; 3], l: Lever) {
+        let Some(live) = self.levers.get_mut(&pos) else {
+            self.saved.insert(pos, l);
+            return;
+        };
+        if let Some(t) = live.due {
+            self.due.remove(&(t, pos));
+        }
+        *live = l;
+        if let Some(t) = l.due {
+            self.due.insert((t, pos));
+        }
+        self.shown.push(pos);
+    }
+
     /// A column's levers that are not at rest at 0, to save (`write`).
     pub fn column(&self, cx: i32, cz: i32) -> Vec<([i32; 3], Lever)> {
         let mut v: Vec<([i32; 3], Lever)> = self
@@ -220,6 +237,35 @@ pub fn decode(data: &[u8]) -> Vec<Shown> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_replaces_a_placed_lever_and_its_due_time_or_waits_for_its_block() {
+        let mut l = Levers::default();
+        let p = [1, 64, 2];
+        l.placed(p);
+        l.click(p, false, 0);
+        l.read(
+            p,
+            Lever {
+                state: 9,
+                due: None,
+            },
+        );
+        assert_eq!(l.state(p), 9);
+        assert!(l.due.is_empty());
+        let q = [4, 64, 2];
+        l.read(
+            q,
+            Lever {
+                state: 3,
+                due: Some(20),
+            },
+        );
+        assert_eq!(l.state(q), 0);
+        l.placed(q);
+        assert_eq!(l.state(q), 3);
+        assert!(l.due.contains(&(20, q)));
+    }
 
     #[test]
     fn clicks_count_up_and_sneaking_down_within_0_to_15() {

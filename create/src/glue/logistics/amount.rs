@@ -209,7 +209,7 @@ fn client_filter_max(host: &dyn ClientHost, pos: [i32; 3]) -> i32 {
         .level(host.dimension())
         .and_then(|l| host.block_entity(l, pos))
         .and_then(|e| e.data(host))
-        .and_then(|d| match d.get(&super::FILTER.into()) {
+        .and_then(|d| match d.get(&super::FILTER_SHOWN.into()) {
             Some(Tag::String(s)) => Some(s.to_string_lossy()),
             _ => None,
         })
@@ -279,7 +279,7 @@ pub(crate) fn client_tip(host: &dyn ClientHost, pos: [i32; 3]) -> Vec<String> {
         .and_then(|l| host.block_entity(l, pos))
         .and_then(|e| e.data(host))
         .is_some_and(|d| {
-            matches!(d.get(&super::FILTER.into()), Some(Tag::String(s)) if !s.to_string_lossy().is_empty())
+            matches!(d.get(&super::FILTER_SHOWN.into()), Some(Tag::String(s)) if !s.to_string_lossy().is_empty())
         });
     let mut lines = vec![t("create.logistics.filter", "Filter")];
     lines.push(if filled {

@@ -224,6 +224,7 @@ impl Subsystem for Copycats {
             .blocks(&["create:copycat_panel", "create:copycat_step"])
             .build();
         let _ = KIND.set(kind);
+        super::entity_data::attach(r, &kind);
         if let Err(e) = r.block_entity_part(&kind, parts::CopycatEntity) {
             crate::create_log!("[create] the copycat block entity's part was refused: {e:?}");
         }

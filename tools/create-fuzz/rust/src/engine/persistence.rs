@@ -8,7 +8,6 @@ pub(super) struct Store {
     pub phase: u8,
     pub kinetics: HashMap<(Pos, u8), Compound>,
     pub sequences: HashMap<Pos, Compound>,
-    pub columns: Compound,
     pub handles: HashMap<Pos, Compound>,
     pub valve_pointers: HashMap<Pos, Compound>,
     pub depots: HashMap<Pos, Compound>,
@@ -20,11 +19,12 @@ pub(super) struct Store {
     /// (`PoweredShaftBlockEntity.write`'s `Direction` and `EnginePower`).
     pub engines: HashMap<Pos, Compound>,
     pub dirty_columns: std::collections::BTreeSet<(i32, i32)>,
+    /// Each block entity's `saveAdditional` fields, as its column last published them.
+    pub records: BTreeMap<Pos, Compound>,
     pub brackets: HashMap<Pos, create_engine::decor::Bracket>,
     pub conveyors: HashMap<Pos, Vec<Pos>>,
 }
 type ReloadData = (
-    Compound,
     Vec<(Pos, u8, Compound)>,
     Vec<(Pos, Compound)>,
     Vec<(Pos, crate::transport::Stack)>,
@@ -207,77 +207,22 @@ impl Run {
                 .filter(|(p, _)| !outside(**p))
                 .map(|(&p, c)| (p, c.connections.clone())),
         );
-        let mut motors = match self.persisted.columns.get("motors") {
-            Some(Tag::IntArray(v)) => v
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|v| ([v[0], v[1], v[2]], v[3]))
-                .filter(|(p, _)| outside(*p))
-                .collect::<Vec<_>>(),
-            _ => Vec::new(),
-        };
-        let mut belts = codec::belts_from_nbt(&self.persisted.columns)
-            .into_iter()
-            .filter(|(p, _)| outside(*p))
-            .collect::<Vec<_>>();
-        let mut brass = codec::brass_from_nbt(&self.persisted.columns)
-            .into_iter()
-            .filter(|(p, _)| outside(*p))
-            .collect::<Vec<_>>();
-        let mut chutes = codec::chutes_from_nbt(&self.persisted.columns)
-            .into_iter()
-            .filter(|(p, _)| outside(*p))
-            .collect::<Vec<_>>();
-        let mut funnels = codec::funnels_from_nbt(&self.persisted.columns)
-            .into_iter()
-            .filter(|(p, _)| outside(*p))
-            .collect::<Vec<_>>();
         let now = u64::from(self.now);
+        self.persisted.records.retain(|p, _| outside(*p));
         for (cx, cz) in columns {
-            motors.extend(self.w.column_settings(0, cx, cz));
-            belts.extend(self.w.column_belts(0, cx, cz));
-            brass.extend(self.w.column_brass(0, cx, cz));
-            chutes.extend(self.w.column_chutes(0, cx, cz));
-            funnels.extend(self.w.column_funnels(0, cx, cz, now));
+            self.persisted
+                .records
+                .extend(crate::persistence::entities::save_column(
+                    &self.w,
+                    (cx, cz),
+                    now,
+                ));
             let data = crate::persistence::fluids::save_column(&self.w, (cx, cz));
             if data.is_empty() {
                 self.persisted.fluid_columns.remove(&(cx, cz));
             } else {
                 self.persisted.fluid_columns.insert((cx, cz), data);
             }
-        }
-        self.persisted.columns = Compound::new();
-        if !motors.is_empty() {
-            self.persisted.columns.insert(
-                "motors".into(),
-                Tag::IntArray(
-                    motors
-                        .iter()
-                        .flat_map(|(p, v)| [p[0], p[1], p[2], *v])
-                        .collect(),
-                ),
-            );
-        }
-        if !belts.is_empty() {
-            self.persisted
-                .columns
-                .insert("belts".into(), codec::belts_to_nbt(&belts));
-        }
-        if !brass.is_empty() {
-            self.persisted
-                .columns
-                .insert("brass".into(), codec::brass_to_nbt(&brass));
-        }
-        if !chutes.is_empty() {
-            self.persisted
-                .columns
-                .insert("chutes".into(), codec::chutes_to_nbt(&chutes));
-        }
-        if !funnels.is_empty() {
-            self.persisted
-                .columns
-                .insert("funnels".into(), codec::funnels_to_nbt(&funnels));
         }
     }
     /// A save and reload of the running world: the Java side saves live block entities
@@ -381,9 +326,7 @@ impl Run {
             }
         }
         // Exercise a real value-tree encoding boundary; no live kinetic state survives it.
-        let data = self.persisted.columns.clone();
         let bytes = serde_json::to_vec(&(
-            data,
             entities,
             sequences,
             self.depot_stacks.iter().collect::<Vec<_>>(),
@@ -411,7 +354,6 @@ impl Run {
         ))
         .unwrap();
         let (
-            data,
             entities,
             sequences,
             slots,
@@ -426,9 +368,8 @@ impl Run {
         ): ReloadData = serde_json::from_slice(&bytes).unwrap();
         self.depot_stacks = slots.into_iter().collect();
         self.handles = handles.into_iter().collect();
-        // The glue's `arms_to_nbt`: each ejector goes into its column's save
-        // (`EjectorBlockEntity.write`: distances, state, lid, power, stack size, flying stacks);
-        // `arms_from_nbt` stages it in `ejector_saved` for its block's load.
+        // The glue's `EjectorState` (`EjectorBlockEntity.write`: distances, state, lid, power,
+        // stack size, flying stacks), staged in `ejector_saved` for its block's load.
         let ejectors: Vec<_> = self.w.dims[0]
             .ejectors
             .iter()
@@ -440,32 +381,22 @@ impl Run {
         self.w.dims[0].ejector_saved.extend(ejectors);
         // The Java adapter recreates the isolated case's network namespace too.
         self.w.dims[0].kinetics = create_engine::kinetics::Kinetics::new();
-        let motors = match data.get("motors") {
-            Some(Tag::IntArray(v)) => v
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|v| ([v[0], v[1], v[2]], v[3]))
-                .collect::<Vec<_>>(),
-            _ => Vec::new(),
-        };
-        self.w.load_settings(0, motors.into_iter());
-        self.w
-            .load_belt_items(0, codec::belts_from_nbt(&data).into_iter());
-        self.w
-            .load_brass(0, codec::brass_from_nbt(&data).into_iter());
-        self.w
-            .load_chutes(0, codec::chutes_from_nbt(&data).into_iter());
-        self.w.load_funnels(
-            0,
-            u64::from(self.now),
-            codec::funnels_from_nbt(&data).into_iter(),
-        );
         // ensure_column runs every subsystem's chunk_load before the first entity callback.
         for (_, data) in &fluids.columns {
             crate::persistence::fluids::load_column(&mut self.w, data);
         }
         self.persisted.fluid_entities = fluids.entities.into_iter().collect();
+        // entity_data::load: each block entity's fields once its column's data is in.
+        let records: HashMap<Pos, Compound> = serde_json::from_slice(
+            &serde_json::to_vec(&self.persisted.records.iter().collect::<Vec<_>>()).unwrap(),
+        )
+        .map(|v: Vec<(Pos, Compound)>| v.into_iter().collect())
+        .unwrap();
+        for &(p, s) in &blocks {
+            if let (Some(tag), Some((block, _))) = (records.get(&p), self.w.table.get(s)) {
+                crate::persistence::entities::load(&mut self.w, p, block, tag, u64::from(self.now));
+            }
+        }
         let chains: HashMap<_, _> = chains.into_iter().collect();
         let valve_pointers: HashMap<_, _> = valve_pointers.into_iter().collect();
         let saved_belts: HashMap<_, _> = saved_belts.into_iter().collect();
@@ -632,10 +563,11 @@ impl Run {
                 let (controller, index, length) =
                     saved.map_or((p, 0, 0), |s| (s.controller, s.index, s.length));
                 let inventory = (saved.is_some() && p == controller).then(|| {
-                    let inv = codec::belts_from_nbt(&self.persisted.columns)
-                        .into_iter()
-                        .find(|(c, _)| *c == controller)
-                        .map(|(_, inv)| inv)
+                    let inv = self
+                        .persisted
+                        .records
+                        .get(&controller)
+                        .and_then(|r| crate::persistence::entities::belt_inventory(controller, r))
                         .unwrap_or_default();
                     Inventory {
                         positive: inv.positive,
@@ -747,12 +679,10 @@ mod tests {
             }
             assert_eq!(r.at(b), AIR);
             assert!(!r.persisted.kinetics.contains_key(&(b, 0)));
-            if let Some(Tag::IntArray(motors)) = r.persisted.columns.get("motors") {
-                assert!(
-                    !motors.as_chunks::<4>().0.iter().any(|m| m[..3] == b),
-                    "destroyed settings must be flushed after the break"
-                );
-            }
+            assert!(
+                !r.persisted.records.contains_key(&b),
+                "destroyed settings must be flushed after the break"
+            );
             r.reload();
             assert_eq!(r.at(b), AIR);
             assert_eq!(
@@ -1198,8 +1128,8 @@ mod tests {
         r.tick();
         for _ in 0..2 {
             assert_eq!(r.w.speed(0, c), Some(0.));
-            let saved = codec::belts_from_nbt(&r.persisted.columns);
-            let inv = &saved.iter().find(|(p, _)| *p == c).unwrap().1;
+            let inv =
+                crate::persistence::entities::belt_inventory(c, &r.persisted.records[&c]).unwrap();
             assert!(inv.is_empty() && inv.positive);
             r.reload();
             let b = &r.w.dims[0].belts[&c];
@@ -1336,7 +1266,7 @@ mod write_phase_tests {
         r.place(&sc.blocks[0]);
         r.set_motor(&sc.blocks[0]);
         r.tick();
-        let written = serde_json::to_vec(&r.persisted.columns).unwrap();
+        let written = serde_json::to_vec(&r.persisted.records.iter().collect::<Vec<_>>()).unwrap();
         r.w.board_motor(
             0,
             [0, 8, 0],
@@ -1345,9 +1275,15 @@ mod write_phase_tests {
         // World changes become eligible when kinetics::Solve drains take_unsaved,
         // rather than through an unconditional late getter scan.
         r.flush_persistence();
-        assert_eq!(serde_json::to_vec(&r.persisted.columns).unwrap(), written);
+        assert_eq!(
+            serde_json::to_vec(&r.persisted.records.iter().collect::<Vec<_>>()).unwrap(),
+            written
+        );
         r.tick();
-        assert_ne!(serde_json::to_vec(&r.persisted.columns).unwrap(), written);
+        assert_ne!(
+            serde_json::to_vec(&r.persisted.records.iter().collect::<Vec<_>>()).unwrap(),
+            written
+        );
     }
 }
 
@@ -1451,15 +1387,15 @@ mod reload_order_tests {
                 blocks.iter().map(|(p, _)| (p[0] >> 4, p[2] >> 4)).collect();
             let kinetic = r.persisted.kinetics.clone();
             let sequence = r.persisted.sequences.clone();
-            let motors = match r.persisted.columns.get("motors") {
-                Some(Tag::IntArray(v)) => v
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .map(|v| ([v[0], v[1], v[2]], v[3]))
-                    .collect::<Vec<_>>(),
-                _ => vec![],
-            };
+            let motors: Vec<_> = r
+                .persisted
+                .records
+                .iter()
+                .filter_map(|(p, c)| match c.get("ScrollValue") {
+                    Some(Tag::Int(rpm)) => Some((*p, *rpm)),
+                    _ => None,
+                })
+                .collect();
             for (cx, cz) in columns {
                 r.w.column_unloaded(0, cx, cz);
             }
