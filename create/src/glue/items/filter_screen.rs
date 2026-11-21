@@ -12,11 +12,10 @@
 //! an inventory slot of the copy sent, or the filter's own slot, so the server writes stacks it
 //! read itself.
 //!
-//! Left out (no API for it):
-//! - An item-opened mod menu has no screen layout (`player_open_mod_menu` without a block gives
-//!   the client no `Screen`), so this is the mod's own screen: clicking an inventory slot puts a
-//!   ghost copy of its stack on the cursor, and the player's real inventory never changes while
-//!   it is open (Create carries the real stack).
+//! Left out:
+//! - The screen is the mod's own, not yet a blockless menu (`API_GAPS.md`): clicking an inventory
+//!   slot puts a ghost copy of its stack on the cursor, and the player's real inventory never
+//!   changes while it is open (Create carries the real stack).
 //! - The creative middle click on a ghost slot (a real full stack of it on the cursor): the
 //!   cursor here carries ghosts only, as above (`API_GAPS.md`).
 

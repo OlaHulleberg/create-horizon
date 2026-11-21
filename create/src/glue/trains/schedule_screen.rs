@@ -6,8 +6,7 @@
 //! the part's ghost slots (an item threshold's item, a fluid threshold's bucket, a redstone
 //! link's two frequencies) take ghost copies of its stacks (`ScheduleMenu`).
 //!
-//! Left out (no API for it): an item-opened mod menu has no screen layout (`player_open_mod_menu`
-//! without a block gives the client no `Screen`), so the screen is the mod's own and the
+//! Left out: the screen is the mod's own, not yet a blockless menu (`API_GAPS.md`), and the
 //! inventory shown is a copy the server sent when it opened: clicking a slot carries a ghost
 //! copy of its stack, never the stack itself (as the filters' screens do).
 
