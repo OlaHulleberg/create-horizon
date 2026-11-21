@@ -13,12 +13,6 @@
 //! turn their kind of actor off (`/create_debug controls` clicks them, at the cart's block). Couplings are drawn by clients (`coupling_draw`). The assembler's movement
 //! mode is set on its value box (`interaction::values`), or `/create_debug carts mode`.
 //!
-//! Left out, as the mod API can't do it (beyond drawing, see the parent module):
-//!
-//! - The hard coupling step moving a cart off its rail with collisions
-//!   (`Entity.move(MoverType.SELF)`): such a cart only has its motion
-//!   damped. Needs `EntityRef::move_by` (API_GAPS.md).
-//!
 //! A contraption's actors (drills, saws, harvesters, ploughs, rollers, deployers) work as it
 //! rides (`tick_cart_actors`), dropping into its storage blocks and then into a chest
 //! minecart's own inventory (`addExtraInventories`).
@@ -2595,23 +2589,42 @@ fn tick_couplings(lv: &mut ServerLevel<'_>, carts: &HashMap<u128, Cart>, riders:
             max_speed: cart::RAIL_MAX_SPEED,
             vehicle: rider_of(lv, nc).is_some() || nc.occupied(&*lv.host),
         };
-        let moved = {
-            let rails = |p: [i32; 3]| rail_at(lv, p).map(|r| r.0);
-            coupling::hard_step([hard(ca), hard(cb)], f64::from(length), &rails)
+        let bodies = [hard(ca), hard(cb)];
+        let mut moves = CouplingMoves {
+            lv: &mut *lv,
+            carts: [ca, cb],
+            motion,
         };
-        for (k, nc) in [ca, cb].into_iter().enumerate() {
-            let Some(m) = moved[k] else { continue };
-            if m.off_rail {
-                // Off its rail the cart can't be moved with collisions (see the module's
-                // doc): only its motion is damped, as Create damps it after the move.
-                nc.entity.set_velocity(lv.host, motion[k].map(|v| v * 0.95));
-            } else {
-                // On its rail the cart is put there (`moveCartAlongTrack`), its motion kept
-                // (a teleport stops it).
-                nc.entity.teleport_to(lv.host, m.pos, None);
-                nc.entity.set_velocity(lv.host, motion[k]);
-            }
-        }
+        coupling::hard_step(bodies, f64::from(length), &mut moves);
+    }
+}
+
+/// The level as `coupling::hard_step` moves two coupled carts.
+struct CouplingMoves<'a, 'l> {
+    lv: &'a mut ServerLevel<'l>,
+    carts: [&'a Cart; 2],
+    motion: [[f64; 3]; 2],
+}
+
+impl coupling::HardMoves for CouplingMoves<'_, '_> {
+    fn rail(&self, block: [i32; 3]) -> Option<RailShape> {
+        rail_at(self.lv, block).map(|r| r.0)
+    }
+
+    /// A teleport stops the cart: its motion is given back.
+    fn put(&mut self, i: usize, pos: [f64; 3]) {
+        let entity = self.carts[i].entity;
+        entity.teleport_to(self.lv.host, pos, None);
+        entity.set_velocity(self.lv.host, self.motion[i]);
+    }
+
+    fn move_off_rail(&mut self, i: usize, correction: [f64; 3]) -> [f64; 3] {
+        let entity = self.carts[i].entity;
+        let host = &mut *self.lv.host;
+        let _ = entity.move_by(host, correction, mod_api::MoveCause::SelfMovement);
+        self.motion[i] = self.motion[i].map(|v| v * f64::from(0.95f32));
+        entity.set_velocity(host, self.motion[i]);
+        entity.position(&*host).unwrap_or(self.carts[i].pos)
     }
 }
 

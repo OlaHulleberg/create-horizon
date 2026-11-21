@@ -17,8 +17,6 @@
 //!   the client no `Screen`), so this is the mod's own screen: clicking an inventory slot puts a
 //!   ghost copy of its stack on the cursor, and the player's real inventory never changes while
 //!   it is open (Create carries the real stack).
-//! - A slot's item tooltip is its name alone (`hover_name`): no host call gives an item's
-//!   tooltip lines.
 //! - The creative middle click on a ghost slot (a real full stack of it on the cursor): the
 //!   cursor here carries ghosts only, as above (`API_GAPS.md`).
 
