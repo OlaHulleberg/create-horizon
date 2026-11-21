@@ -75,10 +75,13 @@ impl BlockPart for SavedFields {}
 impl BlockEntityPart for SavedFields {
     fn block_entity_save_additional(
         &self,
-        _level: &dyn LevelHost,
+        level: &dyn LevelHost,
         event: &mut BlockEntitySaveAdditionalEvent<'_>,
     ) {
-        write_record(SUBSYSTEMS, event.level, event.pos, event.tag);
+        let block = level
+            .block_state(event.pos)
+            .and_then(|s| states::level_block(level, s));
+        write_record(SUBSYSTEMS, event.level, event.pos, block, event.tag);
     }
 
     fn block_entity_load_additional(
@@ -97,6 +100,10 @@ impl BlockEntityPart for SavedFields {
             return;
         }
         let fields = own_fields(SUBSYSTEMS, block, event.tag);
+        let marker = MARKER.into();
+        if !known && fields.keys().all(|k| *k == marker) {
+            return;
+        }
         PENDING.with_borrow_mut(|p| {
             p.retain(|(l, q, _)| (*l, *q) != (event.level, event.pos));
             p.push((event.level, event.pos, Record { block, fields }));
@@ -104,21 +111,29 @@ impl BlockEntityPart for SavedFields {
     }
 }
 
-/// `saveAdditional`: the entity's record replaces its block's saved keys, unless data it loaded
-/// is still to be read (the tag is that data then).
-fn write_record(systems: &[&dyn Subsystem], level: LevelRef, pos: [i32; 3], tag: &mut Compound) {
+/// `saveAdditional`: the entity's record replaces its block's saved keys (none for an entity
+/// without one), unless data it loaded is still to be read (the tag is that data then). Every
+/// entity saves the marker, so `/data merge` on one that never had fields is read.
+fn write_record(
+    systems: &[&dyn Subsystem],
+    level: LevelRef,
+    pos: [i32; 3],
+    block: Option<Block>,
+    tag: &mut Compound,
+) {
     if PENDING.with_borrow(|p| p.iter().any(|(l, q, _)| (*l, *q) == (level, pos))) {
         return;
     }
-    RECORDS.with_borrow(|r| {
-        let Some(record) = r.get(&(level, pos)) else {
-            return;
-        };
-        for k in keys(systems, record.block) {
+    let record = RECORDS.with_borrow(|r| r.get(&(level, pos)).cloned());
+    if let Some(block) = record.as_ref().map(|r| r.block).or(block) {
+        for k in keys(systems, block) {
             tag.remove(&k.into());
         }
-        tag.extend(record.fields.iter().map(|(k, v)| (k.clone(), v.clone())));
-    });
+    }
+    if let Some(record) = record {
+        tag.extend(record.fields);
+    }
+    tag.insert(MARKER.into(), Tag::Byte(1));
 }
 
 /// The columns of `lv` holding loaded data still to be read.
