@@ -200,8 +200,27 @@ impl Subsystem for Processing {
         persist::load(lv.dim, data);
     }
 
-    fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
-        persist::save(lv.dim, chunk, data);
+    fn save_entities(
+        &self,
+        lv: &ServerLevel<'_>,
+        chunk: [i32; 2],
+        out: &mut crate::glue::entity_data::Entities,
+    ) {
+        persist::save_entities(lv.dim, chunk, out);
+    }
+
+    fn load_entity(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        tag: &Compound,
+    ) {
+        persist::load_entity(lv.dim, pos, block, tag);
+    }
+
+    fn saved_keys(&self, block: create_engine::Block) -> &'static [&'static str] {
+        persist::saved_keys(block)
     }
 
     /// Legacy `level_tick_post` order: crafters, millstones, fans, crushers, burners, mixers.
