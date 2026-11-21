@@ -20,8 +20,6 @@ pub(super) struct Store {
     pub dirty_columns: std::collections::BTreeSet<(i32, i32)>,
     /// Each block entity's `saveAdditional` fields, as its column last published them.
     pub records: BTreeMap<Pos, Compound>,
-    pub brackets: HashMap<Pos, create_engine::decor::Bracket>,
-    pub conveyors: HashMap<Pos, Vec<Pos>>,
 }
 type ReloadData = (
     Vec<(Pos, u8, Compound)>,
@@ -190,24 +188,9 @@ impl Run {
             return;
         }
         let outside = |p: Pos| !columns.contains(&(p[0] >> 4, p[2] >> 4));
-        self.persisted.brackets.retain(|p, _| outside(*p));
-        self.persisted.conveyors.retain(|p, _| outside(*p));
-        self.persisted.brackets.extend(
-            self.brackets
-                .iter()
-                .filter(|(p, _)| !outside(**p))
-                .map(|(&p, &b)| (p, b)),
-        );
-        self.persisted.conveyors.extend(
-            self.chains
-                .conveyors
-                .iter()
-                .filter(|(p, _)| !outside(**p))
-                .map(|(&p, c)| (p, c.connections.clone())),
-        );
         let now = u64::from(self.now);
         self.persisted.records.retain(|p, _| outside(*p));
-        for (cx, cz) in columns {
+        for &(cx, cz) in &columns {
             self.persisted
                 .records
                 .extend(crate::persistence::entities::save_column(
@@ -215,6 +198,25 @@ impl Run {
                     (cx, cz),
                     now,
                 ));
+        }
+        // decor/saved.rs `BracketState` and packages' `ChainConveyor` (its connections; the
+        // packages it carries are not modelled here).
+        for (&p, &b) in self.brackets.iter().filter(|(p, _)| !outside(**p)) {
+            self.persisted
+                .records
+                .entry(p)
+                .or_default()
+                .insert("BracketState".into(), bracket_to_tag(b));
+        }
+        for (&p, c) in self.chains.conveyors.iter().filter(|(p, _)| !outside(**p)) {
+            let conveyor = Compound::from([(
+                "Connections".into(),
+                Tag::IntArray(c.connections.iter().flatten().copied().collect()),
+            )]);
+            self.persisted.records.entry(p).or_default().insert(
+                "ChainConveyor".into(),
+                Tag::List(vec![Tag::Compound(conveyor)]),
+            );
         }
     }
     /// A save and reload of the running world: the Java side saves live block entities
@@ -234,47 +236,20 @@ impl Run {
                 .unwrap()
                 .into_iter()
                 .collect();
-        // decor/saved.rs: column bracket entries; belt casing is host entity data.
-        let brackets: Vec<[i32; 7]> = self
-            .persisted
-            .brackets
+        // decor/saved.rs `BracketState`; belt casing is host entity data.
+        let records: Vec<(Pos, Compound)> = serde_json::from_slice(
+            &serde_json::to_vec(&self.persisted.records.iter().collect::<Vec<_>>()).unwrap(),
+        )
+        .unwrap();
+        let casing: Vec<(Pos, String)> = serde_json::from_slice(
+            &serde_json::to_vec(&self.belt_casing.iter().collect::<Vec<_>>()).unwrap(),
+        )
+        .unwrap();
+        self.brackets = records
             .iter()
-            .map(|(p, b)| {
-                [
-                    p[0],
-                    p[1],
-                    p[2],
-                    i32::from(b.wooden),
-                    b.facing as i32,
-                    i32::from(b.along_first),
-                    match b.kind {
-                        create_engine::decor::BracketKind::Pipe => 0,
-                        create_engine::decor::BracketKind::Cog => 1,
-                        create_engine::decor::BracketKind::Shaft => 2,
-                    },
-                ]
-            })
-            .collect();
-        let metadata =
-            serde_json::to_vec(&(brackets, self.belt_casing.iter().collect::<Vec<_>>())).unwrap();
-        let (brackets, casing): (Vec<[i32; 7]>, Vec<(Pos, String)>) =
-            serde_json::from_slice(&metadata).unwrap();
-        self.brackets = brackets
-            .into_iter()
-            .map(|v| {
-                (
-                    [v[0], v[1], v[2]],
-                    create_engine::decor::Bracket {
-                        wooden: v[3] != 0,
-                        facing: create_engine::kinetics::Dir::ALL[v[4].clamp(0, 5) as usize],
-                        along_first: v[5] != 0,
-                        kind: match v[6] {
-                            0 => create_engine::decor::BracketKind::Pipe,
-                            1 => create_engine::decor::BracketKind::Cog,
-                            _ => create_engine::decor::BracketKind::Shaft,
-                        },
-                    },
-                )
+            .filter_map(|(p, r)| match r.get("BracketState") {
+                Some(Tag::Compound(c)) => Some((*p, bracket_of(c))),
+                _ => None,
             })
             .collect();
         self.belt_casing = casing.into_iter().collect();
@@ -290,14 +265,22 @@ impl Run {
         });
         let columns: std::collections::BTreeSet<_> =
             blocks.iter().map(|(p, _)| (p[0] >> 4, p[2] >> 4)).collect();
-        let connections: Vec<_> = self
-            .persisted
-            .conveyors
+        let connections: Vec<(Pos, Vec<Pos>)> = records
             .iter()
-            .map(|(&p, c)| (p, c.clone()))
+            .filter_map(|(p, r)| {
+                let Some(Tag::List(l)) = r.get("ChainConveyor") else {
+                    return None;
+                };
+                let Some(Tag::Compound(c)) = l.first() else {
+                    return None;
+                };
+                let Some(Tag::IntArray(v)) = c.get("Connections") else {
+                    return None;
+                };
+                let links = v.as_chunks::<3>().0.iter().map(|k| [k[0], k[1], k[2]]);
+                Some((*p, links.collect()))
+            })
             .collect();
-        let connections: Vec<(Pos, Vec<Pos>)> =
-            serde_json::from_slice(&serde_json::to_vec(&connections).unwrap()).unwrap();
         let unloaded: Vec<_> = self.chains.conveyors.keys().copied().collect();
         for p in unloaded {
             self.chains.unload(p);
@@ -600,7 +583,39 @@ impl Run {
     }
 }
 
-/// An ejector as the glue's column save writes it and `arms_from_nbt` reads it back: what
+/// decor/saved.rs's `BracketState`.
+fn bracket_to_tag(b: create_engine::decor::Bracket) -> Tag {
+    use create_engine::decor::BracketKind;
+    let kind = match b.kind {
+        BracketKind::Pipe => 0,
+        BracketKind::Cog => 1,
+        BracketKind::Shaft => 2,
+    };
+    Tag::Compound(Compound::from([
+        ("Wooden".into(), Tag::Byte(i8::from(b.wooden))),
+        ("Facing".into(), Tag::Int(b.facing as i32)),
+        ("AlongFirst".into(), Tag::Byte(i8::from(b.along_first))),
+        ("Kind".into(), Tag::Int(kind)),
+    ]))
+}
+
+fn bracket_of(c: &Compound) -> create_engine::decor::Bracket {
+    use create_engine::decor::BracketKind;
+    let int = |k: &str| match c.get(k) {
+        Some(Tag::Int(v)) => *v,
+        _ => 0,
+    };
+    let flag = |k: &str| matches!(c.get(k), Some(Tag::Byte(b)) if *b != 0);
+    create_engine::decor::Bracket {
+        wooden: flag("Wooden"),
+        facing: create_engine::kinetics::Dir::ALL[int("Facing").clamp(0, 5) as usize],
+        along_first: flag("AlongFirst"),
+        kind: [BracketKind::Pipe, BracketKind::Cog, BracketKind::Shaft]
+            [int("Kind").clamp(0, 2) as usize],
+    }
+}
+
+/// An ejector as the glue's `EjectorState` keeps it and `ejector_from_tag` reads it back: what
 /// `EjectorBlockEntity.write` keeps, the rest as a new block entity's.
 fn reloaded_ejector(e: &create_engine::ejector::Ejector) -> create_engine::ejector::Ejector {
     use create_engine::ejector;
