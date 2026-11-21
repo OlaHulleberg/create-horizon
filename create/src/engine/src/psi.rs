@@ -121,17 +121,22 @@ fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
 }
 
 impl Moving {
-    /// `visitNewPosition` → `findInterface` (a translating contraption: its facing is its
-    /// block's): a stationary interface at `pos` or the block beyond it, facing back; it starts
-    /// connecting to `contraption` at the distance between their faces.
+    /// `visitNewPosition` → `findInterface`: a stationary interface at `pos` or the block beyond
+    /// it, facing back; it starts connecting to `contraption` at the distance between their
+    /// faces. `facing` is where the interface points now (`getCurrentFacingIfValid`), none while
+    /// it is turned away from every direction.
     pub fn visit(
         &mut self,
         world: &mut impl World,
         contraption: [i32; 3],
         pos: [i32; 3],
         position: [f64; 3],
-        facing: Dir,
+        facing: Option<Dir>,
     ) {
+        let Some(facing) = facing else {
+            self.working = None;
+            return;
+        };
         let o = facing.offset();
         let found = (0..2)
             .map(|i| [pos[0] + o[0] * i, pos[1] + o[1] * i, pos[2] + o[2] * i])
@@ -162,7 +167,7 @@ impl Moving {
         contraption: [i32; 3],
         position: [f64; 3],
         motion: [f64; 3],
-        facing: Dir,
+        facing: Option<Dir>,
         mut stall: bool,
     ) -> bool {
         let Some(at) = self.working else {
@@ -174,7 +179,7 @@ impl Moving {
         if !stall && distance(position, target) < distance(target, next) {
             stall = true;
         }
-        if !world.interface_at(at, facing) {
+        if !facing.is_some_and(|f| world.interface_at(at, f)) {
             self.working = None;
             return false;
         }
@@ -278,7 +283,7 @@ mod tests {
             let g = position.map(|v| v.floor() as i32);
             if grid != Some(g) {
                 grid = Some(g);
-                m.visit(&mut world, key, g, position, Dir::East);
+                m.visit(&mut world, key, g, position, Some(Dir::East));
             }
             let was = stall;
             stall = m.tick(
@@ -286,7 +291,7 @@ mod tests {
                 key,
                 position,
                 [speed, 0.0, 0.0],
-                Dir::East,
+                Some(Dir::East),
                 stall,
             );
             if stall && !was && stalled_at.is_none() {
