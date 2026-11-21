@@ -86,6 +86,7 @@ impl Run {
             origin: self.native_origin,
             save_phase: self.persisted.phase,
             item_outcomes: self.item_outcomes.clone(),
+            drops: Some(self.drops.clone()),
             side: "rust".into(),
             unavailable: {
                 let mut unavailable = Vec::new();

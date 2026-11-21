@@ -1,6 +1,7 @@
 //! Compares two snapshots block by block.
 
 use crate::scenario::{Kinetic, Snapshot, parse_state};
+use crate::transport::DroppedItem;
 
 /// Float tolerance: Create's figures are f32 sums of small products.
 const EPS: f32 = 1e-3;
@@ -28,6 +29,11 @@ pub fn diff(java: &Snapshot, rust: &Snapshot) -> Vec<String> {
             "item outcomes: java {:?} rust {:?}",
             java.item_outcomes, rust.item_outcomes
         ));
+    }
+    if let (Some(j), Some(r)) = (&java.drops, &rust.drops)
+        && !drops_match(j, r)
+    {
+        out.push(format!("drops: java {j:?} rust {r:?}"));
     }
     if let (Some(j), Some(r)) = (&java.networks, &rust.networks) {
         let normalize = |groups: &[Vec<String>]| {
@@ -179,6 +185,35 @@ pub fn diff(java: &Snapshot, rust: &Snapshot) -> Vec<String> {
         out.push(format!("rust note: {n}"));
     }
     out
+}
+
+/// The same item entities, in any order, at the same place and motion within the tolerance.
+fn drops_match(java: &[DroppedItem], rust: &[DroppedItem]) -> bool {
+    let sorted = |v: &[DroppedItem]| {
+        let mut v = v.to_vec();
+        v.sort_by(|a, b| {
+            (a.tick, &a.stack.item, a.stack.count)
+                .cmp(&(b.tick, &b.stack.item, b.stack.count))
+                .then_with(|| {
+                    a.pos
+                        .iter()
+                        .zip(&b.pos)
+                        .map(|(x, y)| x.total_cmp(y))
+                        .find(|o| o.is_ne())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+        });
+        v
+    };
+    let near =
+        |a: &[f64; 3], b: &[f64; 3]| a.iter().zip(b).all(|(x, y)| close(*x as f32, *y as f32));
+    java.len() == rust.len()
+        && sorted(java).iter().zip(&sorted(rust)).all(|(j, r)| {
+            j.tick == r.tick
+                && j.stack == r.stack
+                && near(&j.pos, &r.pos)
+                && near(&j.motion, &r.motion)
+        })
 }
 
 /// The block names differ, or a property both sides name has another value.
@@ -425,6 +460,31 @@ mod tests {
         j.networks.as_mut().unwrap().partitions =
             vec![vec!["a".into(), "c".into()], vec!["b".into()]];
         assert_eq!(diff(&j, &r), ["network partitions differ"]);
+    }
+    #[test]
+    fn drops_compare_in_any_order_within_tolerance() {
+        let drop = |tick, item: &str, x| crate::transport::DroppedItem {
+            tick,
+            stack: crate::transport::Stack {
+                item: item.into(),
+                count: 1,
+            },
+            pos: [x, 9.0625, 0.5],
+            motion: [0.1, -0.2, 0.0],
+        };
+        let j = Snapshot {
+            drops: Some(vec![drop(4, "a", 1.5), drop(3, "b", 1.5)]),
+            ..Snapshot::default()
+        };
+        let mut r = Snapshot {
+            drops: Some(vec![drop(3, "b", 1.5), drop(4, "a", 1.500_000_1)]),
+            ..Snapshot::default()
+        };
+        assert!(diff(&j, &r).is_empty());
+        r.drops = Some(vec![drop(3, "b", 1.5), drop(4, "a", 1.6)]);
+        assert!(diff(&j, &r)[0].starts_with("drops:"));
+        r.drops = None;
+        assert!(diff(&j, &r).is_empty());
     }
     #[test]
     fn checkpoints_and_air_positions_are_compared() {

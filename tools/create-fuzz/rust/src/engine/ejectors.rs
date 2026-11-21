@@ -236,11 +236,19 @@ impl Run {
             d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
         }
     }
-    /// Ejectors after the walk: the change journal settles. Removed depots' incoming stacks
-    /// drop as items (`send_changed_depots`, `DepotBehaviour.destroy`), whose life the driver
-    /// cannot follow.
+    /// Ejectors after the walk (`flush_ejectors`): the change journal settles. Removed
+    /// ejectors' stacks in flight (`dropFlyingItems`) and removed depots' incoming stacks
+    /// (`send_changed_depots`, `DepotBehaviour.destroy`) drop as items. A block removed by an
+    /// input drops them before the level's entities tick, so they fly a tick before the harness
+    /// discards them, and `Block.popResource` places them at random: the driver cannot follow
+    /// either.
     pub(super) fn ejectors_ticked(&mut self) {
         self.w.dims[0].ejector_changes.clear();
+        for (_, _, item, count) in std::mem::take(&mut self.w.dims[0].ejector_drops) {
+            self.notes.push(format!(
+                "adapter gap: removed ejector drops {count} {item} in flight (native item flight)"
+            ));
+        }
         for (p, item, count) in std::mem::take(&mut self.w.dims[0].depot_drops) {
             self.notes.push(format!(
                 "adapter gap: removed depot at {p:?} drops {count} {item} (native item flight)"
@@ -392,21 +400,8 @@ impl ejector::World for EjectorSide<'_> {
         };
         self.run.ejector_land(target, &s, false)
     }
-    fn drop_item(&mut self, at: [f64; 3], _motion: [f64; 3], item: &str, count: u8) {
-        // `placeItemAtTarget` adds a vanilla `ItemEntity` where the arc ends. The harness
-        // observes no entities, so an item dropped into empty air changes nothing it
-        // compares; one dropped into or on top of a block has a life (it can rest there or be
-        // picked up below) the driver cannot follow, so that stays an adapter gap.
-        let cell = at.map(|v| v.floor() as i32);
-        let blocked = [cell, [cell[0], cell[1] - 1, cell[2]]]
-            .into_iter()
-            .any(|p| self.run.at(p) != AIR && !self.run.replaceable(p));
-        if blocked {
-            self.run.notes.push(format!(
-                "adapter gap: ejector at {:?} drops {count} {item} at {at:?} (native item flight)",
-                self.pos
-            ));
-        }
+    fn drop_item(&mut self, at: [f64; 3], motion: [f64; 3], item: &str, count: u8) {
+        self.run.spawn_item(at, motion, item, count);
     }
     fn clip(&mut self, from: [f64; 3], to: [f64; 3]) -> Option<([f64; 3], [i32; 3], Dir)> {
         let run = &*self.run;

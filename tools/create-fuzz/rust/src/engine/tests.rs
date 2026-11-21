@@ -603,3 +603,17 @@ fn sneak_wrench_removes_a_connected_sloped_belt() {
         assert_eq!(snap.checkpoints[&31].blocks[&p].state, expected);
     }
 }
+
+#[test]
+fn ejected_stack_a_target_refuses_drops_as_an_item_entity() {
+    let sc: crate::scenario::Scenario =
+        serde_json::from_str(include_str!("../../../cases/items-ejector-drop.json")).unwrap();
+    let r = super::run(&sc);
+    assert!(r.notes.is_empty(), "{:?}", r.notes);
+    let drops = r.drops.unwrap();
+    assert_eq!(drops.len(), 1);
+    let d = &drops[0];
+    assert_eq!((d.tick, d.stack.count), (63, 1));
+    assert_eq!(d.pos[1], 9.0625);
+    assert!(r.checkpoints[&62].drops.as_ref().unwrap().is_empty());
+}

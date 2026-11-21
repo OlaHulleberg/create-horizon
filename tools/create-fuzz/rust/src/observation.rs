@@ -12,6 +12,9 @@ pub struct Snapshot {
     pub save_phase: u8,
     #[serde(default)]
     pub item_outcomes: Vec<crate::transport::Outcome>,
+    /// None from a harness that does not observe item entities.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drops: Option<Vec<crate::transport::DroppedItem>>,
     pub side: String,
     /// Adapter gaps are explicit metadata, never inferred from equal speed/stress.
     #[serde(default)]

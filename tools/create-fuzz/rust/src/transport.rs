@@ -76,6 +76,17 @@ pub struct Outcome {
     pub handler: Option<bool>,
 }
 
+/// An item entity Create put into the world (`new ItemEntity`, `setDeltaMovement`), observed as
+/// the harness discards it at the end of the server tick that spawned it: that tick, its stack,
+/// its position from the case origin and its motion.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DroppedItem {
+    pub tick: u32,
+    pub stack: Stack,
+    pub pos: [f64; 3],
+    pub motion: [f64; 3],
+}
+
 /// Controlled item histories on player-connected belts.
 pub fn generate(seed: u64) -> crate::scenario::Scenario {
     use crate::{

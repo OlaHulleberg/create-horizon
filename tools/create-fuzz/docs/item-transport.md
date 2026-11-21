@@ -163,13 +163,28 @@ subsystem): its redstone (`tick_arm_signals`), the engine's `Ejector::tick` with
 at the target (an ejector merges, a depot takes while empty, a belt from above), stacks landing
 on it and belts ending into it merging onto what it holds (`depot_insert`), its item handler
 (`DepotItems`), and its stack size (`scroll_setting`). Ejectors wake when their depot changes
-(`wake_ejectors`). A stack the throw drops (native item flight) and a belt funnel on top are
-adapter gaps with a note; entities on the plate are not generated.
+(`wake_ejectors`). A stack the throw drops (`placeItemAtTarget`) becomes an item entity in the
+driver's world, as the glue spawns it through the host. The stacks in flight of a removed ejector
+(`dropFlyingItems`) and a belt funnel on top are adapter gaps with a note; entities on the plate
+are not generated.
 
 `ejector` observes its state, power, plate (`lidProgress`), launcher distances, stack size,
 the stacks in flight (ticks flown, stack) and `earlyTargetTime`; the plate and the time compare
 within the transport tolerance. The depot observation covers ejectors too and lists an ejector's
 merging stacks (`DepotBehaviour.incoming`) as pending items.
+
+## Dropped items
+
+The harness discards every item entity at the end of each server tick
+(`CaseIsolation.disposeUnobservedDrops`). Items a block entity spawns join after the level's
+entity pass, so they never fly, land or get picked up. Items an input drops before the level
+tick (a removed block's contents) fly one tick first; the driver does not follow those.
+Both sides observe item entities there as cumulative `drops`: the tick, the stack, the position from the case
+origin and the motion, compared in any order with positions and motions within the transport
+tolerance. The driver keeps them as item entities until that disposal. Comparison needs both
+sides to report `drops`; a server running an older harness reports none. Drops whose place
+Java randomises (`Containers.dropItemStack`, `Block.popResource`) remain adapter gaps with a
+note.
 
 ## Funnels pushing from a depot
 

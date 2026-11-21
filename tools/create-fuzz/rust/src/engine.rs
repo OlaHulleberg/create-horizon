@@ -17,6 +17,7 @@ mod fluids;
 mod funnel_filters;
 mod funnels;
 mod interaction;
+mod items;
 mod kinetics;
 mod observation;
 mod outputs;
@@ -200,6 +201,8 @@ pub struct Run {
     depot_stacks: HashMap<Pos, crate::transport::Stack>,
     depot_outputs: HashMap<Pos, outputs::Outputs>,
     item_outcomes: Vec<crate::transport::Outcome>,
+    item_entities: Vec<items::ItemEntity>,
+    drops: Vec<crate::transport::DroppedItem>,
     chains: create_engine::chain_conveyor::Chains<()>,
     connector: Option<Pos>,
     /// The tick from which the belt connector's `useOn` runs again: Create starts the item's
@@ -280,6 +283,8 @@ impl Run {
             depot_stacks: HashMap::new(),
             depot_outputs: HashMap::new(),
             item_outcomes: Vec::new(),
+            item_entities: Vec::new(),
+            drops: Vec::new(),
             chains: Default::default(),
             connector: None,
             connector_ready: 0,
