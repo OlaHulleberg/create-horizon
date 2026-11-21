@@ -1109,7 +1109,7 @@ fn load_entity(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, tag: &Comp
             if let Some(Tag::Compound(c)) = tag.get(&INVENTORY.into())
                 && let Some(inv) = belt_from_tag(c)
             {
-                with_world(|w| w.load_belt_items(dim, std::iter::once((pos, inv))));
+                with_world(|w| w.read_belt_items(dim, pos, inv));
             }
         }
         Block::BrassTunnel => {
@@ -1139,14 +1139,14 @@ fn load_entity(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, tag: &Comp
                 d.tunnel_filters
                     .extend(sides.into_iter().map(|(side, f)| ((pos, side), f)));
                 if let Some(b) = saved {
-                    w.load_brass(dim, std::iter::once((pos, b)));
+                    w.read_brass(dim, pos, b);
                 }
             });
         }
         Block::Chute | Block::SmartChute => {
             if let Some(Tag::Float(bits)) = tag.get(&ITEM_POSITION.into()) {
                 let at = f32::from_bits(*bits);
-                with_world(|w| w.load_chutes(dim, std::iter::once((pos, at))));
+                with_world(|w| w.read_chute(dim, pos, at));
             }
         }
         Block::AndesiteFunnel
@@ -1155,7 +1155,7 @@ fn load_entity(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, tag: &Comp
         | Block::BrassBeltFunnel => {
             if let Some(Tag::Int(cooldown)) = tag.get(&TRANSFER_COOLDOWN.into()) {
                 let cooldown = (*cooldown).max(0) as u32;
-                with_world(|w| w.load_funnels(dim, now, std::iter::once((pos, cooldown))));
+                with_world(|w| w.read_funnel(dim, pos, cooldown, now));
             }
         }
         Block::ItemVault => {
@@ -1175,7 +1175,7 @@ fn load_entity(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, tag: &Comp
                 dirty: matches!(tag.get(&VAULT_KEYS[3].into()), Some(Tag::Byte(b)) if *b != 0),
                 large: false,
             };
-            with_world(|w| w.dims[dim].vaults.load(std::iter::once((pos, part))));
+            with_world(|w| w.dims[dim].vaults.read(pos, part));
         }
         _ => {}
     }

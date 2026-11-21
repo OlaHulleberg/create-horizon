@@ -155,7 +155,7 @@ pub fn load_entity(dim: usize, pos: [i32; 3], block: Block, tag: &Compound) {
     with_world(|w| match block {
         Block::Deployer => {
             if let Some(d) = compound(DEPLOYER).and_then(deployer_of) {
-                w.load_deployers(dim, std::iter::once((pos, d)));
+                w.read_deployer(dim, pos, d);
             }
         }
         Block::CrushingWheelController => {
@@ -183,7 +183,7 @@ pub fn load_entity(dim: usize, pos: [i32; 3], block: Block, tag: &Compound) {
                 remaining,
                 applied: matches!(c.get(&"Applied".into()), Some(Tag::Byte(b)) if *b != 0),
             };
-            w.load_crushers(dim, std::iter::once((pos, crusher)));
+            w.read_crusher(dim, pos, crusher);
         }
         Block::BlazeBurner => {
             let Some(c) = compound(BURNER) else { return };
@@ -200,7 +200,7 @@ pub fn load_entity(dim: usize, pos: [i32; 3], block: Block, tag: &Compound) {
                     creative: None,
                 }
             };
-            w.load_burners(dim, std::iter::once((pos, b)));
+            w.read_burner(dim, pos, b);
         }
         Block::Basin => {
             let tanks = compound(BASIN).map(|c| {

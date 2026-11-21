@@ -48,7 +48,7 @@ pub fn load(w: &mut CreateWorld, p: Pos, block: Block, tag: &Compound, now: u64)
         }
         Block::Belt => {
             if let Some(inv) = belt_inventory(p, tag) {
-                w.load_belt_items(0, std::iter::once((p, inv)));
+                w.read_belt_items(0, p, inv);
             }
         }
         Block::BrassTunnel => {
@@ -56,12 +56,14 @@ pub fn load(w: &mut CreateWorld, p: Pos, block: Block, tag: &Compound, now: u64)
                 let mut c = c.clone();
                 c.insert("Pos".into(), Tag::IntArray(p.to_vec()));
                 let data = Compound::from([("brass".into(), Tag::List(vec![Tag::Compound(c)]))]);
-                w.load_brass(0, codec::brass_from_nbt(&data).into_iter());
+                for (_, b) in codec::brass_from_nbt(&data) {
+                    w.read_brass(0, p, b);
+                }
             }
         }
         Block::Chute | Block::SmartChute => {
             if let Some(Tag::Float(bits)) = tag.get("ItemPosition") {
-                w.load_chutes(0, std::iter::once((p, f32::from_bits(*bits))));
+                w.read_chute(0, p, f32::from_bits(*bits));
             }
         }
         Block::AndesiteFunnel
@@ -70,7 +72,7 @@ pub fn load(w: &mut CreateWorld, p: Pos, block: Block, tag: &Compound, now: u64)
         | Block::BrassBeltFunnel => {
             if let Some(Tag::Int(cooldown)) = tag.get("TransferCooldown") {
                 let cooldown = (*cooldown).max(0) as u32;
-                w.load_funnels(0, now, std::iter::once((p, cooldown)));
+                w.read_funnel(0, p, cooldown, now);
             }
         }
         _ => {}

@@ -244,19 +244,16 @@ pub(super) fn load(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, tag: &
                 attached_whistles: int(c, "Whistles"),
                 needs_heat_level_update: flag(c, "Update"),
             };
-            w.load_boilers(dim, std::iter::once((pos, b)));
+            w.read_boiler(dim, pos, b);
         }
         if block == Block::CreativeFluidTank
             && let Some(c) = compound(CREATIVE)
         {
-            w.dims[dim].plumbing.creative_saved.insert(pos, fluid_of(c));
-            if c.contains_key(&"Size".into()) {
-                let m = Multi {
-                    tank: Tank::default(),
-                    ..multi_of(c)
-                };
-                w.load_creative_tanks(dim, std::iter::once((pos, m)));
-            }
+            let multi = c.contains_key(&"Size".into()).then(|| Multi {
+                tank: Tank::default(),
+                ..multi_of(c)
+            });
+            w.read_creative_tank(dim, pos, fluid_of(c), multi);
         }
         let p = &mut w.dims[dim].plumbing;
         if let Some(c) = compound(SMART_PIPE) {
@@ -278,8 +275,7 @@ pub(super) fn load(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, tag: &
                 fluid: fluid_of(c),
                 amount: int(c, "Amount").clamp(0, create_engine::hose::CAPACITY as i32) as u32,
             };
-            p.hose_saved
-                .insert(pos, (float(c, "Offset").max(0.0), tank));
+            w.read_hose(dim, pos, float(c, "Offset").max(0.0), tank);
         }
         let d = &mut w.dims[dim];
         if let Some(c) = compound(SPOUT) {

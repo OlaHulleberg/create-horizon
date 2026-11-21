@@ -1430,7 +1430,9 @@ pub(super) fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
         }
     });
     with_world(|w| {
-        w.load_windmills(dim, windmills.into_iter());
+        for (p, m) in windmills {
+            w.read_windmill(dim, p, m);
+        }
         w.dims[dim].chassis_range.extend(ranges);
         w.dims[dim].scroll_options.extend(modes);
         for (p, m) in pistons {
