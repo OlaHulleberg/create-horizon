@@ -6,9 +6,11 @@
 //! the part's ghost slots (an item threshold's item, a fluid threshold's bucket, a redstone
 //! link's two frequencies) take ghost copies of its stacks (`ScheduleMenu`).
 //!
-//! Left out: the screen is the mod's own, not yet a blockless menu (`API_GAPS.md`), and the
-//! inventory shown is a copy the server sent when it opened: clicking a slot carries a ghost
-//! copy of its stack, never the stack itself (as the filters' screens do).
+//! Left out (no API for it): a mod menu's screen always shows the player's inventory, and Create
+//! hides it while no part is edited (`ScheduleMenu.InactiveSlot.isActive`; `set_screen_slot`
+//! hides container slots only). So the screen is the mod's own and the inventory shown is a copy
+//! the server sent when it opened: clicking a slot carries a ghost copy of its stack, never the
+//! stack itself.
 
 use super::gui::{Reader, click_sound, icon_button, inside, millis, put_i32, tooltip, tr};
 use crate::glue::items::filter_screen::{click_inventory, stack_bytes, stack_of};
