@@ -102,8 +102,7 @@ impl Run {
                 .belt_below(pos)
                 .filter(|s| s.slope == belt::Slope::Horizontal);
             let Some(seg) = seg.filter(|_| self.cased_below(pos)) else {
-                // `destroyBlock(pos, true)`: its drop is native item flight.
-                self.set(pos, AIR);
+                self.break_block(pos, false);
                 continue;
             };
             let axis = seg.facing.axis();

@@ -124,7 +124,7 @@ impl Run {
     /// wheel too (`destroyBlock(master, true)`); the engine recorded the wheels it broke.
     pub(super) fn break_wheels(&mut self) {
         for master in self.w.take_broken_wheels(0) {
-            self.set(master, AIR);
+            self.break_block(master, false);
         }
     }
 

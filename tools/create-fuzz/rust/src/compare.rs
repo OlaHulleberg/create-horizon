@@ -1,7 +1,7 @@
 //! Compares two snapshots block by block.
 
 use crate::scenario::{Kinetic, Snapshot, parse_state};
-use crate::transport::DroppedItem;
+use crate::transport::{DroppedItem, Placed};
 
 /// Float tolerance: Create's figures are f32 sums of small products.
 const EPS: f32 = 1e-3;
@@ -187,33 +187,77 @@ pub fn diff(java: &Snapshot, rust: &Snapshot) -> Vec<String> {
     out
 }
 
-/// The same item entities, in any order, at the same place and motion within the tolerance.
-fn drops_match(java: &[DroppedItem], rust: &[DroppedItem]) -> bool {
-    let sorted = |v: &[DroppedItem]| {
-        let mut v = v.to_vec();
-        v.sort_by(|a, b| {
-            (a.tick, &a.stack.item, a.stack.count)
-                .cmp(&(b.tick, &b.stack.item, b.stack.count))
-                .then_with(|| {
-                    a.pos
-                        .iter()
-                        .zip(&b.pos)
-                        .map(|(x, y)| x.total_cmp(y))
-                        .find(|o| o.is_ne())
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-        });
-        v
+/// The same item entities, in any order. A drop placed exactly on one side has one at the same
+/// place and motion within the tolerance on the other. The rest agree in how many of each item
+/// joined in each tick inside each block, but for drops that flew a tick before they were
+/// observed, which only agree in how many of each item joined in each tick.
+fn drops_match(a: &[DroppedItem], b: &[DroppedItem]) -> bool {
+    use std::collections::BTreeMap;
+    let mut a: Vec<&DroppedItem> = a.iter().collect();
+    let mut b: Vec<&DroppedItem> = b.iter().collect();
+    if !take_exact(&mut a, &mut b) || !take_exact(&mut b, &mut a) {
+        return false;
+    }
+    type Key = (u32, String, Option<[i32; 3]>);
+    let add = |m: &mut BTreeMap<Key, u32>, d: &DroppedItem, block: bool| {
+        let at = block.then(|| d.pos.map(|v| v.floor() as i32));
+        *m.entry((d.tick, d.stack.item.clone(), at)).or_default() += u32::from(d.stack.count);
     };
+    let flown = |d: &DroppedItem| d.placed == Some(Placed::Flown);
+    let (mut ab, mut bb) = (BTreeMap::new(), BTreeMap::new());
+    for d in a.iter().filter(|d| !flown(d)) {
+        add(&mut ab, d, true);
+    }
+    for d in b.iter().filter(|d| !flown(d)) {
+        add(&mut bb, d, true);
+    }
+    let (mut a_left, mut b_left) = (BTreeMap::new(), BTreeMap::new());
+    for (k, n) in &ab {
+        let m = bb.get(k).copied().unwrap_or(0);
+        if *n > m {
+            *a_left.entry((k.0, k.1.clone(), None)).or_default() += n - m;
+        }
+    }
+    for (k, n) in &bb {
+        let m = ab.get(k).copied().unwrap_or(0);
+        if *n > m {
+            *b_left.entry((k.0, k.1.clone(), None)).or_default() += n - m;
+        }
+    }
+    let (mut a_flown, mut b_flown) = (BTreeMap::new(), BTreeMap::new());
+    for d in a.iter().filter(|d| flown(d)) {
+        add(&mut a_flown, d, false);
+    }
+    for d in b.iter().filter(|d| flown(d)) {
+        add(&mut b_flown, d, false);
+    }
+    a_left == b_flown && b_left == a_flown
+}
+
+/// Pairs each of `known`'s exactly placed drops with one of `other`'s at the same tick, stack,
+/// place and motion, taking both out. False when one has none.
+fn take_exact(known: &mut Vec<&DroppedItem>, other: &mut Vec<&DroppedItem>) -> bool {
     let near =
         |a: &[f64; 3], b: &[f64; 3]| a.iter().zip(b).all(|(x, y)| close(*x as f32, *y as f32));
-    java.len() == rust.len()
-        && sorted(java).iter().zip(&sorted(rust)).all(|(j, r)| {
-            j.tick == r.tick
-                && j.stack == r.stack
-                && near(&j.pos, &r.pos)
-                && near(&j.motion, &r.motion)
-        })
+    let mut i = 0;
+    while i < known.len() {
+        let k = known[i];
+        if k.placed != Some(Placed::Exact) {
+            i += 1;
+            continue;
+        }
+        let Some(j) = other.iter().position(|o| {
+            o.tick == k.tick
+                && o.stack == k.stack
+                && near(&o.pos, &k.pos)
+                && near(&o.motion, &k.motion)
+        }) else {
+            return false;
+        };
+        other.remove(j);
+        known.remove(i);
+    }
+    true
 }
 
 /// The block names differ, or a property both sides name has another value.
@@ -462,26 +506,43 @@ mod tests {
         assert_eq!(diff(&j, &r), ["network partitions differ"]);
     }
     #[test]
-    fn drops_compare_in_any_order_within_tolerance() {
-        let drop = |tick, item: &str, x| crate::transport::DroppedItem {
+    fn drops_compare_by_how_they_were_placed() {
+        use crate::transport::{DroppedItem, Placed, Stack};
+        let drop = |tick, item: &str, count, x, placed| DroppedItem {
             tick,
-            stack: crate::transport::Stack {
+            stack: Stack {
                 item: item.into(),
-                count: 1,
+                count,
             },
             pos: [x, 9.0625, 0.5],
             motion: [0.1, -0.2, 0.0],
+            placed,
         };
-        let j = Snapshot {
-            drops: Some(vec![drop(4, "a", 1.5), drop(3, "b", 1.5)]),
+        let java = |v| Snapshot {
+            drops: Some(v),
             ..Snapshot::default()
         };
-        let mut r = Snapshot {
-            drops: Some(vec![drop(3, "b", 1.5), drop(4, "a", 1.500_000_1)]),
-            ..Snapshot::default()
-        };
+        let j = java(vec![
+            drop(4, "a", 1, 1.5, None),
+            drop(3, "b", 2, 2.3, None),
+            drop(3, "b", 1, 2.9, None),
+            drop(5, "c", 1, 7.2, None),
+        ]);
+        let mut r = java(vec![
+            drop(3, "b", 3, 2.5, Some(Placed::Spread)),
+            drop(4, "a", 1, 1.500_000_1, Some(Placed::Exact)),
+            drop(5, "c", 1, 6.9, Some(Placed::Flown)),
+        ]);
         assert!(diff(&j, &r).is_empty());
-        r.drops = Some(vec![drop(3, "b", 1.5), drop(4, "a", 1.6)]);
+        assert!(diff(&r, &j).is_empty());
+        assert!(diff(&j, &j).is_empty());
+        r.drops.as_mut().unwrap()[1].pos[0] = 1.6;
+        assert!(diff(&j, &r)[0].starts_with("drops:"));
+        r.drops.as_mut().unwrap()[1].pos[0] = 1.5;
+        r.drops.as_mut().unwrap()[0].pos[0] = 3.5;
+        assert!(diff(&j, &r)[0].starts_with("drops:"));
+        r.drops.as_mut().unwrap()[0].pos[0] = 2.5;
+        r.drops.as_mut().unwrap()[2].stack.count = 2;
         assert!(diff(&j, &r)[0].starts_with("drops:"));
         r.drops = None;
         assert!(diff(&j, &r).is_empty());

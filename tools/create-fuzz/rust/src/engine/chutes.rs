@@ -348,14 +348,18 @@ impl Run {
                 None
             }
             Fall::Out => {
+                // `handleDownwardOutput`: 12/16 below the centre, falling a quarter block a tick.
                 self.chute_stacks.remove(&pos);
+                let at = [pos[0], pos[1], pos[2]].map(|v| f64::from(v) + 0.5);
+                let at = [at[0], at[1] - 0.75, at[2]];
+                self.spawn_item(at, [0.0, -0.25, 0.0], &stack.item, stack.count);
                 None
             }
         }
     }
     /// `rise` (`handleUpwardOutput`): into the chute above if it is empty, takes the stack and
-    /// does not fall, else the depot above, else out of the top when nothing solid is over it
-    /// (native item flight); it waits in the middle while the way is shut.
+    /// does not fall, else the depot above, else out of the top when nothing solid is over it;
+    /// it waits in the middle while the way is shut.
     fn chute_rise(
         &mut self,
         pos: Pos,
@@ -407,10 +411,12 @@ impl Run {
                 }
             },
             Fall::Out => {
-                self.notes.push(format!(
-                    "adapter gap: chute at {pos:?} blows its stack out of the top (native item flight)"
-                ));
+                // `handleUpwardOutput`: half a block over the centre, at twice the chute's speed.
                 self.chute_stacks.remove(&pos);
+                let at = [pos[0], pos[1], pos[2]].map(|v| f64::from(v) + 0.5);
+                let at = [at[0], at[1] + 0.5, at[2]];
+                let v = [0.0, f64::from(motion) * 2.0, 0.0];
+                self.spawn_item(at, v, &stack.item, stack.count);
                 None
             }
         }

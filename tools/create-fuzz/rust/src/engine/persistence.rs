@@ -172,7 +172,7 @@ impl Run {
         loop {
             for event in events {
                 if let create_engine::kinetics::Event::Break { pos } = event {
-                    self.set(pos, AIR);
+                    self.break_block(pos, false);
                     self.apply_chain_shapes();
                 }
             }

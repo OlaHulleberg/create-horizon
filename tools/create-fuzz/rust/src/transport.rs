@@ -76,15 +76,32 @@ pub struct Outcome {
     pub handler: Option<bool>,
 }
 
-/// An item entity Create put into the world (`new ItemEntity`, `setDeltaMovement`), observed as
-/// the harness discards it at the end of the server tick that spawned it: that tick, its stack,
-/// its position from the case origin and its motion.
+/// An item entity that joined the world, observed as the harness discards it at the end of the
+/// server tick it joined in: that tick, its stack, its position from the case origin and its
+/// motion. Java reports no `placed`: what the driver knows of how the position came about.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DroppedItem {
     pub tick: u32,
     pub stack: Stack,
     pub pos: [f64; 3],
     pub motion: [f64; 3],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placed: Option<Placed>,
+}
+
+/// How a drop's position and motion came about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Placed {
+    /// Computed without randomness after the level's entity pass: compared within the tolerance.
+    Exact,
+    /// Spread at random inside the block it came from (`Block.popResource`,
+    /// `Containers.dropItemStack`): only that block is compared, and counts per item, since
+    /// `dropItemStack` splits a stack at random.
+    Spread,
+    /// Put before the level's entity pass, so it flew a tick before it was observed, which
+    /// the driver does not follow: only the stack is compared.
+    Flown,
 }
 
 /// Controlled item histories on player-connected belts.

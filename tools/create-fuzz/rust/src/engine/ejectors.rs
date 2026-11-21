@@ -79,8 +79,8 @@ impl Run {
         self.ejector_insert(p, s, motion, simulate)
     }
     /// glue/logistics/depot.rs `land_incoming`: the depot's incoming stacks slide, and one at
-    /// the centre becomes the held stack or joins it. One that cannot stack with it drops at
-    /// the centre as an item, whose life the driver cannot follow.
+    /// the centre becomes the held stack or joins it. One that cannot stack with it drops half
+    /// a block over the centre (`Containers.dropItemStack`).
     pub(super) fn land_incoming(&mut self, p: Pos) {
         for a in self.w.tick_incoming(0, p, |_| false) {
             match a {
@@ -102,9 +102,10 @@ impl Run {
                         {
                             h.count += count;
                         }
-                        _ => self.notes.push(format!(
-                            "adapter gap: depot at {p:?} drops {count} {item} (native item flight)"
-                        )),
+                        _ => {
+                            let at = [p[0], p[1], p[2]].map(|v| f64::from(v) + 0.5);
+                            self.drop_item_stack([at[0], at[1] + 0.5, at[2]], &item, count);
+                        }
                     }
                 }
             }
@@ -236,24 +237,12 @@ impl Run {
             d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
         }
     }
-    /// Ejectors after the walk (`flush_ejectors`): the change journal settles. Removed
-    /// ejectors' stacks in flight (`dropFlyingItems`) and removed depots' incoming stacks
-    /// (`send_changed_depots`, `DepotBehaviour.destroy`) drop as items. A block removed by an
-    /// input drops them before the level's entities tick, so they fly a tick before the harness
-    /// discards them, and `Block.popResource` places them at random: the driver cannot follow
-    /// either.
+    /// Ejectors after the walk (`flush_ejectors`): the change journal settles and removed
+    /// ejectors' stacks in flight drop (`dropFlyingItems`), as do removed depots' merging
+    /// stacks (`send_changed_depots`, `DepotBehaviour.destroy`).
     pub(super) fn ejectors_ticked(&mut self) {
         self.w.dims[0].ejector_changes.clear();
-        for (_, _, item, count) in std::mem::take(&mut self.w.dims[0].ejector_drops) {
-            self.notes.push(format!(
-                "adapter gap: removed ejector drops {count} {item} in flight (native item flight)"
-            ));
-        }
-        for (p, item, count) in std::mem::take(&mut self.w.dims[0].depot_drops) {
-            self.notes.push(format!(
-                "adapter gap: removed depot at {p:?} drops {count} {item} (native item flight)"
-            ));
-        }
+        self.flush_block_drops();
     }
     /// interaction/values.rs `B::WeightedEjector`: row 0's value is `maxStackSize`.
     pub(super) fn ejector_stack_size(&mut self, p: Pos, pick: create_engine::board::Settings) {

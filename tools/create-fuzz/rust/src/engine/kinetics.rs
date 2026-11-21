@@ -1,9 +1,12 @@
 use super::*;
 
 impl Run {
-    /// One server tick: the level's, then the harness's disposal of item entities.
+    /// One server tick: the level's, then the harness's disposal of item entities. What the
+    /// driver ticks follows the level's entity pass.
     pub(super) fn tick(&mut self) {
+        self.entity_pass_done = true;
         self.level_tick();
+        self.flush_block_drops();
         self.dispose_item_entities();
     }
 

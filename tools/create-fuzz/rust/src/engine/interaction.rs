@@ -101,7 +101,7 @@ impl Run {
                 interact.as_ref().map(|i| i.item.as_str()),
             ),
             Action::ChainLink { target, connect } => self.chain_link(p, *target, *connect),
-            Action::Remove => self.set(p, AIR),
+            Action::Remove => self.break_block(p, true),
             Action::Signal { strength } => self.set(p, 3 + u32::from(*strength)),
             Action::Use {
                 item,
