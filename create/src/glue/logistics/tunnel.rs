@@ -8,6 +8,7 @@ use super::belt::{belt_segment, handle_insertion};
 use super::info_at;
 use create_engine::Block;
 use create_engine::belt::Slope;
+use create_engine::board::{self, FilterClick};
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::tunnel;
 use mod_api::HostBlockStates;
@@ -403,10 +404,11 @@ pub fn use_tunnel_filter(
         return false;
     };
     let local = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(pos[i]));
-    match tunnel::filter_click(axis, shape, side, local, held.as_deref()) {
-        tunnel::FilterClick::Miss => return false,
-        tunnel::FilterClick::Keep => return true,
-        tunnel::FilterClick::Set => {}
+    let slot = tunnel::filter_slot(axis, shape, side);
+    match board::filter_click(slot, local, held.as_deref()) {
+        FilterClick::Miss => return false,
+        FilterClick::Keep => return true,
+        FilterClick::Set => {}
     }
     let filter = filters::take_filter(lv.host, p, click.hand);
     let dim = lv.dim;

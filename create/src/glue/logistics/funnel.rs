@@ -9,6 +9,7 @@ use super::belt::{belt_segment, insert_into_from};
 use super::info_at;
 use super::items::{self, face, random_angle, upright};
 use create_engine::Block;
+use create_engine::board::{self, FilterClick};
 use create_engine::kinetics::{Axis, Dir};
 use mod_api::{Direction, HostBlockStates, StateConstraint};
 
@@ -51,27 +52,19 @@ pub fn use_funnel_filter(
     let Some(p) = lv.host.player(click.player) else {
         return false;
     };
-    // `ValueSettingsInputHandler.canInteract`, then `canShortInteract` (a wrench or an arm is
-    // used on the block instead).
     if !crate::glue::interaction::values::may_use_value_box(&*lv.host, p) {
         return false;
     }
     let held = click.stack.map(|s| items::id_of(&*lv.host, s));
-    if held
-        .as_deref()
-        .is_some_and(|h| matches!(h, "create:wrench" | "create:mechanical_arm"))
-    {
-        return false;
-    }
     let Some(side) = Dir::from_offset(click.hit.face) else {
         return false;
     };
-    let Some(slot) = create_engine::funnel::filter_slot(f.facing, f.belt, side) else {
-        return false;
-    };
+    let slot = create_engine::funnel::filter_slot(f.facing, f.belt, side);
     let local = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(pos[i]));
-    if !create_engine::board::hits_box(slot, local) {
-        return false;
+    match board::filter_click(slot, local, held.as_deref()) {
+        FilterClick::Miss => return false,
+        FilterClick::Keep => return true,
+        FilterClick::Set => {}
     }
     // With its amount board (`acceptsValueSettings`), the client holds the press: its release
     // (a short click) or the board comes on `create:value_settings` (`amount`).

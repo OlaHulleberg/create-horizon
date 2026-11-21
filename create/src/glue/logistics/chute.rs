@@ -10,6 +10,7 @@ use super::{info_at, mark_touched};
 use crate::glue::contraptions::actors;
 use crate::glue::items::filters;
 use create_engine::Block;
+use create_engine::board::{self, FilterClick};
 use create_engine::kinetics::Dir;
 use mod_api::{BlockClick, Direction, HostBlockStates, ItemStack, Tag};
 
@@ -880,18 +881,11 @@ pub fn use_smart_chute(lv: &mut ServerLevel<'_>, pos: [i32; 3], click: &BlockCli
         return false;
     };
     let local = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(pos[i]));
-    let Some(slot) = create_engine::chute::filter_slot(side) else {
-        return false;
-    };
-    if !create_engine::board::hits_box(slot, local) {
-        return false;
-    }
-    // `canShortInteract`: a wrench or a mechanical arm is used on the block instead.
-    if held_id
-        .as_deref()
-        .is_some_and(|h| matches!(h, "create:wrench" | "create:mechanical_arm"))
-    {
-        return false;
+    let slot = create_engine::chute::filter_slot(side);
+    match board::filter_click(slot, local, held_id.as_deref()) {
+        FilterClick::Miss => return false,
+        FilterClick::Keep => return true,
+        FilterClick::Set => {}
     }
     // With its amount board (`acceptsValueSettings`), the client holds the press: its release
     // (a short click) or the board comes on `create:value_settings` (`amount`).

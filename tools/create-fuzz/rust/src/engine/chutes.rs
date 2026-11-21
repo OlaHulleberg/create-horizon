@@ -14,6 +14,7 @@ use super::*;
 use crate::transport::Stack;
 use create_engine::{
     Block, belt,
+    board::{self, FilterClick},
     chute::{self, Fall, Shape},
     kinetics::Dir,
 };
@@ -414,10 +415,8 @@ impl Run {
             }
         }
     }
-    /// `use_smart_chute`: a click on a smart chute's filter slot (a horizontal side), not
-    /// sneaking, with neither a wrench nor an arm, sets its filter from the held item unless its
-    /// amount board shows (it extracts: the block its stacks come from is neither a chute nor
-    /// replaceable; the client then waits for the release). True when it was the slot's.
+    /// The glue's `use_smart_chute`. Its amount board shows while it extracts: the block its
+    /// stacks come from is neither a chute nor replaceable.
     pub(super) fn smart_chute_filter_use(
         &mut self,
         p: Pos,
@@ -429,13 +428,11 @@ impl Run {
         if self.chute_block(p).map(|(b, _)| b) != Some(Block::SmartChute) || sneaking {
             return false;
         }
-        let Some(slot) = chute::filter_slot(face) else {
-            return false;
-        };
-        if !create_engine::board::hits_box(slot, hit)
-            || matches!(item, "create:wrench" | "create:mechanical_arm")
-        {
-            return false;
+        let held = (item != "minecraft:air").then_some(item);
+        match board::filter_click(chute::filter_slot(face), hit, held) {
+            FilterClick::Miss => return false,
+            FilterClick::Keep => return true,
+            FilterClick::Set => {}
         }
         let up = self.chute_motion(p) < 0.;
         let from = [p[0], p[1] + if up { 1 } else { -1 }, p[2]];
