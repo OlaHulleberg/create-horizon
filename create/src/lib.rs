@@ -399,6 +399,14 @@ impl Hooks for Create {
         }
     }
 
+    fn living_breathe(
+        &self,
+        _context: &dyn mod_api::LoopContext,
+        event: &mut mod_api::LivingBreatheEvent<'_>,
+    ) {
+        glue::equipment::living_breathe(event);
+    }
+
     fn living_incoming_damage(
         &self,
         level: &mut dyn mod_api::HitHost,

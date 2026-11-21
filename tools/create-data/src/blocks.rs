@@ -3821,9 +3821,10 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
         props.insert("light".into(), json!(5));
     }
     // Copycats draw their material through their block entity (`CopycatModel`'s `ModelData`),
-    // with no model of their own in the chunk mesh.
+    // with no model of their own in the chunk mesh, and glow as it (`hasDynamicLightEmission`).
     if matches!(b.name.as_str(), "copycat_panel" | "copycat_step") {
         props.insert("render_shape".into(), json!("ENTITYBLOCK_ANIMATED"));
+        props.insert("dynamic_light".into(), json!(true));
     }
     // `noOcclusion()` on a block with its template's full cube: the faces beside it are drawn
     // and light reaches inside, where its block entity draws its parts (a gearbox's shafts, an
@@ -4628,6 +4629,7 @@ mod tests {
         );
         let doc = declare("copycat_panel", (3.0, 6.0, 64));
         assert_eq!(doc["properties"]["render_shape"], "ENTITYBLOCK_ANIMATED");
+        assert_eq!(doc["properties"]["dynamic_light"], true);
         assert_eq!(states_and_default(&doc).0, 12);
         assert_eq!(
             doc["shapes"]["values"]["north"][0],

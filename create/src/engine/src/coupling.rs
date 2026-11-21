@@ -535,23 +535,22 @@ pub struct Hard {
     pub vehicle: bool,
 }
 
-/// What the hard step did to a cart: its new position, and whether it was off a rail (moved
-/// straight, its motion then kept at 0.95).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Moved {
-    pub pos: [f64; 3],
-    pub off_rail: bool,
+/// The level as the hard step moves carts in it.
+pub trait HardMoves {
+    /// The rail shape of the block at a position, if it is a rail.
+    fn rail(&self, block: [i32; 3]) -> Option<RailShape>;
+    /// `MinecartSim2020.moveCartAlongTrack`'s end: cart `i` is put at `pos`.
+    fn put(&mut self, i: usize, pos: [f64; 3]);
+    /// `cart.move(MoverType.SELF, correction)`, then its motion scaled by 0.95: where cart `i`
+    /// is after.
+    fn move_off_rail(&mut self, i: usize, correction: [f64; 3]) -> [f64; 3];
 }
 
 /// `CouplingPhysics.hardCollisionStep`: carts whose distance is off their `length` by an
 /// eighth or more are moved back toward it along their rails, the first half the way, then
 /// the other all of it, then the first again (a cart that can't add motion half as far), each
-/// move at most `min(1.75, max_speed)`. Each cart's new place, or None where it stayed.
-pub fn hard_step(
-    bodies: [Hard; 2],
-    length: f64,
-    rail: &impl Fn([i32; 3]) -> Option<RailShape>,
-) -> [Option<Moved>; 2] {
+/// move at most `min(1.75, max_speed)`.
+pub fn hard_step(bodies: [Hard; 2], length: f64, world: &mut impl HardMoves) {
     // The second can't move and the first can: they swap.
     let order = if !bodies[1].can_add_motion && bodies[0].can_add_motion {
         [1, 0]
@@ -559,7 +558,6 @@ pub fn hard_step(
         [0, 1]
     };
     let mut pos = bodies.map(|b| b.pos);
-    let mut out = [None, None];
     let mut first = true;
     for k in [0, 1, 0] {
         let (i, j) = (order[k], order[1 - k]);
@@ -573,7 +571,8 @@ pub fn hard_step(
         if !b.can_add_motion {
             magnitude /= 2.0;
         }
-        let on = rail_of(pos[i], rail);
+        let rail = |p: [i32; 3]| world.rail(p);
+        let on = rail_of(pos[i], &rail);
         let correction = match on {
             Some((_, shape)) => sub(
                 follow_link_on_rail(link, pos[i], f64::from(magnitude), shape.vec()),
@@ -582,21 +581,18 @@ pub fn hard_step(
             None => normalize(link).map(|c| c * f64::from(magnitude)),
         };
         let correction = clamp(correction, b.max_speed.min(1.75));
-        let moved = match on {
+        pos[i] = match on {
             Some((block, shape)) => {
                 let scale = if b.vehicle { 0.75 } else { 1.0 };
-                move_along_track(pos[i], correction, block, shape, scale, b.max_speed, rail)
+                let to =
+                    move_along_track(pos[i], correction, block, shape, scale, b.max_speed, &rail);
+                world.put(i, to);
+                to
             }
-            None => add(pos[i], correction),
+            None => world.move_off_rail(i, correction),
         };
-        pos[i] = moved;
-        out[i] = Some(Moved {
-            pos: moved,
-            off_rail: on.is_none(),
-        });
         first = false;
     }
-    out
 }
 
 /// `OrientedContraptionEntity.updateOrientation` on a coupling: the yaw and pitch (degrees) of
@@ -787,6 +783,47 @@ impl Drawn {
 mod tests {
     use super::*;
 
+    struct Level<F> {
+        rails: F,
+        at: [[f64; 3]; 2],
+        put: [Option<[f64; 3]>; 2],
+        moves: Vec<(usize, [f64; 3])>,
+        wall: Option<f64>,
+    }
+
+    impl<F: Fn([i32; 3]) -> Option<RailShape>> Level<F> {
+        fn new(rails: F) -> Self {
+            Level {
+                rails,
+                at: [[0.5, 64.0625, 0.5], [4.0, 64.0625, 0.5]],
+                put: [None, None],
+                moves: Vec::new(),
+                wall: None,
+            }
+        }
+    }
+
+    impl<F: Fn([i32; 3]) -> Option<RailShape>> HardMoves for Level<F> {
+        fn rail(&self, block: [i32; 3]) -> Option<RailShape> {
+            (self.rails)(block)
+        }
+        fn put(&mut self, i: usize, pos: [f64; 3]) {
+            self.at[i] = pos;
+            self.put[i] = Some(pos);
+        }
+        fn move_off_rail(&mut self, i: usize, correction: [f64; 3]) -> [f64; 3] {
+            self.moves.push((i, correction));
+            let mut to = add(self.at[i], correction);
+            if i == 0
+                && let Some(x) = self.wall
+            {
+                to[0] = to[0].min(x);
+            }
+            self.at[i] = to;
+            to
+        }
+    }
+
     #[test]
     fn the_hard_step_pulls_carts_back_to_their_length() {
         let flat = |p: [i32; 3]| (p[1] == 64).then_some(RailShape::EastWest);
@@ -798,19 +835,28 @@ mod tests {
         };
         // 3 long, 3.5 apart: the first moves a quarter toward the second, the second the other
         // quarter, and then they are at their length.
-        let [a, b] = hard_step([body(0.5), body(4.0)], 3.0, &flat);
-        let (a, b) = (a.unwrap().pos, b.unwrap().pos);
+        let mut w = Level::new(flat);
+        hard_step([body(0.5), body(4.0)], 3.0, &mut w);
+        let (a, b) = (w.put[0].unwrap(), w.put[1].unwrap());
         assert!((a[0] - 0.75).abs() < 1e-6, "{a:?}");
         assert!(
             (b[0] - 3.75).abs() < 1e-6 && (b[1] - 64.0625).abs() < 1e-9,
             "{b:?}"
         );
         // Within an eighth: nothing moves.
-        assert_eq!(hard_step([body(0.5), body(3.6)], 3.0, &flat), [None, None]);
-        // Off a rail: straight along the link.
-        let none = |_: [i32; 3]| None;
-        let [a, _] = hard_step([body(0.5), body(4.0)], 3.0, &none);
-        assert!(a.unwrap().off_rail);
+        let mut w = Level::new(flat);
+        hard_step([body(0.5), body(3.6)], 3.0, &mut w);
+        assert_eq!((w.put, w.moves.len()), ([None, None], 0));
+        // Off a rail: moved with collisions straight along the link, the next move measured
+        // from where the last one left the cart. A wall stops the first a quarter short.
+        let mut w = Level::new(|_| None);
+        w.wall = Some(0.6);
+        hard_step([body(0.5), body(4.0)], 3.0, &mut w);
+        assert_eq!(w.put, [None, None]);
+        assert_eq!(w.moves.len(), 2);
+        assert!((w.moves[0].1[0] - 0.25).abs() < 1e-6, "{:?}", w.moves);
+        assert!((w.at[0][0] - 0.6).abs() < 1e-9, "{:?}", w.at);
+        assert!((w.at[1][0] - 3.6).abs() < 1e-6, "{:?}", w.at);
         // A cart with a passenger moves three quarters as far along its rail.
         let p = move_along_track(
             [0.5, 64.0625, 0.5],

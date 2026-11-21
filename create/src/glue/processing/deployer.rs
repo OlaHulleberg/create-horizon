@@ -10,9 +10,9 @@
 //! (`item.use`: a bucket fills or empties, a bottle fills, a snowball is thrown); its punch the
 //! game's attack and block break. Sand paper polishes what lies under it. A player in front
 //! whose interaction passed is fed what it holds, if it is a food they can eat or a deployable
-//! drink (`finishUsingItem` on them, `finish_using`). Left out: the slower digging of a block whose drops need another tool
-//! (`requiresCorrectToolForDrops`), the API having no query for it, so every block digs at its
-//! harvestable speed.
+//! drink (`finishUsingItem` on them, `finish_using`). A punch digs a block whose drops need
+//! another tool slower (`getDestroyProgress`) by vanilla's rule for the held stack; a block's own
+//! `canHarvestBlock` (a copycat's material) is not asked of the deployer's player there.
 
 use super::takes_from_side;
 use super::{press, recipes, stacks};
@@ -1036,12 +1036,13 @@ fn punch(
     let Some(state) = lv.block_state(at) else {
         return Vec::new();
     };
-    let hardness = mod_api::HostBlockStates::block_states(&*lv.host)
-        .destroy_speed(state)
-        .unwrap_or(0.0);
+    let facts = mod_api::HostBlockStates::block_states(&*lv.host);
+    let hardness = facts.destroy_speed(state).unwrap_or(0.0);
     let Some(tool) = stacks::stack(&*lv.host, &held.0, 1) else {
         return Vec::new();
     };
+    let harvest = facts.requires_correct_tool(state) != Some(true)
+        || facts.is_correct_tool_for_drops(&tool, state) == Some(true);
     let per_hit = deployer::destroy_progress(deployer::Dig {
         hardness,
         tool_speed: lv
@@ -1050,8 +1051,7 @@ fn punch(
             .unwrap_or(1.0),
         // Held stacks carry no enchantments here.
         efficiency: 0.0,
-        // `requiresCorrectToolForDrops` can't be asked (the module doc).
-        harvest: true,
+        harvest,
     });
     // `level.playSound(.., getHitSound(), NEUTRAL, .25, 1)`.
     if let Some(sound) = mod_api::HostBlockStates::block_states(&*lv.host).sound(state) {

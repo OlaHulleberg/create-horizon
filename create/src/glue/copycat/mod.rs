@@ -10,10 +10,9 @@
 //! A copycat item clicked on its kind places the next one beside it (`CopycatPanelBlock` and
 //! `CopycatStepBlock`'s placement helpers). A copycat sounds as its material (`sound.rs`).
 //!
-//! Left out, for want of API:
-//! - The material's light and friction (`CopycatBlock.getLightEmission`, `getFriction`): the
-//!   `light_emission` and `friction` parts could answer per copycat, but no API reads a state's
-//!   light emission or friction (`API_GAPS.md`).
+//! It glows and slides as its material (`CopycatBlock.getLightEmission`, `getFriction`), read
+//! from what its block entity shows, on either side. A client asks a cell's light once, so it
+//! shows a new material's light only once it is sent the chunk again (`API_GAPS.md`).
 //!
 //! A copycat's block model is not drawn (`render_shape` `ENTITYBLOCK_ANIMATED` in its
 //! declaration): its block entity draws the material cut to its box, or the copycat base when it
@@ -383,7 +382,8 @@ fn tick(lv: &mut ServerLevel<'_>) {
     }
 }
 
-/// What the copycat at `pos` shows, put in its block entity for its clients.
+/// What the copycat at `pos` shows, put in its block entity for its clients, and its light
+/// checked again (`CopycatBlockEntity.redraw`, `updateLight`).
 fn show(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let Some(entity) = lv.host.block_entity(lv.level, pos) else {
         return;
@@ -408,6 +408,7 @@ fn show(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         (SPECIAL.into(), Tag::Byte(special)),
     ]);
     let _ = entity.merge_data(&mut *lv.host, data);
+    let _ = lv.level.check_light(&mut *lv.host, pos);
 }
 
 /// `CopycatBlockEntity.setMaterial`: a new block takes the orientation of a neighbour copycat
