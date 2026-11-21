@@ -248,19 +248,20 @@ impl Run {
             };
             let mut one = belt::Item::new(&item, count, 180, false);
             one.progress = b.stack_progress.clone();
-            let outputs: Vec<(Pos, Dir)> = group
-                .iter()
-                .enumerate()
-                .flat_map(|(i, g)| self.brass_outputs_of(*g, i == 0))
-                .collect();
-            let any = outputs
-                .into_iter()
-                .any(|(g, d)| self.brass_insert(g, d, &one, true).is_some());
-            if !any {
-                self.brass_save(t, &b);
-                return;
+            let mut targets = tunnel::Targets::default();
+            for (i, g) in group.iter().enumerate() {
+                for (g2, d) in self.brass_outputs_of(*g, i == 0) {
+                    if self.brass_insert(g2, d, &one, true).is_none() {
+                        continue;
+                    }
+                    if self.brass_filter_empty(g2, d) {
+                        targets.plain.push((g2, d));
+                    } else {
+                        targets.filtered.push((g2, d));
+                    }
+                }
             }
-            b.schedule_distribution();
+            b.gathered(targets);
             self.brass_save(t, &b);
             return;
         }
@@ -269,28 +270,15 @@ impl Run {
             self.brass_save(t, &b);
             return;
         };
-        let group = self.brass_group(t, axis);
         let mut one = belt::Item::new(&item, count, 180, false);
         one.progress = b.stack_progress.clone();
-        let mut filtered = Vec::new();
-        let mut plain = Vec::new();
-        for (i, g) in group.iter().enumerate() {
-            for (g2, d) in self.brass_outputs_of(*g, i == 0) {
-                if g2 == t && Some(d) == b.entered_from {
-                    continue;
-                }
-                if self.brass_insert(g2, d, &one, true).is_none() {
-                    continue;
-                }
-                if self.brass_filter_empty(g2, d) {
-                    plain.push((g2, d));
-                } else {
-                    filtered.push((g2, d));
-                }
-            }
-        }
+        let lists = {
+            let brass = &self.w.dims[0].brass;
+            b.targets
+                .to_hand_out(t, b.entered_from, |p| brass.contains_key(&p))
+        };
         let mut left = count;
-        for outputs in [filtered, plain] {
+        for outputs in lists {
             if left == 0 || outputs.is_empty() {
                 continue;
             }
@@ -329,7 +317,10 @@ impl Run {
     /// The glue's `save` closure in `tick_brass`.
     fn brass_save(&mut self, t: Pos, b: &tunnel::Brass) {
         let d = &mut self.w.dims[0];
-        let changed = d.brass.get(&t).is_some_and(|x| x != b);
+        let changed = d
+            .brass
+            .get(&t)
+            .is_some_and(|x| x.to_saved() != b.to_saved());
         if let Some(x) = d.brass.get_mut(&t) {
             *x = b.clone();
         }

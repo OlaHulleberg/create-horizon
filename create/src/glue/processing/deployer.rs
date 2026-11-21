@@ -230,7 +230,7 @@ pub fn deployer_on_belt(
                 None => rolled(lv, at, &r)
                     .into_iter()
                     .map(|(name, n)| {
-                        let mut out = item.clone();
+                        let mut out = item.processing_copy();
                         out.item = name;
                         out.count = n;
                         out.progress = None;
@@ -243,7 +243,7 @@ pub fn deployer_on_belt(
             deployer_used(lv, &mut d, &r, above);
             with_world(|w| w.set_deployer(dim, above, d.clone()));
             Process::Convert {
-                held: press::belt_left(item),
+                held: item.left_after_one(),
                 outputs,
             }
         }

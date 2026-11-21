@@ -21,6 +21,58 @@ pub fn is_funnel(block: crate::Block) -> bool {
 /// `defaultExtractionTimer`.
 pub const EXTRACTION_COOLDOWN: u32 = 8;
 
+/// `FunnelBlockEntity.extractionCooldown`.
+pub fn cooldown(due: u64, now: u64) -> u32 {
+    if due == u64::MAX || due <= now + 1 {
+        return 0;
+    }
+    (due - now - 1).min(u64::from(u32::MAX)) as u32
+}
+
+/// `FunnelBlockEntity.read`'s `TransferCooldown`.
+pub fn due_after(cooldown: u32, now: u64) -> u64 {
+    now + 1 + u64::from(cooldown)
+}
+
+impl crate::world::CreateWorld {
+    /// `FunnelBlockEntity.startCooldown`.
+    pub fn schedule_funnel(&mut self, dim: usize, pos: [i32; 3], due: u64, now: u64) {
+        let d = &mut self.dims[dim];
+        let Some(at) = d.funnels.get_mut(&pos) else {
+            return;
+        };
+        *at = due;
+        if cooldown(due, now) > 0 {
+            d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        }
+    }
+
+    /// `FunnelBlockEntity.write`'s `TransferCooldown`.
+    pub fn column_funnels(&self, dim: usize, cx: i32, cz: i32, now: u64) -> Vec<([i32; 3], u32)> {
+        let mut out: Vec<_> = self.dims[dim]
+            .funnels
+            .iter()
+            .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (cx, cz))
+            .map(|(p, &due)| (*p, cooldown(due, now)))
+            .filter(|&(_, c)| c > 0)
+            .collect();
+        out.sort_by_key(|e| e.0);
+        out
+    }
+
+    /// `FunnelBlockEntity.read`'s `TransferCooldown`.
+    pub fn load_funnels(
+        &mut self,
+        dim: usize,
+        now: u64,
+        saved: impl Iterator<Item = ([i32; 3], u32)>,
+    ) {
+        let d = &mut self.dims[dim];
+        d.funnel_saved
+            .extend(saved.map(|(p, c)| (p, due_after(c, now))));
+    }
+}
+
 /// `FunnelBlockEntity.getAmountToExtract`, up to (no filter set): an andesite funnel's filter
 /// is never active (`supportsFiltering`), so it moves one item at a time; a brass funnel's empty
 /// filter allows a stack.

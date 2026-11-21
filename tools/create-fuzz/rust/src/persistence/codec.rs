@@ -729,6 +729,29 @@ pub fn chutes_from_nbt(data: &Compound) -> Vec<([i32; 3], f32)> {
     }
 }
 
+/// glue/logistics/mod.rs `funnels_to_nbt`.
+pub fn funnels_to_nbt(funnels: &[([i32; 3], u32)]) -> Tag {
+    Tag::IntArray(
+        funnels
+            .iter()
+            .flat_map(|(p, c)| [p[0], p[1], p[2], *c as i32])
+            .collect(),
+    )
+}
+
+/// glue/logistics/mod.rs `funnels_from_nbt`.
+pub fn funnels_from_nbt(data: &Compound) -> Vec<([i32; 3], u32)> {
+    match data.get("funnels") {
+        Some(Tag::IntArray(v)) => v
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|f| ([f[0], f[1], f[2]], f[3].max(0) as u32))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// glue/logistics/mod.rs `brass_to_nbt`: brass tunnels' saved state (`SavedBrass`).
 pub fn brass_to_nbt(brass: &[([i32; 3], create_engine::tunnel::SavedBrass)]) -> Tag {
     Tag::List(
@@ -752,6 +775,18 @@ pub fn brass_to_nbt(brass: &[([i32; 3], create_engine::tunnel::SavedBrass)]) -> 
                 ]);
                 if let Some(d) = b.entered_from {
                     c.insert("StackEnteredFrom".into(), Tag::Int(d as i32));
+                }
+                for (key, list) in [
+                    ("FilteredTargets", &b.targets.filtered),
+                    ("Targets", &b.targets.plain),
+                ] {
+                    if !list.is_empty() {
+                        let v = list
+                            .iter()
+                            .flat_map(|(p, d)| [p[0], p[1], p[2], *d as i32])
+                            .collect();
+                        c.insert(key.into(), Tag::IntArray(v));
+                    }
                 }
                 if let Some((item, n)) = &b.stack {
                     c.insert("Item".into(), Tag::String(item.clone()));
@@ -792,6 +827,19 @@ pub fn brass_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::tunnel::
                     _ => None,
                 };
                 let mode_idx = int("SelectionMode", 0).clamp(0, 6) as usize;
+                let targets = |k: &str| match c.get(k) {
+                    Some(Tag::IntArray(v)) => v
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .filter_map(|t| {
+                            let d = create_engine::kinetics::Dir::ALL
+                                .get(usize::try_from(t[3]).ok()?)?;
+                            Some(([t[0], t[1], t[2]], *d))
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
                 Some((
                     p,
                     create_engine::tunnel::SavedBrass {
@@ -803,6 +851,10 @@ pub fn brass_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::tunnel::
                         synced: flag("SyncedOutput"),
                         connected_left: flag("ConnectedLeft"),
                         connected_right: flag("ConnectedRight"),
+                        targets: create_engine::tunnel::Targets {
+                            filtered: targets("FilteredTargets"),
+                            plain: targets("Targets"),
+                        },
                     },
                 ))
             })
@@ -844,18 +896,23 @@ pub fn brass_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::tunnel::
 #[cfg(test)]
 mod brass_tests {
     use super::*;
+    use create_engine::kinetics::Dir;
 
     #[test]
     fn brass_record_preserves_index_progress_and_synced() {
         let saved = create_engine::tunnel::SavedBrass {
             stack: Some(("minecraft:gold_ingot".into(), 2)),
-            entered_from: Some(create_engine::kinetics::Dir::South),
+            entered_from: Some(Dir::South),
             progress: 7,
             previous_output: 1,
             mode: create_engine::tunnel::Mode::RoundRobin,
             synced: true,
             connected_left: true,
             connected_right: false,
+            targets: create_engine::tunnel::Targets {
+                filtered: vec![([1, 8, 2], Dir::East)],
+                plain: vec![([0, 9, 2], Dir::South), ([0, 9, 2], Dir::West)],
+            },
         };
         let data = Compound::from([("brass".into(), brass_to_nbt(&[([0, 9, 2], saved.clone())]))]);
         assert_eq!(brass_from_nbt(&data), vec![([0, 9, 2], saved)]);

@@ -214,7 +214,7 @@ pub(super) fn spout_on_belt(
                     vec![o]
                 }
             };
-            let held = processing::belt_left(item).map(|h| h.processing_copy());
+            let held = item.left_after_one();
             Process::Convert { held, outputs }
         }
     })

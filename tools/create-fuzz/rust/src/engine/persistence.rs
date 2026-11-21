@@ -229,11 +229,17 @@ impl Run {
             .into_iter()
             .filter(|(p, _)| outside(*p))
             .collect::<Vec<_>>();
+        let mut funnels = codec::funnels_from_nbt(&self.persisted.columns)
+            .into_iter()
+            .filter(|(p, _)| outside(*p))
+            .collect::<Vec<_>>();
+        let now = u64::from(self.now);
         for (cx, cz) in columns {
             motors.extend(self.w.column_settings(0, cx, cz));
             belts.extend(self.w.column_belts(0, cx, cz));
             brass.extend(self.w.column_brass(0, cx, cz));
             chutes.extend(self.w.column_chutes(0, cx, cz));
+            funnels.extend(self.w.column_funnels(0, cx, cz, now));
             let data = crate::persistence::fluids::save_column(&self.w, (cx, cz));
             if data.is_empty() {
                 self.persisted.fluid_columns.remove(&(cx, cz));
@@ -267,6 +273,11 @@ impl Run {
             self.persisted
                 .columns
                 .insert("chutes".into(), codec::chutes_to_nbt(&chutes));
+        }
+        if !funnels.is_empty() {
+            self.persisted
+                .columns
+                .insert("funnels".into(), codec::funnels_to_nbt(&funnels));
         }
     }
     /// A save and reload of the running world: the Java side saves live block entities
@@ -445,6 +456,11 @@ impl Run {
             .load_brass(0, codec::brass_from_nbt(&data).into_iter());
         self.w
             .load_chutes(0, codec::chutes_from_nbt(&data).into_iter());
+        self.w.load_funnels(
+            0,
+            u64::from(self.now),
+            codec::funnels_from_nbt(&data).into_iter(),
+        );
         // ensure_column runs every subsystem's chunk_load before the first entity callback.
         for (_, data) in &fluids.columns {
             crate::persistence::fluids::load_column(&mut self.w, data);

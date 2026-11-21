@@ -206,15 +206,8 @@ impl Run {
                 filled.item = out;
                 filled.count = 1;
                 filled.progress = None;
-                let held = if item.count > 1 {
-                    let mut rest = item.processing_copy();
-                    rest.count -= 1;
-                    Some(rest)
-                } else {
-                    None
-                };
                 belt::Process::Convert {
-                    held,
+                    held: item.left_after_one(),
                     outputs: vec![filled],
                 }
             }

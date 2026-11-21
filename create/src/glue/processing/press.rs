@@ -388,7 +388,7 @@ pub fn press_on_belt(
             results
                 .into_iter()
                 .map(|(name, n)| {
-                    let mut out = item.clone();
+                    let mut out = item.processing_copy();
                     out.item = name;
                     out.count = n;
                     out.progress = None;
@@ -403,7 +403,7 @@ pub fn press_on_belt(
     }
     crate::glue::advancements::pressed(lv, above, outputs.first().map(|o| (&*o.item, o.count)));
     Some(Process::Convert {
-        held: belt_left(item),
+        held: item.left_after_one(),
         outputs,
     })
 }
@@ -477,21 +477,12 @@ pub fn sequenced_on_belt(
         Advanced::Done { item, count } => (item, count, None),
         Advanced::Nothing => return Vec::new(),
     };
-    let mut out = item.clone();
+    let mut out = item.processing_copy();
     out.item = name;
     out.count = count;
     out.progress = progress;
     out.fan = Default::default();
     vec![out]
-}
-
-/// The rest of a belt stack after one of it was processed (`convertToAndLeaveHeld`).
-pub fn belt_left(item: &belt::Item) -> Option<belt::Item> {
-    (item.count > 1).then(|| {
-        let mut left = item.clone();
-        left.count -= 1;
-        left
-    })
 }
 
 /// A sequenced step done on the depot's held stack (one of it, `advance`): the transitional item

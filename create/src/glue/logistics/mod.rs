@@ -196,6 +196,7 @@ impl Subsystem for Logistics {
         let belts = belts_from_nbt(data);
         let brass = brass_from_nbt(data);
         let chutes = chutes_from_nbt(data);
+        let funnels = funnels_from_nbt(data);
         let amounts: Vec<([i32; 3], create_engine::board::FilterAmount)> =
             match data.get(&FILTER_AMOUNTS.into()) {
                 Some(Tag::IntArray(v)) => v
@@ -213,6 +214,7 @@ impl Subsystem for Logistics {
                 _ => Vec::new(),
             };
         let dim = lv.dim;
+        let now = lv.game_time().max(0) as u64;
         with_world(|w| {
             w.dims[dim].vaults.load(vaults.into_iter());
             w.dims[dim].filter_amounts.extend(amounts);
@@ -221,6 +223,7 @@ impl Subsystem for Logistics {
             w.load_belt_items(dim, belts.into_iter());
             w.load_brass(dim, brass.into_iter());
             w.load_chutes(dim, chutes.into_iter());
+            w.load_funnels(dim, now, funnels.into_iter());
         });
     }
 
@@ -239,7 +242,8 @@ impl Subsystem for Logistics {
         })
         .unwrap_or_default();
         tunnel_filters_to_nbt(&*lv.host, data, &side_filters);
-        let Some((vaults, filters, belts, brass, chutes)) = with_world(|w| {
+        let now = lv.game_time().max(0) as u64;
+        let Some((vaults, filters, belts, brass, chutes, funnels)) = with_world(|w| {
             let mut filters: Vec<([i32; 3], create_engine::filter::Filter)> = w.dims[dim]
                 .chute_filters
                 .iter()
@@ -253,6 +257,7 @@ impl Subsystem for Logistics {
                 w.column_belts(dim, cx, cz),
                 w.column_brass(dim, cx, cz),
                 w.column_chutes(dim, cx, cz),
+                w.column_funnels(dim, cx, cz, now),
             )
         }) else {
             return;
@@ -281,6 +286,9 @@ impl Subsystem for Logistics {
         }
         if !chutes.is_empty() {
             data.insert(CHUTES.into(), chutes_to_nbt(&chutes));
+        }
+        if !funnels.is_empty() {
+            data.insert(FUNNELS.into(), funnels_to_nbt(&funnels));
         }
     }
 
@@ -533,6 +541,30 @@ fn chutes_from_nbt(data: &Compound) -> Vec<([i32; 3], f32)> {
             .0
             .iter()
             .map(|c| ([c[0], c[1], c[2]], f32::from_bits(c[3] as u32)))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `FunnelBlockEntity.write`'s `TransferCooldown`: x, y, z, cooldown.
+const FUNNELS: &str = "funnels";
+
+fn funnels_to_nbt(funnels: &[([i32; 3], u32)]) -> Tag {
+    Tag::IntArray(
+        funnels
+            .iter()
+            .flat_map(|(p, c)| [p[0], p[1], p[2], *c as i32])
+            .collect(),
+    )
+}
+
+fn funnels_from_nbt(data: &Compound) -> Vec<([i32; 3], u32)> {
+    match data.get(&FUNNELS.into()) {
+        Some(Tag::IntArray(v)) => v
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|f| ([f[0], f[1], f[2]], f[3].max(0) as u32))
             .collect(),
         _ => Vec::new(),
     }
@@ -1274,6 +1306,18 @@ pub(super) fn brass_to_nbt(brass: &[([i32; 3], create_engine::tunnel::SavedBrass
                 if let Some(d) = b.entered_from {
                     c.insert("StackEnteredFrom".into(), Tag::Int(d as i32));
                 }
+                for (key, list) in [
+                    ("FilteredTargets", &b.targets.filtered),
+                    ("Targets", &b.targets.plain),
+                ] {
+                    if !list.is_empty() {
+                        let v = list
+                            .iter()
+                            .flat_map(|(p, d)| [p[0], p[1], p[2], *d as i32])
+                            .collect();
+                        c.insert(key.into(), Tag::IntArray(v));
+                    }
+                }
                 if let Some((item, n)) = &b.stack {
                     c.insert("Item".into(), Tag::String(item.as_str().into()));
                     c.insert("Count".into(), Tag::Int(i32::from(*n)));
@@ -1315,6 +1359,18 @@ pub(super) fn brass_from_nbt(
                     _ => None,
                 };
                 let mode_idx = int("SelectionMode", 0).clamp(0, 6) as usize;
+                let targets = |k: &str| match c.get(&k.into()) {
+                    Some(Tag::IntArray(v)) => v
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .filter_map(|t| {
+                            let d = Dir::ALL.get(usize::try_from(t[3]).ok()?)?;
+                            Some(([t[0], t[1], t[2]], *d))
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
                 Some((
                     p,
                     create_engine::tunnel::SavedBrass {
@@ -1326,6 +1382,10 @@ pub(super) fn brass_from_nbt(
                         synced: flag("SyncedOutput"),
                         connected_left: flag("ConnectedLeft"),
                         connected_right: flag("ConnectedRight"),
+                        targets: create_engine::tunnel::Targets {
+                            filtered: targets("FilteredTargets"),
+                            plain: targets("Targets"),
+                        },
                     },
                 ))
             })
@@ -1400,6 +1460,10 @@ mod belt_save_tests {
             synced: true,
             connected_left: true,
             connected_right: false,
+            targets: create_engine::tunnel::Targets {
+                filtered: vec![([1, 8, 2], Dir::East)],
+                plain: vec![([0, 9, 2], Dir::South), ([0, 9, 2], Dir::West)],
+            },
         };
         let data = Compound::from([("brass".into(), brass_to_nbt(&[([0, 9, 2], saved.clone())]))]);
         assert_eq!(brass_from_nbt(&data), vec![([0, 9, 2], saved)]);
