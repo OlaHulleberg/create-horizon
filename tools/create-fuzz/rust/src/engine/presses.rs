@@ -86,6 +86,8 @@ impl Run {
         let Some(result) = pressing(&stack.item) else {
             return held;
         };
+        let mut held = held;
+        held.fan.clear();
         let out = Stack {
             item: result.into(),
             count: 1,
@@ -150,6 +152,7 @@ impl Run {
             return Some(Process::Hold);
         }
         let result = result?;
+        item.fan.clear();
         let mut out = item.processing_copy();
         out.item = result.into();
         out.count = 1;

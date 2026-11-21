@@ -6,6 +6,7 @@
 //! hand takes everything (`SharedDepotBlockMethods.onUse`); and a pulling belt funnel on the
 //! depot exports the outputs, then the held stack, into the depot behind it
 //! (`handleBeltFunnelOutput`). The world is the fluid items family's spout over a depot.
+//! A quarter of the seeds blow a blasting current over the depot instead (`in_a_current`).
 use crate::{
     actions::{Action, Face},
     generate::Rng,
@@ -53,6 +54,9 @@ const HONEY: u64 = 1395;
 const CHOCOLATE: u64 = 627;
 
 pub fn generate(seed: u64) -> Scenario {
+    if (seed / 128) % 4 == 3 {
+        return in_a_current(seed);
+    }
     let mut r = Rng::new(seed);
     let honey = r.chance(0.5);
     let mut sc = crate::fluid_inputs::generate(if honey { HONEY } else { CHOCOLATE });
@@ -174,6 +178,65 @@ pub fn generate(seed: u64) -> Scenario {
     sc.checkpoints.retain(|t| *t <= sc.ticks);
     sc.checkpoints.sort_unstable();
     sc.checkpoints.dedup();
+    sc
+}
+
+fn place(pos: Pos, state: &str, motor: Option<i32>) -> Placed {
+    Placed {
+        pos,
+        state: state.into(),
+        motor,
+    }
+}
+
+/// The honey spout fills glass bottles on its depot while an encased fan blows a current over
+/// the depot, past a lava source (blasting: the bottles burn up), or the other way.
+fn in_a_current(seed: u64) -> Scenario {
+    let mut r = Rng::new(seed);
+    let mut sc = crate::fluid_inputs::generate(HONEY);
+    sc.seed = seed;
+    sc.events
+        .retain(|e| !matches!(e.action, Some(Action::Item { .. })));
+    let rpm = *r.pick(&[32, -32, 64]);
+    let lava = [DEPOT[0], DEPOT[1] + 1, DEPOT[2] + 1];
+    for p in [
+        [lava[0], lava[1] - 1, lava[2]],
+        [lava[0] - 1, lava[1], lava[2]],
+        [lava[0] + 1, lava[1], lava[2]],
+        [DEPOT[0] + 1, DEPOT[1] + 1, DEPOT[2]],
+        [DEPOT[0], DEPOT[1] + 1, DEPOT[2] - 1],
+    ] {
+        sc.blocks.push(place(p, "minecraft:stone", None));
+    }
+    sc.blocks.push(place(
+        [lava[0], lava[1], lava[2] + 1],
+        "create:encased_fan[facing=north]",
+        None,
+    ));
+    sc.blocks.push(place(
+        [lava[0], lava[1], lava[2] + 2],
+        "create:creative_motor[facing=north]",
+        Some(rpm),
+    ));
+    sc.events.push(Change {
+        tick: 60,
+        pos: lava,
+        action: None,
+        state: Some("minecraft:lava[level=0]".into()),
+        motor: None,
+        turn: None,
+    });
+    let tick = 90 + r.below(20);
+    let count = 2 + r.below(4) as u8;
+    sc.events.push(act(
+        tick,
+        DEPOT,
+        drop(stack("minecraft:glass_bottle", count)),
+    ));
+    sc.events.sort_by_key(|e| e.tick);
+    sc.ticks = tick + 260;
+    sc.checkpoints = (60..sc.ticks).step_by(2).collect();
+    sc.checkpoints.push(sc.ticks);
     sc
 }
 

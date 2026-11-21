@@ -218,6 +218,7 @@ pub(crate) fn depot_turn(lv: &mut ServerLevel<'_>, depot: [i32; 3]) {
         Step::Process => {
             held = match &sequenced {
                 Some((a, progress, _)) => {
+                    held.fan.clear();
                     sequenced_step_on_depot(lv, depot, count, held, a, progress.as_ref())
                 }
                 None => press_on_depot(lv, depot, &item, count, held),
@@ -316,6 +317,8 @@ pub fn press_on_depot(
     let Some(results) = results else {
         return held;
     };
+    let mut held = held;
+    held.fan.clear();
     results_on_depot(lv, depot, count, held, results)
 }
 
@@ -372,7 +375,10 @@ pub fn press_on_belt(
         return Some(Process::Hold);
     }
     let mut outputs = match &sequenced {
-        Some((a, _)) => sequenced_on_belt(lv, at, item, a),
+        Some((a, _)) => {
+            item.fan.clear();
+            sequenced_on_belt(lv, at, item, a)
+        }
         None => {
             let seed = lv.game_time() as u64 ^ (at[0] as u64).wrapping_mul(0x9E37_79B9);
             let results = recipes::with(|r| {
@@ -385,6 +391,7 @@ pub fn press_on_belt(
                 ))
             })
             .flatten()?;
+            item.fan.clear();
             results
                 .into_iter()
                 .map(|(name, n)| {
@@ -481,7 +488,6 @@ pub fn sequenced_on_belt(
     out.item = name;
     out.count = count;
     out.progress = progress;
-    out.fan = Default::default();
     vec![out]
 }
 
@@ -518,7 +524,7 @@ pub fn sequenced_step_on_depot(
             // free output, or drops above the depot.
             let angle = random_angle(lv, depot);
             // `applyToAllItems`: what stays held is centred (`setCenteredHeldItem`).
-            let mut next = held.centred();
+            let mut next = left_on_depot(held);
             let placed = if count == 1 {
                 next = depot::Held {
                     angle,
@@ -555,6 +561,13 @@ pub fn sequenced_step_on_depot(
     }
 }
 
+/// The rest of a depot's held stack after one of it was processed (`left`), centred.
+fn left_on_depot(held: depot::Held) -> depot::Held {
+    let mut left = held.centred();
+    left.fan.clear();
+    left
+}
+
 /// A processing result on a depot's held stack (`handleProcessingOnItem`): one of the stack
 /// (all of it when it is one) becomes `results`: a single item is replaced by them (the first
 /// held; the rest in the outputs); otherwise the rest stays held and the results go to the
@@ -575,7 +588,9 @@ pub fn results_on_depot(
     let dim = lv.dim;
     let single = count == 1;
     let angle = random_angle(lv, depot);
-    let mut next = held.centred();
+    // Java's deployer copies its results before `clearFanProcessingData`, the press after: a
+    // single item's first result keeps what the caller left on `held`.
+    let mut next = left_on_depot(held);
     let Some(slots) = lv.slots(depot, depot::SLOTS) else {
         return held;
     };

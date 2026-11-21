@@ -104,7 +104,8 @@ pub(crate) fn spout_on_depot(lv: &mut ServerLevel<'_>, depot: [i32; 3]) {
     match (filled, &sequenced, held, entity) {
         (Some(_), Some((a, progress, _, _)), Some((_, count)), _) => {
             let state = with_world(|w| w.dims[dim].depots.get(&depot).copied().flatten()).flatten();
-            if let Some(state) = state {
+            if let Some(mut state) = state {
+                state.fan.clear();
                 let count = count.min(255) as u8;
                 let next = processing::sequenced_step_on_depot(
                     lv,
@@ -201,6 +202,7 @@ pub(super) fn spout_on_belt(
         OnBelt::Hold => Process::Hold,
         OnBelt::Fill(out) => {
             crate::glue::advancements::spouted(lv, above, &out);
+            item.fan.clear();
             let outputs = match &sequenced {
                 Some((a, _, _)) => {
                     let at = [above[0], above[1] - 2, above[2]];

@@ -203,6 +203,13 @@ pub struct Progress {
     pub time: i32,
 }
 
+impl Progress {
+    /// `TransportedItemStack.clearFanProcessingData`.
+    pub fn clear(&mut self) {
+        *self = Progress::default();
+    }
+}
+
 /// `FanProcessing.applyProcessing` for a transported stack, one tick: true when it is done now
 /// (the caller applies the recipe). `can` says whether `kind` processes the stack at all.
 pub fn advance(p: &mut Progress, kind: Kind, count: u32, can: bool) -> bool {

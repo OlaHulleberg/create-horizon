@@ -202,6 +202,7 @@ impl Run {
             spout::OnBelt::Pass => belt::Process::Pass,
             spout::OnBelt::Hold => belt::Process::Hold,
             spout::OnBelt::Fill(out) => {
+                item.fan.clear();
                 let mut filled = item.processing_copy();
                 filled.item = out;
                 filled.count = 1;
