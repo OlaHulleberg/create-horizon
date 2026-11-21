@@ -78,7 +78,6 @@ impl Run {
         self.tick_presses();
         self.ejectors_ticked();
         self.save_fluid_entities();
-        self.w.settle_belts(0);
         // CreateWorld::tick: the solve, then sequencer instructions (committed after it).
         let (_, steps) = self.w.tick(0, &mut events);
         self.persisted.dirty_columns.extend(self.w.take_unsaved(0));

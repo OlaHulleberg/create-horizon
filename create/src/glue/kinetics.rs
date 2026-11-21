@@ -237,8 +237,7 @@ impl Subsystem for Kinetics {
     }
 }
 
-/// The kinetic solve, after every tick that may change what turns: `settle_belts`, `w.tick`,
-/// its events.
+/// The kinetic solve, after every tick that may change what turns: `w.tick` and its events.
 pub struct Solve;
 
 impl Subsystem for Solve {
@@ -548,7 +547,6 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let mut events = Vec::new();
     let Some((steps, removed, unsaved)) = with_world(|w| {
-        w.settle_belts(dim);
         let (_, steps) = w.tick(dim, &mut events);
         (
             steps,
