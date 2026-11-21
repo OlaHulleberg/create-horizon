@@ -62,7 +62,7 @@ type Cache = HashMap<[i32; 3], Option<[i32; 3]>>;
 #[derive(Default)]
 pub struct Vaults {
     pub parts: HashMap<[i32; 3], Part>,
-    /// What was saved with a column, waiting for its block.
+    /// What was loaded, waiting for its block.
     saved: HashMap<[i32; 3], Part>,
     /// Blocks whose `updateConnectivity` was set, in that order.
     queue: Vec<[i32; 3]>,
@@ -122,7 +122,7 @@ impl Vaults {
         self.queue.retain(|p| !out(p));
     }
 
-    /// Parts saved with a column, for when their blocks are found.
+    /// Parts loaded, for when their blocks are found.
     pub fn load(&mut self, saved: impl Iterator<Item = ([i32; 3], Part)>) {
         self.saved.extend(saved);
     }

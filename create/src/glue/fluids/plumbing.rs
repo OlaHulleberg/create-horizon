@@ -787,11 +787,13 @@ pub const WHISTLE: &str = "Whistle";
 /// The key of a smart pipe's filter item in its block entity's data, for its clients.
 pub const FILTER: &str = "PipeFilter";
 
-/// Smart pipe filters (x, y, z, fluid; 255: none, and their items under `filter_items`), hoses (x, y, z, offset × 1000, fluid, amount) and
-/// creative tanks (x, y, z, fluid; 255: none) saved with a column, under `create_fluids`.
+/// Smart pipe filters (x, y, z, fluid; 255: none, and their items under `filter_items`), hoses
+/// (x, y, z, offset × 1000, fluid, amount) and creative tanks (x, y, z, fluid; 255: none) an
+/// older version saved with a column, under `create_fluids`.
 const KEY: &str = "create_fluids";
 
-/// What a column saved, before its blocks are found (they take it back when they are).
+/// What an older version saved with a column, before its blocks are found (they take it back
+/// when they are).
 pub(super) fn chunk_load(dim: usize, data: &Compound) {
     let Some(Tag::Compound(own)) = data.get(&KEY.into()) else {
         return;

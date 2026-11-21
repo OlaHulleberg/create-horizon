@@ -1,7 +1,7 @@
 //! Create's stock logistics: stock links joining packagers into logistics networks, stock
 //! tickers, redstone requesters and factory gauges. A sibling of `packages` (packagers pack
 //! and send what is ordered); the rules are `create_engine::stock`'s. State is typed, per
-//! level, on the server thread and saved with its column as `create_stock`; the networks
+//! level, on the server thread and saved with their block entities; the networks
 //! themselves (their links loaded or not, promises and owners: Create's
 //! `LogisticsNetworkSavedData`) in an attachment of the overworld (`create:logistics_networks`,
 //! the level's saved data), written when they changed. Nothing here ticks: a network's stock is

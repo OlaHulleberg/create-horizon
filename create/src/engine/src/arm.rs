@@ -736,7 +736,7 @@ pub struct Arms {
     pub watch: HashMap<[i32; 3], Vec<[i32; 3]>>,
     pub pollers: Vec<[i32; 3]>,
     pub changes: Vec<[i32; 3]>,
-    /// Arms saved with a column, waiting for their block.
+    /// Arms loaded, waiting for their block.
     pub saved: HashMap<[i32; 3], Arm>,
 }
 

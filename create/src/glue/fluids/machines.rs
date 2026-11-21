@@ -460,14 +460,16 @@ pub(super) fn give_back_drained(
     }
 }
 
-/// Spouts' and drains' tanks and drains' stacks saved with a column, under `create_machines`
+/// Spouts' and drains' tanks and drains' stacks an older version saved with a column, under
+/// `create_machines`
 /// (`SmartFluidTankBehaviour`'s and `ItemDrainBlockEntity`'s `HeldItem`, `ProcessingTicks`):
 /// `spout_records` holds a [`spout::record`] each (`spouts`, a column saved before them, a
 /// [`spout::LEGACY_RECORD`]); `drains` x, y, z, fluid (255: none), amount each; `drain_items` a
 /// compound per held stack.
 const KEY: &str = "create_machines";
 
-/// What a column saved of its spouts and drains, put back (the blocks found later keep it).
+/// What an older version saved with a column of its spouts and drains, put back (the blocks
+/// found later keep it).
 pub(super) fn chunk_load(dim: usize, data: &Compound) {
     let Some(Tag::Compound(own)) = data.get(&KEY.into()) else {
         return;

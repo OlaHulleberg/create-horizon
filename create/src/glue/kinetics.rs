@@ -288,11 +288,12 @@ impl Subsystem for Solve {
     }
 }
 
-/// Settings saved with a column: `motors` holds x, y, z and speed for each creative motor.
 fn has_speed_setting(block: Block) -> bool {
     matches!(block, Block::CreativeMotor | Block::RotationSpeedController)
 }
 
+/// The settings an older version saved with a column: `motors` holds x, y, z and speed for each
+/// creative motor.
 fn settings_from_nbt(data: &Compound) -> Vec<([i32; 3], i32)> {
     match data.get(&"motors".into()) {
         Some(Tag::IntArray(v)) => v

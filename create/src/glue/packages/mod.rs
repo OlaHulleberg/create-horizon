@@ -1,7 +1,6 @@
 //! Create's package logistics: packagers, frogports, postboxes' packages and chain conveyors.
 //! The rules are `create_engine`'s `package`, `packager`, `port` and `chain_conveyor`; their
-//! state is typed, per level, on the server thread, saved with its column as
-//! `create_packages`; only packagers and frogports with something to do and conveyors
+//! state is typed, per level, on the server thread, saved with their block entities; only packagers and frogports with something to do and conveyors
 //! carrying packages tick. A package's address, contents and order data are kept in its
 //! stack's `minecraft:custom_data` (`body`). Clients draw the conveyors' packages from the
 //! `create:chain` messages, round the wheel and gliding along each chain, every frame.

@@ -1181,8 +1181,8 @@ fn load_entity(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, tag: &Comp
     }
 }
 
-/// Brass tunnels' side filters saved with a column: `tunnel_filters` holds x, y, z and the side
-/// of each, and its filter.
+/// Brass tunnels' side filters as a moving structure carries them: `tunnel_filters` holds x, y,
+/// z and the side of each, and its filter.
 pub(super) fn tunnel_filters_to_nbt(
     host: &dyn mod_api::Host,
     own: &mut Compound,

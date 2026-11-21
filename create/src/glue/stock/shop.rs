@@ -12,7 +12,8 @@
 //! into the ticker's `receivedPayments` and sends the order to the list's address. A broken shop
 //! drops its cloth programmed again; a broken cloth drops what lay on it.
 //!
-//! Each level's cloths are kept here by position and saved with their column (`create_table_cloths`); what clients draw is in the cloth's block entity data
+//! Each level's cloths are kept here by position and saved with their block entities; what
+//! clients draw is in the cloth's block entity data
 //! (`TableCloth`). The clipboard copies and pastes the price (`Filtering`, the payment item).
 
 use super::super::items;

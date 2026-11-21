@@ -1,5 +1,5 @@
 //! Bearings and windmills, pistons, chassis and gantries moving blocks as one, and their saved
-//! data (`windmills`, `chassis` in the column's compound).
+//! data (`windmills`, `chassis`, as an older version kept them in the column).
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::world::with_world;

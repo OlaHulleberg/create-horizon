@@ -1716,7 +1716,7 @@ impl BlockPart for ContactPart {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Saved with the column
+// Saved with the block entities, in the column format an older version kept
 
 /// Running clocks, pulleys and elevators of a column, as an older version saved them under
 /// `create_lifts` and their block entities keep them now (their block states as text): `kind` 0 a clock, 1 a pulley, 2 an elevator, its numbers in `nums` (floats

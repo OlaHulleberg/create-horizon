@@ -5,7 +5,7 @@
 //! The server half resolves buttons to the frequencies on the held controller (in the player's
 //! tick, where their hands are) or on the lectern used, and holds them down as transmitters with
 //! no block in the level's redstone link networks until released or timed out. Lecterns holding
-//! a controller are kept per level and saved with their column as `create_controller`. Nothing
+//! a controller are kept per level and saved with their block entities. Nothing
 //! runs without an active controller, a held frequency, a lectern in use or a message waiting.
 //!
 //! The controller's frequencies are kept on the stack's custom data

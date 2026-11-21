@@ -67,8 +67,8 @@
 //!
 //! A sequenced gearshift's or valve handle's limit on a bearing, piston, pulley or gantry
 //! (`sequencedAngleLimit`, `sequencedOffsetLimit`) is saved with the structure, a turning
-//! bearing's turn as it follows from its last change; a moving gantry is saved with the column
-//! its carriage started from. A structure loaded moving waits for its network's first solve
+//! bearing's turn as it follows from its last change; a moving gantry is saved with the gantry
+//! shaft its carriage started from. A structure loaded moving waits for its network's first solve
 //! rather than stopping at the speed 0 it loads with.
 //!
 //! Deployers work while moving (`DeployerMovementBehaviour`), redstone contacts power the

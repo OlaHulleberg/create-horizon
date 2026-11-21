@@ -556,7 +556,7 @@ fn send_shown(lv: &mut ServerLevel<'_>) {
         changed
     });
     for (pos, key, (v, keys)) in changed {
-        // A spout's or drain's contents are saved with its column.
+        // A spout's or drain's contents are saved with its block entity.
         if key == TANK {
             with_world(|w| w.mark_unsaved(dim, pos));
         }

@@ -286,8 +286,8 @@ pub struct Dimension {
     pub tank_changes: Vec<[i32; 3]>,
     /// Tank blocks whose `top`, `bottom` and `shape` follow their tank again.
     pub tank_states: Vec<[i32; 3]>,
-    /// Windmill bearings whose sails are assembled, by bearing; ones saved with a column wait
-    /// for their bearing; right-clicks waiting for the next tick (`assembleNextTick`); bearings
+    /// Windmill bearings whose sails are assembled, by bearing; loaded ones wait for their
+    /// bearing; right-clicks waiting for the next tick (`assembleNextTick`); bearings
     /// clients must see again; and structures whose bearing broke, to put back.
     pub windmills: HashMap<[i32; 3], Windmill>,
     windmill_saved: HashMap<[i32; 3], Windmill>,
@@ -429,8 +429,8 @@ pub struct Dimension {
     /// Chutes holding a stack: where it is (1 top, 0 bottom); the only ones that tick.
     /// Set through `set_chute_position`, which marks the column to be saved.
     pub chutes: HashMap<[i32; 3], f32>,
-    /// Stack positions saved with a column (`ChuteBlockEntity.write`'s `ItemPosition`), kept
-    /// until their chute loads (`read`).
+    /// Stack positions loaded (`ChuteBlockEntity.read`'s `ItemPosition`), kept until their chute
+    /// is found.
     pub(crate) chute_saved: HashMap<[i32; 3], f32>,
     /// Empty chutes that may take from the inventory above them.
     pub chute_pulls: crate::chute::Pulls,
