@@ -12,9 +12,9 @@ use create_engine::copycat::{self as cc, Drawn, Shape, Special, Use};
 use create_engine::kinetics::Dir;
 use mod_api::{
     BlockEntityPart, BlockEntitySubmitEvent, BlockEntityUpdateTagEvent, BlockPart, BlockState,
-    ClientHost, Compound, Direction, Hand, InteractionResult, ItemPart, ItemStack,
-    OnBlockPlacedByEvent, PlayerRef, ServerHost, SoundSource, StateForPlacementEvent, Tag,
-    UseItemOnEvent,
+    ClientHost, Compound, Direction, FrictionEvent, Hand, HostBlockStates, InteractionResult,
+    ItemPart, ItemStack, LightEmissionEvent, OnBlockPlacedByEvent, PlayerRef, ServerHost,
+    SoundSource, StateForPlacementEvent, Tag, UseItemOnEvent,
 };
 
 fn dir(d: Direction) -> Dir {
@@ -275,6 +275,46 @@ impl BlockPart for CopycatBlock {
         }
         Some(Some(state))
     }
+
+    /// `CopycatBlock.getFriction`: the material's, at the copycat's position.
+    fn friction(&self, level: mod_api::LevelSide<'_>, event: &mut FrictionEvent<'_>) {
+        let (level, _) = states::level_view(level);
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        let material = level
+            .block_entity(pos)
+            .and_then(|be| level.block_entity_data(be))
+            .map_or_else(|| AIR.to_owned(), |nbt| shown_material(&nbt));
+        let material = level.block_state_id(&material);
+        if let Some(f) = material.and_then(|m| level.friction(pos, m, event.entity)) {
+            event.friction = f;
+        }
+    }
+
+    /// `CopycatBlock.getLightEmission`, with `CopycatBlockEntity.updateLight`'s answer: the
+    /// material's light.
+    fn light_emission(
+        &self,
+        host: &dyn mod_api::Host,
+        event: &mut LightEmissionEvent,
+    ) -> Option<u8> {
+        let level = host.level(event.dimension.key().id())?;
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        let nbt = host.block_entity(level, pos)?.data(host)?;
+        let material = host.block_state_id(&shown_material(&nbt))?;
+        host.block_states().light_emission(material)
+    }
+}
+
+const AIR: &str = "minecraft:air";
+
+/// The material a copycat's block entity shows (`CopycatBlockEntity.getMaterial`), the copycat
+/// base when it holds none.
+fn shown_material(nbt: &Compound) -> String {
+    match nbt.get(&MATERIAL.into()) {
+        Some(Tag::String(s)) => Some(s.to_string_lossy()).filter(|s| !s.is_empty()),
+        _ => None,
+    }
+    .unwrap_or_else(|| cc::BASE.to_owned())
 }
 
 /// `CopycatBlock.onWrenched`: the material comes off, its item back to the player (not in
