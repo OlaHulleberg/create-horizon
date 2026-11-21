@@ -8,7 +8,7 @@
 
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
-use crate::glue::contraptions::actors;
+use crate::glue::contraptions::{actors, colliders};
 use create_engine::actors::Carried;
 use create_engine::train_controls::Frame;
 use std::cell::RefCell;
@@ -35,6 +35,7 @@ pub fn forget() {
 /// carriage an actor stalls stands still on its next tick.
 pub fn tick(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
+    let mut hashes = Vec::new();
     let poses: Vec<(u32, usize, Frame)> = with_world(|w| {
         let r = &w.dims[dim].railway;
         let g = &r.net.graph;
@@ -43,11 +44,29 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
             for c in 0..t.train.carriages.len().min(t.cars.len()) {
                 let (pivot, front) = t.train.carriage_pose(g, c);
                 out.push((t.id, c, Frame::new(pivot, front, t.heading)));
+                hashes.push(colliders::blocks_hash(&t.cars[c]));
             }
         }
         out
     })
     .unwrap_or_default();
+    for ((train, car, frame), hash) in poses.iter().zip(hashes) {
+        if !lv.is_loaded(frame.pivot.map(|v| v.floor() as i32)) {
+            continue;
+        }
+        let (centre, turns) = frame.actor_pose();
+        let pose = create_engine::collider::Pose { centre, turns };
+        let owner = colliders::Owner::Carriage(*train, *car);
+        let carrier = colliders::Carrier::Own(colliders::CARRIAGE);
+        colliders::place(lv, owner, carrier, pose, hash, || {
+            with_world(|w| {
+                let t = w.dims[dim].railway.trains.iter().find(|t| t.id == *train)?;
+                t.cars.get(*car).cloned()
+            })
+            .flatten()
+            .unwrap_or_default()
+        });
+    }
     CARRIED.with_borrow_mut(|m| {
         m.retain(|k, _| k.0 != dim || poses.iter().any(|(t, c, _)| (*t, *c) == (k.1, k.2)));
     });

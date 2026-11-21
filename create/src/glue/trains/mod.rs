@@ -48,9 +48,9 @@
 //!
 //! What the mod API cannot do, and is left out:
 //!
-//! - **Standing on and colliding with carriages** (`ContraptionCollider`):
-//!   the API has collision exclusions (boxes where blocks don't stop a player), not moving
-//!   colliders. Needs level colliders (`API_GAPS.md`, moving colliders).
+//! - **Carriages pushing what they move into** (`ContraptionCollider`): bodies stand on and walk
+//!   into carriages (`contraptions::colliders`), but a moving collider doesn't push
+//!   (`API_GAPS.md`).
 //! - **Taking the controls' keys from the game** is done with `movement_input` (the player
 //!   neither walks, jumps nor sneaks), as Create's `setDown(false)` does; `input_key` can't
 //!   consume a key, so a key bound to something else still does it.

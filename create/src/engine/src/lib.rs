@@ -17,6 +17,7 @@ pub mod chute;
 pub mod client;
 pub mod clipboard;
 pub mod clock;
+pub mod collider;
 pub mod comparator;
 pub mod contraption;
 pub mod controller;
