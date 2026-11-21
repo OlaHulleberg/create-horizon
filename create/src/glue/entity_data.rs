@@ -26,6 +26,10 @@ use std::collections::{BTreeMap, HashMap};
 /// What the subsystems write for the block entities of one column, by position.
 pub type Entities = BTreeMap<[i32; 3], Compound>;
 
+/// Marks data saved with the fields: what an older version put under the same keys (a drawn
+/// filter's id, say) is not read as them, so its column's data stands.
+const MARKER: &str = "create:fields";
+
 /// A block entity's fields as last published or loaded, and the block they were written for.
 #[derive(Clone, Debug, PartialEq)]
 struct Record {
@@ -53,6 +57,7 @@ fn keys<'a>(
     systems
         .iter()
         .flat_map(move |s| s.saved_keys(block).iter().copied())
+        .chain([MARKER])
 }
 
 fn own_fields(systems: &[&dyn Subsystem], block: Block, tag: &Compound) -> Compound {
@@ -87,11 +92,11 @@ impl BlockEntityPart for SavedFields {
         else {
             return;
         };
-        let fields = own_fields(SUBSYSTEMS, block, event.tag);
         let known = RECORDS.with_borrow(|r| r.contains_key(&(event.level, event.pos)));
-        if fields.is_empty() && !known {
+        if !known && !event.tag.contains_key(&MARKER.into()) {
             return;
         }
+        let fields = own_fields(SUBSYSTEMS, block, event.tag);
         PENDING.with_borrow_mut(|p| {
             p.retain(|(l, q, _)| (*l, *q) != (event.level, event.pos));
             p.push((event.level, event.pos, Record { block, fields }));
@@ -156,7 +161,8 @@ pub fn save(lv: &mut ServerLevel<'_>, chunk: [i32; 2]) {
     }
     let fresh: Vec<([i32; 3], Record)> = fresh
         .into_iter()
-        .filter_map(|(pos, fields)| {
+        .filter_map(|(pos, mut fields)| {
+            fields.insert(MARKER.into(), mod_api::Tag::Byte(1));
             let id = lv.block(pos);
             let block = with_world(|w| w.table.get(id).map(|(b, _)| b)).flatten()?;
             Some((pos, Record { block, fields }))
