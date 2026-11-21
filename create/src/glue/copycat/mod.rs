@@ -261,8 +261,27 @@ impl Subsystem for Copycats {
         load(lv, data);
     }
 
-    fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
-        save(lv, chunk, data);
+    fn save_entities(
+        &self,
+        lv: &ServerLevel<'_>,
+        chunk: [i32; 2],
+        out: &mut super::entity_data::Entities,
+    ) {
+        save_entities(lv, chunk, out);
+    }
+
+    fn load_entity(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, tag: &Compound) {
+        if matches!(block, Block::CopycatPanel | Block::CopycatStep) {
+            load_entity(lv, pos, tag);
+        }
+    }
+
+    fn saved_keys(&self, block: Block) -> &'static [&'static str] {
+        if matches!(block, Block::CopycatPanel | Block::CopycatStep) {
+            &[ITEM, MATERIAL]
+        } else {
+            &[]
+        }
     }
 
     fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {
@@ -444,63 +463,45 @@ fn set_material(lv: &mut ServerLevel<'_>, pos: [i32; 3], material: BlockState) {
 /// A column's copycats (`CopycatBlockEntity.write`: `Material` and `Item`), as `create_copycat`:
 /// `Pos` (three ints each), `Materials` (state text, empty for none) and `Items` (one compound
 /// each, empty for none).
-fn save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
+const ITEM: &str = "Item";
+
+/// `CopycatBlockEntity.write` of column `chunk`'s copycats: `Item` and `Material` (its state's
+/// text, the copycat's own drawing key).
+fn save_entities(lv: &ServerLevel<'_>, chunk: [i32; 2], out: &mut super::entity_data::Entities) {
     let inside = |p: &[i32; 3]| [p[0] >> 4, p[2] >> 4] == chunk;
-    let list: Vec<([i32; 3], Copycat)> = COPYCATS.with_borrow(|d| {
-        d.get(&lv.dim).map_or_else(Vec::new, |d| {
-            d.copycats
-                .iter()
-                .filter(|(p, _)| inside(p))
-                .map(|(p, c)| (*p, c.clone()))
-                .collect()
-        })
-    });
-    if list.is_empty() {
-        data.remove(&KEY.into());
-        return;
-    }
     let host = &*lv.host;
-    let saved: Vec<cc::Saved> = list
-        .iter()
-        .map(|(p, c)| cc::Saved {
-            pos: *p,
-            material: c
+    COPYCATS.with_borrow(|d| {
+        let Some(d) = d.get(&lv.dim) else {
+            return;
+        };
+        for (p, c) in d.copycats.iter().filter(|(p, _)| inside(p)) {
+            let material = c
                 .material
                 .and_then(|m| host.block_state_string(m))
-                .unwrap_or_default(),
-        })
-        .collect();
-    let (pos, materials) = cc::save(&saved);
-    // `save` sorts by position: the items follow the same order.
-    let mut list = list;
-    list.sort_by_key(|x| x.0);
-    let items = list
-        .iter()
-        .map(|(_, c)| {
-            let nbt = c.item.as_ref().and_then(|s| s.to_nbt(host));
-            Tag::Compound(nbt.unwrap_or_default())
-        })
-        .collect();
-    data.insert(
-        KEY.into(),
-        Tag::Compound(Compound::from([
-            ("Pos".into(), Tag::IntArray(pos)),
-            (
-                "Materials".into(),
-                Tag::List(
-                    materials
-                        .iter()
-                        .map(|m| Tag::String(m.as_str().into()))
-                        .collect(),
-                ),
-            ),
-            ("Items".into(), Tag::List(items)),
-        ])),
-    );
+                .unwrap_or_default();
+            let item = c.item.as_ref().and_then(|s| s.to_nbt(host));
+            out.entry(*p).or_default().extend([
+                (ITEM.into(), Tag::Compound(item.unwrap_or_default())),
+                (MATERIAL.into(), Tag::String(material.as_str().into())),
+            ]);
+        }
+    });
 }
 
-/// A column joined a level: its copycats back (`read`, a server's: a material stays only while
-/// its saved item still gives it), each shown again.
+/// `CopycatBlockEntity.read`.
+fn load_entity(lv: &mut ServerLevel<'_>, pos: [i32; 3], tag: &Compound) {
+    let material = match tag.get(&MATERIAL.into()) {
+        Some(Tag::String(s)) => s.to_string_lossy(),
+        _ => String::new(),
+    };
+    let item = match tag.get(&ITEM.into()) {
+        Some(Tag::Compound(c)) if !c.is_empty() => ItemStack::from_nbt(&*lv.host, c),
+        _ => None,
+    };
+    restore(lv, pos, &material, item);
+}
+
+/// The `create_copycat` an older version saved with the column, back.
 fn load(lv: &mut ServerLevel<'_>, data: &Compound) {
     let Some(Tag::Compound(data)) = data.get(&KEY.into()) else {
         return;
@@ -525,35 +526,40 @@ fn load(lv: &mut ServerLevel<'_>, data: &Compound) {
             Some(Tag::Compound(c)) if !c.is_empty() => ItemStack::from_nbt(&*lv.host, c),
             _ => None,
         };
-        // No copycat there any more: nothing to keep.
-        let Some(state) = lv.block_state(saved.pos) else {
-            continue;
-        };
-        let Some(shape) = shape_of(&*lv.host, state) else {
-            continue;
-        };
-        let material = lv.host.block_state_id(&saved.material);
-        let keep = match (material, &item) {
-            (Some(m), Some(it)) => {
-                let given = body::accepted(lv, saved.pos, shape, it, None);
-                let host = &*lv.host;
-                let name = |s: BlockState| s.block().id(host);
-                cc::keeps_material(
-                    given.map(|g| name(g.0)).as_deref(),
-                    given.is_some(),
-                    &name(m),
-                )
-            }
-            _ => false,
-        };
-        let c = if keep {
-            Copycat { material, item }
-        } else {
-            Copycat::default()
-        };
-        with(lv.dim, |d| {
-            d.copycats.insert(saved.pos, c);
-            d.shown.push(saved.pos);
-        });
+        restore(lv, saved.pos, &saved.material, item);
     }
+}
+
+/// A copycat read back (`read`, a server's: a material stays only while its saved item still
+/// gives it), shown again.
+fn restore(lv: &mut ServerLevel<'_>, pos: [i32; 3], material: &str, item: Option<ItemStack>) {
+    let Some(state) = lv.block_state(pos) else {
+        return;
+    };
+    let Some(shape) = shape_of(&*lv.host, state) else {
+        return;
+    };
+    let material = lv.host.block_state_id(material);
+    let keep = match (material, &item) {
+        (Some(m), Some(it)) => {
+            let given = body::accepted(lv, pos, shape, it, None);
+            let host = &*lv.host;
+            let name = |s: BlockState| s.block().id(host);
+            cc::keeps_material(
+                given.map(|g| name(g.0)).as_deref(),
+                given.is_some(),
+                &name(m),
+            )
+        }
+        _ => false,
+    };
+    let c = if keep {
+        Copycat { material, item }
+    } else {
+        Copycat::default()
+    };
+    with(lv.dim, |d| {
+        d.copycats.insert(pos, c);
+        d.shown.push(pos);
+    });
 }

@@ -269,24 +269,16 @@ pub fn keeps_material(item_block: Option<&str>, accepted: bool, material_block: 
     accepted && item_block == Some(material_block)
 }
 
-/// One copycat as its column saves it (`CopycatBlockEntity.write`): its material as state text
-/// (`""` for none) and whether it keeps an item (saved beside it by the glue).
+/// One copycat as an older version saved it with its column (`CopycatBlockEntity.write`): its
+/// material as state text (`""` for none).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Saved {
     pub pos: [i32; 3],
     pub material: String,
 }
 
-/// A column's copycats as positions (three ints each) and materials, in position order.
-pub fn save(list: &[Saved]) -> (Vec<i32>, Vec<String>) {
-    let mut list = list.to_vec();
-    list.sort_by_key(|s| s.pos);
-    let pos = list.iter().flat_map(|s| s.pos).collect();
-    let materials = list.into_iter().map(|s| s.material).collect();
-    (pos, materials)
-}
-
-/// `save` read back; a broken list gives what lines up.
+/// A column's copycats as an older version saved them: positions (three ints each) and
+/// materials; a broken list gives what lines up.
 pub fn load(pos: &[i32], materials: &[String]) -> Vec<Saved> {
     pos.as_chunks::<3>()
         .0
@@ -674,21 +666,12 @@ mod tests {
     }
 
     #[test]
-    fn saves_round_trip() {
-        let list = vec![
-            Saved {
-                pos: [17, 64, -3],
-                material: "minecraft:oak_log[axis=x]".into(),
-            },
-            Saved {
-                pos: [16, -64, -16],
-                material: String::new(),
-            },
-        ];
-        let (pos, materials) = save(&list);
-        assert_eq!(pos, vec![16, -64, -16, 17, 64, -3]);
+    fn column_saves_read_back() {
+        let pos = vec![16, -64, -16, 17, 64, -3];
+        let materials = vec![String::new(), "minecraft:oak_log[axis=x]".to_owned()];
         let back = load(&pos, &materials);
-        assert_eq!(back, vec![list[1].clone(), list[0].clone()]);
+        assert_eq!(back[1].pos, [17, 64, -3]);
+        assert_eq!(back[1].material, "minecraft:oak_log[axis=x]");
         assert_eq!(load(&pos[..4], &materials).len(), 1);
     }
 
