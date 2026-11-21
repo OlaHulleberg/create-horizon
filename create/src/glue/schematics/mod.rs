@@ -442,7 +442,7 @@ impl Subsystem for Schematics {
         let mut data = Compound::new();
         column_data(lv, chunk, &mut data);
         if let Some(Tag::Compound(own)) = data.get(&KEY.into()) {
-            super::entity_data::split(own, &SAVED, out);
+            super::entity_data::split(own, "Pos", &SAVED, out);
         }
     }
 
@@ -450,7 +450,7 @@ impl Subsystem for Schematics {
         if block != Block::Schematicannon {
             return;
         }
-        let own = super::entity_data::join(tag, pos, &SAVED);
+        let own = super::entity_data::join(tag, pos, "Pos", &SAVED);
         if !own.is_empty() {
             chunk_load(lv, &own);
         }

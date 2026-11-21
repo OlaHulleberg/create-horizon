@@ -103,6 +103,13 @@ pub const LEGACY_KEYS: &[&str] = &[
     "create_stock",
     "create_table_cloths",
     "create_schematics",
+    "windmills",
+    "pistons",
+    "gantries",
+    "modes",
+    "chassis",
+    "create_lifts",
+    "create_contacts",
 ];
 
 /// Whether column data `data` holds what an older version kept there for block entities.

@@ -929,9 +929,9 @@ impl Subsystem for Stock {
         let mut data = Compound::new();
         shop::save(lv, chunk, &mut data);
         column_data(lv, chunk, &mut data);
-        super::entity_data::split(&data, &CLOTHS, out);
+        super::entity_data::split(&data, "Pos", &CLOTHS, out);
         if let Some(Tag::Compound(own)) = data.get(&KEY.into()) {
-            super::entity_data::split(own, &SAVED, out);
+            super::entity_data::split(own, "Pos", &SAVED, out);
         }
     }
 
@@ -942,11 +942,11 @@ impl Subsystem for Stock {
         _block: create_engine::Block,
         tag: &Compound,
     ) {
-        let cloths = super::entity_data::join(tag, pos, &CLOTHS);
+        let cloths = super::entity_data::join(tag, pos, "Pos", &CLOTHS);
         if !cloths.is_empty() {
             shop::load(lv, &cloths);
         }
-        let own = super::entity_data::join(tag, pos, &SAVED);
+        let own = super::entity_data::join(tag, pos, "Pos", &SAVED);
         if !own.is_empty() {
             chunk_load(lv, &own);
         }

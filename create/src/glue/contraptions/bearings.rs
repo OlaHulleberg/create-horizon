@@ -1392,10 +1392,11 @@ fn show_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Saved with the column
+// Saved with the block entities, in the column format an older version kept
 
 /// Windmills and mechanical bearings (`windmills`), chassis ranges (`chassis`) and the options
-/// picked on value boxes (`modes`).
+/// picked on value boxes (`modes`): an older version's column data, or one block entity's
+/// (`Contraptions::load_entity`).
 pub(super) fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
     let dim = lv.dim;
     let windmills = windmills_from_nbt(lv, data);
