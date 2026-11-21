@@ -193,7 +193,8 @@ impl Run {
         {
             return true;
         }
-        if item == "minecraft:air" && !sneaking && self.brass_grab(p) {
+        // Vanilla skips the block's use only for a sneaking player holding an item.
+        if (item == "minecraft:air" || !sneaking) && self.brass_grab(p) {
             return true;
         }
         if item == "create:wrench"

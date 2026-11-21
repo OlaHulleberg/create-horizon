@@ -222,6 +222,7 @@ impl Run {
                     && item == "create:wrench")
                 && name != "create:brass_casing"
                 && name != "create:andesite_casing"
+                && !matches!(block, Block::BrassTunnel | Block::AndesiteTunnel)
                 && !(name == "create:belt"
                     && sneaking
                     && [

@@ -165,9 +165,7 @@ pub fn slot_changed(lv: &ServerLevel<'_>, pos: [i32; 3]) {
     });
 }
 
-/// `BrassTunnelBlock.useWithoutItem`: an empty hand takes the stacks of the brass tunnel at
-/// `pos` and those connected with it (`grabAllStacksOfGroup`), with the pick-up sound. True
-/// when there were any.
+/// `BrassTunnelBlock.useWithoutItem` (`grabAllStacksOfGroup`). True when there were any.
 pub fn grab_stacks(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: u128) -> bool {
     let Some(axis) = brass_axis(lv, pos) else {
         return false;
@@ -401,21 +399,14 @@ pub fn use_tunnel_filter(
         return false;
     }
     let held = click.stack.map(|s| super::items::id_of(&*lv.host, s));
-    if held
-        .as_deref()
-        .is_some_and(|h| matches!(h, "create:wrench" | "create:mechanical_arm"))
-    {
-        return false;
-    }
     let Some(side) = Dir::from_offset(click.hit.face) else {
         return false;
     };
-    let Some(slot) = tunnel::filter_slot(axis, shape, side) else {
-        return false;
-    };
     let local = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(pos[i]));
-    if !create_engine::board::hits_box(slot, local) {
-        return false;
+    match tunnel::filter_click(axis, shape, side, local, held.as_deref()) {
+        tunnel::FilterClick::Miss => return false,
+        tunnel::FilterClick::Keep => return true,
+        tunnel::FilterClick::Set => {}
     }
     let filter = filters::take_filter(lv.host, p, click.hand);
     let dim = lv.dim;

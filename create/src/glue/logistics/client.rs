@@ -487,13 +487,14 @@ pub fn predict_click(
         return mod_api::Flow::Continue;
     };
     if filter_slot_hit(block, &info, click) {
-        let wrench_or_arm = click.stack.is_some_and(|s| {
-            matches!(
-                s.item().id(&*host).as_str(),
-                "create:wrench" | "create:mechanical_arm" | "create:clipboard"
-            )
-        });
-        if !wrench_or_arm {
+        let held = click.stack.map(|s| s.item().id(&*host));
+        // Java takes a wrench's or an arm's click on a brass tunnel's slot.
+        let passes = match held.as_deref() {
+            Some("create:clipboard") => true,
+            Some("create:wrench" | "create:mechanical_arm") => block != Block::BrassTunnel,
+            _ => false,
+        };
+        if !passes {
             *event.cancellation_result = mod_api::InteractionResult::Success;
             return mod_api::Flow::Cancel;
         }
