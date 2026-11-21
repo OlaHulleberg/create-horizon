@@ -55,6 +55,7 @@ pub(super) fn register(r: &mut dyn Registrar) {
     let _ = KEYS.set(keys);
     let blocks: Vec<&str> = DOORS.iter().map(|(d, _)| *d).collect();
     let kind = r.block_entity_type(TYPE).blocks(&blocks).build();
+    super::super::entity_data::attach(r, &kind);
     if let Err(e) = r.block_entity_part(&kind, DoorEntity) {
         crate::create_log!("[create] the sliding door block entity's part was refused: {e:?}");
     }

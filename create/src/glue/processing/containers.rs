@@ -36,6 +36,7 @@ pub fn register(r: &mut dyn Registrar) {
     let names: Vec<&str> = names.iter().map(String::as_str).collect();
     let kind = r.block_entity_type(TOOLBOX_TYPE).blocks(&names).build();
     r.block_entity_capability_before_game(&mod_api::ITEMS, &kind, super::toolbelt::provide_items);
+    super::super::entity_data::attach(r, &kind);
     if let Err(e) = r.block_entity_part(&kind, ToolboxDraw) {
         crate::create_log!("[create] the toolboxes' drawing part was refused: {e:?}");
     }

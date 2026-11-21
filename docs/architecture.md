@@ -30,7 +30,8 @@ Core glue modules:
 | `glue/states.rs` | Create's block states ↔ engine ids; block keys (`states::key(Block)`). |
 | `glue/world.rs` | The engine's `CreateWorld` (`with_world`) and level indices. |
 | `glue/server.rs` | `ServerLevel`: a server level in engine terms (blocks as engine ids, redstone, set/destroy). |
-| `glue/persist.rs` | Per-column saved data in one chunk attachment. |
+| `glue/persist.rs` | Per-column saved data that belongs to no block entity (trains, superglue), in one chunk attachment. |
+| `glue/entity_data.rs` | Create's block entity fields (`write`/`read`) through `saveAdditional` and `loadAdditional`. |
 | `glue/net.rs` | One payload, `create:net`, with named channels; an outbox for backpressure. |
 | `glue/kinetics.rs` | The `create:kinetic` block entity type, the network solve, speeds to clients, part drawing. |
 
@@ -55,9 +56,14 @@ ambience), packages, stock, schematics, decor, copycats, items and equipment, ad
    `create:net`; client hooks and block entity parts draw it.
 5. **Saving.** After all subsystem ticks, `write_entities` publishes live entity state (including
    mutations made by later subsystems). This is a completed-tick boundary, not a host save hook;
-   see the live entity serialization limitation in `API_GAPS.md`. Each subsystem writes its column state in `chunk_data_save` and reads it back in `chunk_load`;
-   block entity data saves with the block entity. Accepted value settings and handle interactions
-   run the same publication and column flush immediately, without advancing simulation.
+   see the live entity serialization limitation in `API_GAPS.md`. Then each changed column is
+   published: every subsystem writes its block entities' fields (`save_entities`, Create's `write`),
+   which `saveAdditional` gives each entity and a changed one is marked for its chunk's save, and
+   what belongs to no block entity goes into the column's attachment (`chunk_data_save`). A block
+   entity's loaded data reaches every subsystem's `load_entity` (Create's `read`) once its column's
+   attachment is read (`chunk_load`, which also reads what older versions kept there for block
+   entities). Accepted value settings and handle interactions run the same publication and column
+   flush immediately, without advancing simulation.
 
 ## Adding a block
 

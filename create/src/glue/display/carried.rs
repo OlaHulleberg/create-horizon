@@ -23,7 +23,7 @@ const LINK_TEXTS: &str = "DisplayLinkTexts";
 /// A link's station summary settings and its joined gauges (`LinkedGauges`, as Create keeps
 /// them: not turned), when it has any.
 const LINK_MORE: &str = "DisplayLinkMore";
-/// A controlling display board's lines, as a column saves them (`board_to_nums`).
+/// A controlling display board's lines, as its block entity saves them (`board_to_nums`).
 pub(crate) const BOARD: &str = "DisplayBoard";
 pub(crate) const BOARD_TEXTS: &str = "DisplayBoardTexts";
 

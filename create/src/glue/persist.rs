@@ -1,10 +1,11 @@
-//! What Create keeps for each column of a level: one chunk attachment holding a compound, with a
-//! key per subsystem (`create`, `create_lifts`...), as Create keeps its block entities' data.
+//! What Create keeps for each column of a level that belongs to no block entity (trains,
+//! superglue...): one chunk attachment holding a compound, with a key per subsystem. Block entity
+//! fields are the entities' own (`entity_data`).
 //!
 //! The game saves a chunk's attachments with it, and saves the chunk before it unloads. There
 //! is no moment just before a chunk is saved, so a column whose state changed is written into
-//! its attachment at the end of the level tick that changed it and when an interaction
-//! is accepted. A column that did not change is not written.
+//! its attachment, and its block entities' fields published, at the end of the level tick that
+//! changed it and when an interaction is accepted. A column that did not change is not written.
 
 use super::server::ServerLevel;
 use super::subsystem::Subsystem;
@@ -60,6 +61,62 @@ pub fn read(lv: &mut ServerLevel<'_>, chunk: [i32; 2]) -> Compound {
     }
 }
 
+/// Column keys of data the block entities now keep: read once from an older save, which is then
+/// written again without them.
+pub const LEGACY_KEYS: &[&str] = &[
+    "motors",
+    "create_equipment",
+    "create_owners",
+    "links",
+    "diodes",
+    "create_redstone",
+    "arms",
+    "ejectors",
+    "vaults",
+    "chute_filters",
+    "tunnel_filters",
+    "filter_amounts",
+    "belts",
+    "brass",
+    "chutes",
+    "funnels",
+    "tank_entities",
+    "tank_multis",
+    "tanks",
+    "boilers",
+    "create_fluids",
+    "create_machines",
+    "Connections",
+    "open_ends",
+    "deployers",
+    "crushers",
+    "burners",
+    "basins",
+    "crafter_inputs",
+    "crafter_covers",
+    "create_controller",
+    "create_display",
+    "create_decor",
+    "create_copycat",
+    "track_curves",
+    "create_packages",
+    "create_stock",
+    "create_table_cloths",
+    "create_schematics",
+    "windmills",
+    "pistons",
+    "gantries",
+    "modes",
+    "chassis",
+    "create_lifts",
+    "create_contacts",
+];
+
+/// Whether column data `data` holds what an older version kept there for block entities.
+pub fn holds_legacy(data: &Compound) -> bool {
+    LEGACY_KEYS.iter().any(|k| data.contains_key(&(*k).into()))
+}
+
 /// Writes every marked column of `lv` that is still loaded, asking each subsystem for its part.
 pub fn flush(lv: &mut ServerLevel<'_>, systems: &[&dyn Subsystem]) {
     let dim = lv.dim;
@@ -78,6 +135,7 @@ pub fn flush(lv: &mut ServerLevel<'_>, systems: &[&dyn Subsystem]) {
         if !loaded {
             continue;
         }
+        super::entity_data::save(lv, chunk);
         let mut data = Compound::new();
         for s in systems {
             s.chunk_data_save(lv, chunk, &mut data);

@@ -56,7 +56,7 @@ pub trait Subsystem: Sync {
     fn neighbor_changed(&self, _dim: usize, _pos: [i32; 3], _state: u32) {}
 
     /// A column came into level `lv` with what was saved for it (`chunk_data_save`), before
-    /// its blocks are found (their block entities load after).
+    /// its blocks are found and their block entities' data is read (`load_entity`).
     fn chunk_load(&self, _lv: &mut ServerLevel<'_>, _chunk: [i32; 2], _data: &Compound) {}
 
     /// What to keep for column `chunk` of level `dim`: written into the column's attachment.
@@ -64,6 +64,32 @@ pub trait Subsystem: Sync {
 
     /// A column left level `dim`.
     fn chunk_unload(&self, _dim: usize, _chunk: [i32; 2]) {}
+
+    /// `SmartBlockEntity.write`: the fields of this subsystem's block entities in column `chunk`,
+    /// each under its own position in `out` (see `entity_data`).
+    fn save_entities(
+        &self,
+        _lv: &ServerLevel<'_>,
+        _chunk: [i32; 2],
+        _out: &mut super::entity_data::Entities,
+    ) {
+    }
+
+    /// `SmartBlockEntity.read`: the block entity of `block` at `pos` loaded `tag` (its
+    /// [`saved_keys`](Self::saved_keys) only), from a save, `/data` or an item's data.
+    fn load_entity(
+        &self,
+        _lv: &mut ServerLevel<'_>,
+        _pos: [i32; 3],
+        _block: create_engine::Block,
+        _tag: &Compound,
+    ) {
+    }
+
+    /// The keys [`save_entities`](Self::save_entities) writes for a block entity of `block`.
+    fn saved_keys(&self, _block: create_engine::Block) -> &'static [&'static str] {
+        &[]
+    }
 
     /// A moving structure takes Create block `block` at `pos` away (`Contraption.addBlock`
     /// keeps its block entity's NBT in `StructureBlockInfo.nbt`): what this subsystem keeps for

@@ -21,7 +21,7 @@ const BRASS: &str = "BrassTunnel";
 pub(crate) const DEPOT_ANGLE: &str = "DepotAngle";
 /// A belt segment riding (so its renderer draws it: `BeltRenderer` in `renderBlockEntities`).
 pub(super) const BELT_SEGMENT: &str = "BeltSegment";
-/// The belt's items, as a column saves them, its controller at `pos` from the segment.
+/// The belt's items (`belts_to_nbt`), its controller at `pos` from the segment.
 const BELT_ITEMS: &str = "BeltItems";
 /// The belt as its clients draw it (`belt::encode`), its controller as an offset from the
 /// segment, for drawing its items moving.

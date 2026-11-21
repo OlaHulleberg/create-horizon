@@ -12,7 +12,8 @@
 //! into the ticker's `receivedPayments` and sends the order to the list's address. A broken shop
 //! drops its cloth programmed again; a broken cloth drops what lay on it.
 //!
-//! Each level's cloths are kept here by position and saved with their column (`create_table_cloths`); what clients draw is in the cloth's block entity data
+//! Each level's cloths are kept here by position and saved with their block entities; what
+//! clients draw is in the cloth's block entity data
 //! (`TableCloth`). The clipboard copies and pastes the price (`Filtering`, the payment item).
 
 use super::super::items;
@@ -299,7 +300,8 @@ fn cloth_of(host: &dyn Host, c: &Compound) -> Cloth {
     }
 }
 
-/// The cloths of column `chunk`, as `TableCloths` (`Pos` and the cloth's data each).
+/// The cloths of column `chunk` as an older version saved them under `create_table_cloths`
+/// (`Pos` and the cloth's data each): what their block entities keep.
 pub(super) fn save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
     let host: &dyn Host = &*lv.host;
     let mut list: Vec<([i32; 3], Compound)> = cloths(lv.dim, |m| {
@@ -1406,6 +1408,7 @@ pub(super) fn register(r: &mut dyn mod_api::Registrar) {
         .collect();
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let kind = r.block_entity_type(TYPE).blocks(&refs).build();
+    super::super::entity_data::attach(r, &kind);
     if let Err(e) = r.block_entity_part(&kind, ClothEntity) {
         crate::create_log!("[create] the table cloth block entity's part was refused: {e:?}");
     }

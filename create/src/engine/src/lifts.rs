@@ -1,6 +1,6 @@
 //! One dimension's clockwork bearings, rope pulleys and elevators: the running ones, what waits
 //! for the next tick (`assembleNextTick`), the elevator columns and their contacts, structures
-//! saved with a column until their block is back, and structures whose block broke. Nothing
+//! loaded until their block is back, and structures whose block broke. Nothing
 //! here runs per tick for a block with nothing to do.
 
 use crate::Block;
@@ -365,7 +365,7 @@ impl Lifts {
         }
     }
 
-    /// Structures saved with a column, for when their blocks are found.
+    /// Structures loaded, for when their blocks are found.
     pub fn load(&mut self, saved: impl Iterator<Item = ([i32; 3], Held)>) {
         self.saved.extend(saved);
     }

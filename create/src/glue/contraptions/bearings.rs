@@ -1,5 +1,5 @@
 //! Bearings and windmills, pistons, chassis and gantries moving blocks as one, and their saved
-//! data (`windmills`, `chassis` in the column's compound).
+//! data (`windmills`, `chassis`, as an older version kept them in the column).
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::world::with_world;
@@ -1392,10 +1392,11 @@ fn show_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Saved with the column
+// Saved with the block entities, in the column format an older version kept
 
 /// Windmills and mechanical bearings (`windmills`), chassis ranges (`chassis`) and the options
-/// picked on value boxes (`modes`).
+/// picked on value boxes (`modes`): an older version's column data, or one block entity's
+/// (`Contraptions::load_entity`).
 pub(super) fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
     let dim = lv.dim;
     let windmills = windmills_from_nbt(lv, data);
@@ -1429,7 +1430,9 @@ pub(super) fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
         }
     });
     with_world(|w| {
-        w.load_windmills(dim, windmills.into_iter());
+        for (p, m) in windmills {
+            w.read_windmill(dim, p, m);
+        }
         w.dims[dim].chassis_range.extend(ranges);
         w.dims[dim].scroll_options.extend(modes);
         for (p, m) in pistons {

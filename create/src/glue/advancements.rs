@@ -6,8 +6,8 @@
 //!
 //! A block's own awards (`AdvancementBehaviour`) go to the player who placed it
 //! (`AdvancementBehaviour.setPlacedBy`): [`Owners`] notes the placer of every Create block a
-//! player places, keeps it per block (saved with the column as `create_owners`, carried on a
-//! moving structure as the block entity's `Owner`), and [`award_placer`] awards that player
+//! player places, keeps it per block (saved, and carried on a moving structure, as the block
+//! entity's `Owner`), and [`award_placer`] awards that player
 //! when they are in the block's level.
 
 use super::persist;
@@ -92,13 +92,11 @@ impl Owner {
     }
 }
 
-/// The column key of the saved owners.
+/// The column key of the owners an older version saved.
 const KEY: &str = "create_owners";
-/// The carried block entity's key (`AdvancementBehaviour.write`'s `Owner`).
+/// `AdvancementBehaviour.write`'s `Owner`.
 const OWNER: &str = "Owner";
-/// The carried press's `TracksCreated`.
 const TRACKS: &str = "TracksCreated";
-/// The carried spout's foods (`NBTHelper.putMarker`).
 const FOODS: [(&str, &str); 3] = [
     ("create:chocolate_glazed_berries", "ChocolateBerries"),
     ("create:honeyed_apple", "HoneyApple"),
@@ -1063,6 +1061,7 @@ impl Subsystem for Owners {
         }
     }
 
+    /// The `create_owners` an older version kept in the column.
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
         let Some(Tag::List(list)) = data.get(&KEY.into()) else {
             return;
@@ -1089,29 +1088,50 @@ impl Subsystem for Owners {
         });
     }
 
-    fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
+    /// `AdvancementBehaviour.write`, with what a press or spout counts toward its awards.
+    fn save_entities(
+        &self,
+        lv: &ServerLevel<'_>,
+        chunk: [i32; 2],
+        out: &mut super::entity_data::Entities,
+    ) {
         let inside = |p: &[i32; 3]| [p[0] >> 4, p[2] >> 4] == chunk;
-        let mut list: Vec<([i32; 3], Owner)> = OWNERS.with_borrow(|o| {
-            o.get(&lv.dim).map_or_else(Vec::new, |d| {
-                d.iter()
-                    .filter(|(p, _)| inside(p))
-                    .map(|(p, u)| (*p, *u))
-                    .collect()
-            })
+        OWNERS.with_borrow(|o| {
+            for (p, u) in o.get(&lv.dim).into_iter().flatten() {
+                if inside(p) {
+                    owner_to_nbt(u, out.entry(*p).or_default());
+                }
+            }
         });
-        if list.is_empty() {
-            data.remove(&KEY.into());
-            return;
+    }
+
+    /// `AdvancementBehaviour.read`.
+    fn load_entity(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        _block: create_engine::Block,
+        tag: &Compound,
+    ) {
+        let owner = owner_from_nbt(tag);
+        OWNERS.with_borrow_mut(|o| {
+            let d = o.entry(lv.dim).or_default();
+            match owner {
+                Some(u) => d.insert(pos, u),
+                None => d.remove(&pos),
+            }
+        });
+        if owner.is_some() {
+            FRESH.with_borrow_mut(|f| f.push((lv.dim, pos)));
         }
-        list.sort_unstable_by_key(|e| e.0);
-        let tags = list
-            .into_iter()
-            .map(|(p, u)| {
-                let counts = [u.tracks as i32, i32::from(u.foods)];
-                Tag::IntArray([&p[..], &uuid_tag(u.player), &counts].concat())
-            })
-            .collect();
-        data.insert(KEY.into(), Tag::List(tags));
+    }
+
+    fn saved_keys(&self, block: create_engine::Block) -> &'static [&'static str] {
+        match block {
+            create_engine::Block::MechanicalPress => &[OWNER, TRACKS],
+            create_engine::Block::Spout => &[OWNER, FOODS[0].1, FOODS[1].1, FOODS[2].1],
+            _ => &[OWNER],
+        }
     }
 
     fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {
@@ -1133,15 +1153,7 @@ impl Subsystem for Owners {
             return;
         };
         set_owner(lv.dim, pos, None);
-        out.insert(OWNER.into(), Tag::IntArray(uuid_tag(u.player).to_vec()));
-        if u.tracks > 0 {
-            out.insert(TRACKS.into(), Tag::Int(u.tracks as i32));
-        }
-        for (bit, (_, key)) in FOODS.iter().enumerate() {
-            if u.foods & (1 << bit) != 0 {
-                out.insert((*key).into(), Tag::Byte(1));
-            }
-        }
+        owner_to_nbt(&u, out);
     }
 
     fn carry_in(
@@ -1152,28 +1164,42 @@ impl Subsystem for Owners {
         data: &Compound,
         _turn: create_engine::contraption::Transform,
     ) {
-        let Some(player) = carried_owner(data) else {
-            return;
-        };
-        let tracks = match data.get(&TRACKS.into()) {
-            Some(Tag::Int(n)) => (*n).max(0) as u32,
-            _ => 0,
-        };
-        let foods = FOODS
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, key))| data.get(&(*key).into()).is_some())
-            .fold(0, |f, (bit, _)| f | (1 << bit));
-        set_owner(
-            lv.dim,
-            pos,
-            Some(Owner {
-                player,
-                tracks,
-                foods,
-            }),
-        );
+        if let Some(owner) = owner_from_nbt(data) {
+            set_owner(lv.dim, pos, Some(owner));
+        }
     }
+}
+
+/// `AdvancementBehaviour.write`'s `Owner`, the press's `TracksCreated` and the spout's foods
+/// (`NBTHelper.putMarker`).
+fn owner_to_nbt(u: &Owner, out: &mut Compound) {
+    out.insert(OWNER.into(), Tag::IntArray(uuid_tag(u.player).to_vec()));
+    if u.tracks > 0 {
+        out.insert(TRACKS.into(), Tag::Int(u.tracks as i32));
+    }
+    for (bit, (_, key)) in FOODS.iter().enumerate() {
+        if u.foods & (1 << bit) != 0 {
+            out.insert((*key).into(), Tag::Byte(1));
+        }
+    }
+}
+
+fn owner_from_nbt(data: &Compound) -> Option<Owner> {
+    let player = carried_owner(data)?;
+    let tracks = match data.get(&TRACKS.into()) {
+        Some(Tag::Int(n)) => (*n).max(0) as u32,
+        _ => 0,
+    };
+    let foods = FOODS
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, key))| data.get(&(*key).into()).is_some())
+        .fold(0, |f, (bit, _)| f | (1 << bit));
+    Some(Owner {
+        player,
+        tracks,
+        foods,
+    })
 }
 
 /// The owner carried on a moving structure's block (its `Owner`), for awards a block gives

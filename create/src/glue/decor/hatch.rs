@@ -20,6 +20,7 @@ pub(super) fn register(r: &mut dyn Registrar) {
         .block_entity_type(TYPE)
         .blocks(&["create:item_hatch"])
         .build();
+    super::super::entity_data::attach(r, &kind);
     if let Err(e) = r.block_entity_part(&kind, HatchEntity) {
         crate::create_log!("[create] the item hatch block entity's part was refused: {e:?}");
     }

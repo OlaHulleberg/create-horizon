@@ -1,7 +1,7 @@
 //! Create's stock logistics: stock links joining packagers into logistics networks, stock
 //! tickers, redstone requesters and factory gauges. A sibling of `packages` (packagers pack
 //! and send what is ordered); the rules are `create_engine::stock`'s. State is typed, per
-//! level, on the server thread and saved with its column as `create_stock`; the networks
+//! level, on the server thread and saved with their block entities; the networks
 //! themselves (their links loaded or not, promises and owners: Create's
 //! `LogisticsNetworkSavedData`) in an attachment of the overworld (`create:logistics_networks`,
 //! the level's saved data), written when they changed. Nothing here ticks: a network's stock is
@@ -917,9 +917,43 @@ impl Subsystem for Stock {
         }
     }
 
-    fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
-        shop::save(lv, chunk, data);
-        chunk_data_save(lv, chunk, data);
+    /// `PackagerLinkBlockEntity.write`, `StockTickerBlockEntity.write`,
+    /// `RedstoneRequesterBlockEntity.write`, `FactoryPanelBlockEntity.write` and
+    /// `TableClothBlockEntity.write` of column `chunk`.
+    fn save_entities(
+        &self,
+        lv: &ServerLevel<'_>,
+        chunk: [i32; 2],
+        out: &mut super::entity_data::Entities,
+    ) {
+        let mut data = Compound::new();
+        shop::save(lv, chunk, &mut data);
+        column_data(lv, chunk, &mut data);
+        super::entity_data::split(&data, "Pos", &CLOTHS, out);
+        if let Some(Tag::Compound(own)) = data.get(&KEY.into()) {
+            super::entity_data::split(own, "Pos", &SAVED, out);
+        }
+    }
+
+    fn load_entity(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        _block: create_engine::Block,
+        tag: &Compound,
+    ) {
+        let cloths = super::entity_data::join(tag, pos, "Pos", &CLOTHS);
+        if !cloths.is_empty() {
+            shop::load(lv, &cloths);
+        }
+        let own = super::entity_data::join(tag, pos, "Pos", &SAVED);
+        if !own.is_empty() {
+            chunk_load(lv, &own);
+        }
+    }
+
+    fn saved_keys(&self, _block: create_engine::Block) -> &'static [&'static str] {
+        &SAVED_KEYS
     }
 
     fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {
@@ -2152,13 +2186,23 @@ fn set_requester(
 }
 
 const KEY: &str = "create_stock";
+/// The column lists an older version kept and the block entity keys their entries are now.
+const SAVED: [(&str, &str); 4] = [
+    ("links", "StockLink"),
+    ("tickers", "StockTicker"),
+    ("requesters", "Requester"),
+    ("gauges", "GaugePanels"),
+];
+const CLOTHS: [(&str, &str); 1] = [(shop::SAVED, "ClothState")];
+const SAVED_KEYS: [&str; 5] = [SAVED[0].1, SAVED[1].1, SAVED[2].1, SAVED[3].1, CLOTHS[0].1];
 
 fn freq(net: Option<Network>) -> Tag {
     Tag::IntArray(net.map_or_else(Vec::new, |n| st::network_ints(n).to_vec()))
 }
 
-/// Links, tickers, requesters and gauges of a column saved (their block entities' `write`).
-fn chunk_data_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
+/// Links, tickers, requesters and gauges of a column (`write`), as an older version saved them
+/// under `create_stock`: what [`SAVED`]'s block entities keep.
+fn column_data(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
     if !present() {
         return;
     }
@@ -2267,7 +2311,8 @@ fn chunk_data_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
     );
 }
 
-/// A column joined a level: its links, tickers, requesters and gauges back (`read`).
+/// Links, tickers, requesters and gauges back (`read`): from an older version's column data, or
+/// one block entity's (`entity_data::join`).
 fn chunk_load(lv: &ServerLevel<'_>, data: &Compound) {
     let host: &dyn mod_api::Host = &*lv.host;
     let now = now(lv);

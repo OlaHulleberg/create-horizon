@@ -286,8 +286,8 @@ pub struct Dimension {
     pub tank_changes: Vec<[i32; 3]>,
     /// Tank blocks whose `top`, `bottom` and `shape` follow their tank again.
     pub tank_states: Vec<[i32; 3]>,
-    /// Windmill bearings whose sails are assembled, by bearing; ones saved with a column wait
-    /// for their bearing; right-clicks waiting for the next tick (`assembleNextTick`); bearings
+    /// Windmill bearings whose sails are assembled, by bearing; loaded ones wait for their
+    /// bearing; right-clicks waiting for the next tick (`assembleNextTick`); bearings
     /// clients must see again; and structures whose bearing broke, to put back.
     pub windmills: HashMap<[i32; 3], Windmill>,
     windmill_saved: HashMap<[i32; 3], Windmill>,
@@ -429,8 +429,8 @@ pub struct Dimension {
     /// Chutes holding a stack: where it is (1 top, 0 bottom); the only ones that tick.
     /// Set through `set_chute_position`, which marks the column to be saved.
     pub chutes: HashMap<[i32; 3], f32>,
-    /// Stack positions saved with a column (`ChuteBlockEntity.write`'s `ItemPosition`), kept
-    /// until their chute loads (`read`).
+    /// Stack positions loaded (`ChuteBlockEntity.read`'s `ItemPosition`), kept until their chute
+    /// is found.
     pub(crate) chute_saved: HashMap<[i32; 3], f32>,
     /// Empty chutes that may take from the inventory above them.
     pub chute_pulls: crate::chute::Pulls,
@@ -3824,6 +3824,174 @@ impl CreateWorld {
         self.place(dim, pos, state, false);
     }
 
+    /// `BeltBlockEntity.read` of a controller's `Inventory`: a formed belt's items are replaced
+    /// at once; one whose chain has not formed takes them when it does.
+    pub fn read_belt_items(
+        &mut self,
+        dim: usize,
+        controller: [i32; 3],
+        items: crate::belt::Inventory,
+    ) {
+        let d = &mut self.dims[dim];
+        let Some(belt) = d.belts.get_mut(&controller) else {
+            d.belt_saved.insert(controller, items);
+            return;
+        };
+        belt.items = items;
+        d.belt_changes.push(controller);
+        d.belt_saved_changes.insert(controller);
+    }
+
+    /// `BrassTunnelBlockEntity.read`: a placed tunnel's distribution state is replaced at once;
+    /// one not found yet takes it when it is.
+    pub fn read_brass(&mut self, dim: usize, pos: [i32; 3], saved: crate::tunnel::SavedBrass) {
+        let d = &mut self.dims[dim];
+        match d.brass.get_mut(&pos) {
+            Some(live) => *live = crate::tunnel::Brass::from_saved(saved),
+            None => {
+                d.brass_saved.insert(pos, saved);
+            }
+        }
+    }
+
+    /// `ChuteBlockEntity.read`'s `ItemPosition`, at once for a placed chute.
+    pub fn read_chute(&mut self, dim: usize, pos: [i32; 3], at: f32) {
+        let d = &mut self.dims[dim];
+        match d.chutes.get_mut(&pos) {
+            Some(live) => *live = at,
+            None => {
+                d.chute_saved.insert(pos, at);
+            }
+        }
+    }
+
+    /// `FunnelBlockEntity.read`'s `TransferCooldown` at game time `now`, at once for a placed
+    /// funnel.
+    pub fn read_funnel(&mut self, dim: usize, pos: [i32; 3], cooldown: u32, now: u64) {
+        let due = crate::funnel::due_after(cooldown, now);
+        let d = &mut self.dims[dim];
+        match d.funnels.get_mut(&pos) {
+            Some(live) => *live = due,
+            None => {
+                d.funnel_saved.insert(pos, due);
+            }
+        }
+    }
+
+    /// `MechanicalBearingBlockEntity.read`: a turning bearing takes the saved `Angle` at once.
+    /// A placed bearing turning nothing reads no structure: the saved one is the world's
+    /// elsewhere (Create's is an entity of its own). One not found yet takes all of `saved`.
+    pub fn read_windmill(&mut self, dim: usize, pos: [i32; 3], saved: Windmill) {
+        let d = &mut self.dims[dim];
+        if let Some(live) = d.windmills.get_mut(&pos) {
+            live.turn = saved.turn;
+            d.windmill_changes.push(pos);
+        } else if !d.states.contains_key(&pos) {
+            d.windmill_saved.insert(pos, saved);
+        }
+    }
+
+    /// `FluidTankBlockEntity.read`'s `Boiler` (`BoilerData.read`): a placed controller's boiler
+    /// takes it at once, its engines and whistles counted again; a tank not found yet when it is.
+    pub fn read_boiler(&mut self, dim: usize, pos: [i32; 3], saved: crate::steam::SavedBoiler) {
+        let d = &mut self.dims[dim];
+        if !d.tanks.parts.contains_key(&pos) {
+            d.boiler_saved.insert(pos, saved);
+            return;
+        }
+        if d.tanks.parts.get(&pos).map(|p| p.controller) != Some(pos) {
+            return;
+        }
+        let boiler = d.boilers.entry(pos).or_insert_with(|| SteamBoiler {
+            data: crate::steam::Boiler::default(),
+            engines: Vec::new(),
+            whistles: Vec::new(),
+            size: 0,
+        });
+        boiler.data = saved.read();
+        d.boiler_checks.push(pos);
+    }
+
+    /// `HosePulleyBlockEntity.read`: a placed pulley's hose `Offset` and tank at once.
+    pub fn read_hose(&mut self, dim: usize, pos: [i32; 3], offset: f32, tank: crate::tank::Tank) {
+        let p = &mut self.dims[dim].plumbing;
+        match p.hoses.get_mut(&pos) {
+            Some(live) => {
+                live.offset = offset;
+                live.tank = tank;
+                p.hose_changes.push(pos);
+            }
+            None => {
+                p.hose_saved.insert(pos, (offset, tank));
+            }
+        }
+    }
+
+    /// `CreativeFluidTankBlockEntity.read`: a placed tank's fluid at once, its tank's too when it
+    /// is the controller (its shape is the world's); one not found yet takes `fluid` and `multi`
+    /// when it is.
+    pub fn read_creative_tank(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        fluid: Option<crate::tank::Fluid>,
+        multi: Option<crate::tank::Multi>,
+    ) {
+        let d = &mut self.dims[dim];
+        if !d.plumbing.creative.contains_key(&pos) {
+            d.plumbing.creative_saved.insert(pos, fluid);
+            if let Some(m) = multi {
+                d.creative_tank_saved.insert(pos, m);
+            }
+            return;
+        }
+        d.plumbing.creative.insert(pos, fluid);
+        d.plumbing.creative_changes.push(pos);
+        if let Some(m) = d.creative_tanks.multis.get_mut(&pos) {
+            m.tank.fluid = fluid;
+            self.creative_tanks_touched(dim, true);
+        }
+    }
+
+    /// `DeployerBlockEntity.read`: a placed deployer's state at once.
+    pub fn read_deployer(&mut self, dim: usize, pos: [i32; 3], saved: crate::deployer::Deployer) {
+        let d = &mut self.dims[dim];
+        let Some(live) = d.deployers.get_mut(&pos) else {
+            d.deployer_saved.insert(pos, saved);
+            return;
+        };
+        *live = saved;
+        if live.busy() && !d.deploying.contains(&pos) {
+            d.deploying.push(pos);
+        }
+        d.deployer_changes.push(pos);
+    }
+
+    /// `CrushingWheelControllerBlockEntity.read`: a placed controller's contents at once; the
+    /// entity it holds stays.
+    pub fn read_crusher(&mut self, dim: usize, pos: [i32; 3], saved: crate::crusher::Crusher) {
+        let d = &mut self.dims[dim];
+        let Some((live, _)) = d.crushers.get_mut(&pos) else {
+            d.crusher_saved.insert(pos, saved);
+            return;
+        };
+        let entity = live.entity;
+        *live = crate::crusher::Crusher { entity, ..saved };
+    }
+
+    /// `BlazeBurnerBlockEntity.read`: a placed burner's fuel at once.
+    pub fn read_burner(&mut self, dim: usize, pos: [i32; 3], saved: crate::burner::Burner) {
+        let d = &mut self.dims[dim];
+        let Some(live) = d.burners.get_mut(&pos) else {
+            d.burner_saved.insert(pos, saved);
+            return;
+        };
+        *live = saved;
+        if live.burning() && !d.burning.contains(&pos) {
+            d.burning.push(pos);
+        }
+    }
+
     /// Items saved with belts in a column (`chunk_data_save`), for when their chains form.
     pub fn load_belt_items(
         &mut self,
@@ -4243,6 +4411,19 @@ impl CreateWorld {
         self.dims[dim].diode_saved.extend(saved);
     }
 
+    /// `BrassDiodeBlockEntity.read` (`State`, and the delay's `ScrollValue`): a placed diode
+    /// takes them at once, one not found yet when it is.
+    pub fn read_diode(&mut self, dim: usize, pos: [i32; 3], state: i32, max: i32) {
+        let d = &mut self.dims[dim];
+        let Some(x) = d.diodes.get_mut(&pos) else {
+            d.diode_saved.insert(pos, (state, max));
+            return;
+        };
+        x.set_delay(max);
+        x.state = state.clamp(0, x.max);
+        d.diode_checks.push((pos, crate::diode::PLACED_DELAY));
+    }
+
     /// The diodes of a column not at rest at their default delay (`BrassDiodeBlockEntity.write`:
     /// `State`, and the delay), to save.
     pub fn column_diodes(&self, dim: usize, cx: i32, cz: i32) -> Vec<([i32; 3], i32, i32)> {
@@ -4276,6 +4457,42 @@ impl CreateWorld {
         saved: impl Iterator<Item = ([i32; 3], (crate::link::Key, i32))>,
     ) {
         self.dims[dim].link_saved.extend(saved);
+    }
+
+    /// `EjectorBlockEntity.read`: a placed ejector takes `e` at once, one not found yet when it
+    /// is.
+    pub fn read_ejector(&mut self, dim: usize, pos: [i32; 3], e: crate::ejector::Ejector) {
+        let d = &mut self.dims[dim];
+        match d.ejectors.get_mut(&pos) {
+            Some(live) => {
+                *live = e;
+                d.ejector_changes.push(pos);
+            }
+            None => {
+                d.ejector_saved.insert(pos, e);
+            }
+        }
+    }
+
+    /// `RedstoneLinkBlockEntity.read`: a placed link takes its frequencies and `Transmit` at
+    /// once, leaving its network for the new one; one not found yet when it is.
+    pub fn read_link(&mut self, dim: usize, pos: [i32; 3], key: crate::link::Key, transmit: i32) {
+        let d = &mut self.dims[dim];
+        let Some(live) = d.links.links.get(&pos).cloned() else {
+            d.link_saved.insert(pos, (key, transmit));
+            return;
+        };
+        let mut changed = d.links.remove(pos);
+        changed.extend(d.links.add(
+            pos,
+            crate::link::Link {
+                key,
+                transmit,
+                ..live
+            },
+        ));
+        d.link_changes.extend(changed);
+        d.link_shown.push(pos);
     }
 
     /// The links of a column (`LinkBehaviour.write`: frequencies; `Transmit`), to save.
@@ -4384,6 +4601,20 @@ impl CreateWorld {
         saved: impl Iterator<Item = ([i32; 3], crate::tank::SavedTank)>,
     ) {
         self.dims[dim].tank_saved.extend(saved);
+    }
+
+    /// `FluidTankBlockEntity.read` of a placed tank: a controller's contents change at once
+    /// (its shape is the world's); a tank not found yet takes all of `saved` when it is.
+    pub fn read_tank(&mut self, dim: usize, pos: [i32; 3], saved: crate::tank::SavedTank) {
+        let d = &mut self.dims[dim];
+        if !d.tanks.parts.contains_key(&pos) {
+            d.tank_saved.insert(pos, saved);
+            return;
+        }
+        if let (Some(m), Some(live)) = (saved.multi, d.tanks.multis.get_mut(&pos)) {
+            live.tank = m.tank;
+            d.tank_changes.push(pos);
+        }
     }
 
     /// FluidTankBlockEntity.write for every column member, including pending connectivity.
@@ -6235,6 +6466,93 @@ mod tests {
         assert_eq!(turns.next(&mut w), Some(TransportTick::Fluid([4, 8, 0])));
         assert_eq!(turns.next(&mut w), Some(TransportTick::Fluid([5, 8, 0])));
         assert_eq!(turns.next(&mut w), None);
+    }
+
+    #[test]
+    fn read_reaches_placed_chutes_funnels_burners_and_deployers_and_waits_for_the_rest() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            (
+                "create:chute",
+                vec![("facing", "down"), ("shape", "normal")],
+            ),
+            (
+                "create:andesite_funnel",
+                vec![
+                    ("facing", "up"),
+                    ("extracting", "false"),
+                    ("powered", "false"),
+                ],
+            ),
+            ("create:blaze_burner", vec![("blaze", "smouldering")]),
+            (
+                "create:deployer",
+                vec![("facing", "down"), ("axis_along_first", "true")],
+            ),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (chute, funnel, burner, deployer) = ([0, 8, 0], [2, 8, 0], [4, 8, 0], [6, 8, 0]);
+        w.read_chute(0, chute, 0.25);
+        w.apply_block_change(0, chute, 0, 10, false);
+        assert_eq!(w.dims[0].chutes[&chute], 0.25);
+        w.read_chute(0, chute, 0.75);
+        assert_eq!(w.dims[0].chutes[&chute], 0.75);
+        w.apply_block_change(0, funnel, 0, 11, false);
+        w.read_funnel(0, funnel, 5, 100);
+        assert_eq!(w.dims[0].funnels[&funnel], crate::funnel::due_after(5, 100));
+        w.apply_block_change(0, burner, 0, 12, false);
+        let fed = crate::burner::Burner {
+            fuel: crate::burner::Fuel::from_index(1),
+            remaining: 400,
+            creative: None,
+        };
+        w.read_burner(0, burner, fed);
+        assert_eq!(w.dims[0].burners[&burner].remaining, 400);
+        assert!(w.dims[0].burning.contains(&burner));
+        w.apply_block_change(0, deployer, 0, 13, false);
+        let saved = crate::deployer::Deployer {
+            timer: 120,
+            locked: true,
+            ..Default::default()
+        };
+        w.read_deployer(0, deployer, saved);
+        assert_eq!(w.dims[0].deployers[&deployer].timer, 120);
+        assert!(w.dims[0].deployers[&deployer].locked);
+        states::clear_range();
+    }
+
+    #[test]
+    fn read_turns_a_running_bearing_and_takes_no_structure_for_an_idle_one() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = world();
+        let saved = |angle: f32| Windmill {
+            blocks: vec![([0, 1, 0], 2)],
+            sails: 8,
+            clockwise: true,
+            kind: BearingKind::Windmill,
+            turn: crate::contraption::Turn {
+                angle,
+                ..Default::default()
+            },
+            extras: Default::default(),
+        };
+        let running = [0, 8, 0];
+        w.dims[0].windmills.insert(running, saved(10.0));
+        w.read_windmill(0, running, saved(90.0));
+        assert_eq!(w.dims[0].windmills[&running].turn.angle, 90.0);
+        let idle = [4, 8, 0];
+        w.apply_block_change(0, idle, 0, 2, false);
+        w.read_windmill(0, idle, saved(45.0));
+        assert!(!w.dims[0].windmills.contains_key(&idle));
+        assert!(!w.dims[0].windmill_saved.contains_key(&idle));
+        let unloaded = [8, 8, 0];
+        w.read_windmill(0, unloaded, saved(45.0));
+        assert!(w.dims[0].windmill_saved.contains_key(&unloaded));
+        states::clear_range();
     }
 
     #[test]

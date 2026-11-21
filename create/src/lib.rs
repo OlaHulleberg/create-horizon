@@ -74,6 +74,7 @@ impl Hooks for Create {
                 }
                 world::close();
                 persist::clear();
+                glue::entity_data::clear();
                 glue::net::clear();
                 glue::forget_columns();
             }
@@ -113,10 +114,13 @@ impl Hooks for Create {
         glue::ensure_column(host, event.dimension, event.chunk);
     }
 
-    fn chunk_unload(&self, _host: &mut dyn ServerHost, event: &mut ChunkUnloadEvent<'_>) {
+    fn chunk_unload(&self, host: &mut dyn ServerHost, event: &mut ChunkUnloadEvent<'_>) {
         let Some(dim) = world::level_index(event.dimension) else {
             return;
         };
+        if let Some(level) = host.level(event.dimension) {
+            glue::entity_data::column_unloaded(level, event.chunk);
+        }
         glue::forget_column(dim, event.chunk);
         for s in SUBSYSTEMS {
             s.chunk_unload(dim, event.chunk);
@@ -160,15 +164,16 @@ impl Hooks for Create {
         let HostSide::Server(host) = host else {
             return;
         };
-        if !world::running() {
-            return;
-        }
         let Some(dimension) = event.level.dimension().id(&*host) else {
             return;
         };
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
             return;
         };
+        glue::load_entities(&mut lv);
+        if !world::running() {
+            return;
+        }
         glue::fluids::tick_pipe_shapes(&mut lv);
         world::with_world(|w| w.dims[lv.dim].fluid_transport.begin_tick());
     }

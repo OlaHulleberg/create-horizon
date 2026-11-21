@@ -142,14 +142,39 @@ impl Subsystem for Display {
         carried::carry_in(lv, pos, b, data, turn);
     }
 
+    /// The `create_display` an older version kept in the column.
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
         if let Some(Tag::Compound(c)) = data.get(&"create_display".into()) {
             displays_from_nbt(lv.dim, c);
         }
     }
 
-    fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
-        displays_chunk_save(lv.dim, chunk, data);
+    fn save_entities(
+        &self,
+        lv: &ServerLevel<'_>,
+        chunk: [i32; 2],
+        out: &mut crate::glue::entity_data::Entities,
+    ) {
+        save_entities(lv.dim, chunk, out);
+    }
+
+    fn load_entity(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        tag: &Compound,
+    ) {
+        load_entity(lv.dim, pos, block, tag);
+    }
+
+    fn saved_keys(&self, block: create_engine::Block) -> &'static [&'static str] {
+        match block {
+            create_engine::Block::DisplayLink => &[LINK],
+            create_engine::Block::DisplayBoard => &[BOARD],
+            b if display::is_nixie(b) => &[NIXIE],
+            _ => &[],
+        }
     }
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
@@ -2478,183 +2503,202 @@ fn display_state(lv: &ServerLevel<'_>, pos: [i32; 3]) -> String {
 // ---------------------------------------------------------------------------------------------
 // Saving
 
-/// The column's links, tubes, boards and reservations, under `create_display`.
-fn displays_chunk_save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
+const LINK: &str = "DisplayLink";
+const NIXIE: &str = "NixieText";
+const BOARD: &str = "FlapDisplay";
+
+/// `DisplayLinkBlockEntity.write` (with the lines it holds on its targets),
+/// `NixieTubeBlockEntity.write`'s custom text and a controlling `FlapDisplayBlockEntity.write`
+/// of column `chunk`.
+fn save_entities(dim: usize, chunk: [i32; 2], out: &mut crate::glue::entity_data::Entities) {
     let inside = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]);
     let s = |v: &str| Tag::String(v.into());
-    let Some(own) = with_world(|w| {
+    with_world(|w| {
         let d = &mut w.dims[dim].displays;
-        let mut own = Compound::new();
-        // Links: x, y, z, the target's offset, line, Directional, Mode, Cycle, whether it has
-        // a StartTime and its two halves; then the source id and the label.
-        let mut links: Vec<(&[i32; 3], &Link)> =
-            d.links.iter().filter(|(p, _)| inside(p)).collect();
-        links.sort_by_key(|(p, _)| **p);
-        if !links.is_empty() {
-            let mut nums = Vec::new();
-            let mut texts = Vec::new();
-            for (p, l) in links {
-                let start = l.config.start_time.unwrap_or(0);
-                nums.extend(p);
-                nums.extend(l.target_offset);
-                nums.extend([
-                    l.target_line,
-                    l.config.directional,
-                    l.config.mode,
-                    l.config.cycle,
-                    i32::from(l.config.start_time.is_some()),
-                    (start >> 32) as i32,
-                    start as i32,
-                ]);
-                texts.push(s(l.source.map_or("", Source::id)));
-                texts.push(s(&l.config.label));
+        for (p, l) in d.links.iter().filter(|(p, _)| inside(p)) {
+            let config = &l.config;
+            let mut c = Compound::from([
+                (
+                    "TargetOffset".into(),
+                    Tag::IntArray(l.target_offset.to_vec()),
+                ),
+                ("TargetLine".into(), Tag::Int(l.target_line)),
+                ("Directional".into(), Tag::Int(config.directional)),
+                ("Mode".into(), Tag::Int(config.mode)),
+                ("Cycle".into(), Tag::Int(config.cycle)),
+                ("Source".into(), s(l.source.map_or("", Source::id))),
+                ("Label".into(), s(&config.label)),
+                ("Format".into(), Tag::Int(config.format)),
+                ("Collected".into(), Tag::Int(config.collected)),
+                ("Interval".into(), Tag::Int(config.interval)),
+            ]);
+            if let Some(t) = config.start_time {
+                c.insert("StartTime".into(), Tag::Long(t));
             }
-            let mut c = Compound::new();
-            c.insert("nums".into(), Tag::IntArray(nums));
-            c.insert("texts".into(), Tag::List(texts));
-            own.insert("links".into(), Tag::Compound(c));
-        }
-        // A list's number format, a tunnel's count and a throughput's interval, where any is
-        // set: x, y, z, Format, Collected, Interval.
-        let extra: Vec<i32> = {
-            let mut l: Vec<(&[i32; 3], &Link)> = d
-                .links
+            if let Some(f) = &config.filter {
+                c.insert("Filter".into(), s(f));
+            }
+            if let Some(n) = config.name_column {
+                c.insert("NameColumn".into(), Tag::Int(n));
+            }
+            if let Some(n) = config.platform_column {
+                c.insert("PlatformColumn".into(), Tag::Int(n));
+            }
+            if !l.panels.is_empty() {
+                let gauges = l
+                    .panels
+                    .iter()
+                    .flat_map(|(q, slot)| [q[0], q[1], q[2], i32::from(*slot)])
+                    .collect();
+                c.insert("LinkedGauges".into(), Tag::IntArray(gauges));
+            }
+            let mut reserved: Vec<i32> = d
+                .reserved
                 .iter()
-                .filter(|(p, l)| {
-                    inside(p)
-                        && (l.config.format != 0
-                            || l.config.collected != 0
-                            || l.config.interval != 0)
-                })
+                .filter(|(_, link)| *link == p)
+                .flat_map(|((t, line), _)| [t[0], t[1], t[2], *line])
                 .collect();
-            l.sort_by_key(|(p, _)| **p);
-            l.into_iter()
-                .flat_map(|(p, l)| {
-                    [
-                        p[0],
-                        p[1],
-                        p[2],
-                        l.config.format,
-                        l.config.collected,
-                        l.config.interval,
-                    ]
-                })
-                .collect()
-        };
-        if !extra.is_empty() {
-            own.insert("link_extra".into(), Tag::IntArray(extra));
+            if !reserved.is_empty() {
+                let mut lines: Vec<[i32; 4]> = reserved.as_chunks::<4>().0.to_vec();
+                lines.sort_unstable();
+                reserved = lines.into_iter().flatten().collect();
+                c.insert("Reserved".into(), Tag::IntArray(reserved));
+            }
+            out.entry(*p)
+                .or_default()
+                .insert(LINK.into(), Tag::Compound(c));
         }
-        // The station summary's settings and the gauges joined (`LinkedGauges`: x, y, z, slot),
-        // where a link has any.
-        let mut more: Vec<(&[i32; 3], &Link)> = d
-            .links
-            .iter()
-            .filter(|(p, l)| {
-                inside(p)
-                    && (l.config.filter.is_some()
-                        || l.config.name_column.is_some()
-                        || l.config.platform_column.is_some()
-                        || !l.panels.is_empty())
-            })
-            .collect();
-        more.sort_by_key(|(p, _)| **p);
-        if !more.is_empty() {
-            let list = more
-                .into_iter()
-                .map(|(p, l)| {
-                    let mut c = Compound::new();
-                    c.insert("Pos".into(), Tag::IntArray(p.to_vec()));
-                    if let Some(f) = &l.config.filter {
-                        c.insert("Filter".into(), s(f));
-                    }
-                    if let Some(n) = l.config.name_column {
-                        c.insert("NameColumn".into(), Tag::Int(n));
-                    }
-                    if let Some(n) = l.config.platform_column {
-                        c.insert("PlatformColumn".into(), Tag::Int(n));
-                    }
-                    if !l.panels.is_empty() {
-                        c.insert(
-                            "LinkedGauges".into(),
-                            Tag::IntArray(
-                                l.panels
-                                    .iter()
-                                    .flat_map(|(q, slot)| [q[0], q[1], q[2], i32::from(*slot)])
-                                    .collect(),
-                            ),
-                        );
-                    }
-                    Tag::Compound(c)
-                })
-                .collect();
-            own.insert("link_more".into(), Tag::List(list));
-        }
-        // Tubes with custom text: x, y, z, index; the text.
-        let mut nixies: Vec<_> = d
+        for (p, n) in d
             .nixies
             .iter()
             .filter(|(p, n)| inside(p) && n.custom.is_some())
-            .collect();
-        nixies.sort_by_key(|(p, _)| **p);
-        if !nixies.is_empty() {
-            let mut nums = Vec::new();
-            let mut texts = Vec::new();
-            for (p, n) in nixies {
-                nums.extend(p);
-                nums.push(n.index);
-                texts.push(s(n.custom.as_deref().unwrap_or("")));
-            }
-            let mut c = Compound::new();
-            c.insert("nums".into(), Tag::IntArray(nums));
-            c.insert("texts".into(), Tag::List(texts));
-            own.insert("nixies".into(), Tag::Compound(c));
+        {
+            let c = Compound::from([
+                ("Index".into(), Tag::Int(n.index)),
+                ("Text".into(), s(n.custom.as_deref().unwrap_or(""))),
+            ]);
+            out.entry(*p)
+                .or_default()
+                .insert(NIXIE.into(), Tag::Compound(c));
         }
-        // Controllers: x, y, z, size, line count, then per line its dye (-1 none), glow,
-        // manual and section count, per section its width's bits, cycle and flags; the
-        // texts: each line's key and each section's text.
-        let mut boards: Vec<[i32; 3]> = d
+        let boards: Vec<[i32; 3]> = d
             .boards
             .iter()
             .filter(|(p, b)| inside(p) && b.controller)
             .map(|(p, _)| *p)
             .collect();
-        boards.sort_unstable();
-        if !boards.is_empty() {
-            let mut nums = Vec::new();
-            let mut texts = Vec::new();
-            for p in boards {
-                let Some(b) = d.boards.get_mut(&p) else {
-                    continue;
-                };
-                nums.extend(p);
-                board_to_nums(b, &mut nums, &mut texts);
-            }
-            let mut c = Compound::new();
-            c.insert("nums".into(), Tag::IntArray(nums));
-            c.insert("texts".into(), Tag::List(texts));
-            own.insert("boards".into(), Tag::Compound(c));
+        for p in boards {
+            let Some(b) = d.boards.get_mut(&p) else {
+                continue;
+            };
+            let (mut nums, mut texts) = (Vec::new(), Vec::new());
+            board_to_nums(b, &mut nums, &mut texts);
+            let c = Compound::from([
+                ("nums".into(), Tag::IntArray(nums)),
+                ("texts".into(), Tag::List(texts)),
+            ]);
+            out.entry(p)
+                .or_default()
+                .insert(BOARD.into(), Tag::Compound(c));
         }
-        // Reservations of this column's targets: target, line, link.
-        let mut reserved: Vec<_> = d.reserved.iter().filter(|((p, _), _)| inside(p)).collect();
-        reserved.sort();
-        if !reserved.is_empty() {
-            let v: Vec<i32> = reserved
-                .into_iter()
-                .flat_map(|((t, line), l)| [t[0], t[1], t[2], *line, l[0], l[1], l[2]])
-                .collect();
-            own.insert("reserved".into(), Tag::IntArray(v));
-        }
-        Some(own)
-    })
-    .flatten() else {
+    });
+}
+
+/// The `read`s of the fields [`save_entities`] writes.
+fn load_entity(dim: usize, pos: [i32; 3], block: create_engine::Block, tag: &Compound) {
+    let Some(Tag::Compound(c)) = tag.get(&(*saved_key(block)).into()) else {
         return;
     };
-    if !own.is_empty() {
-        data.insert("create_display".into(), Tag::Compound(own));
+    let int = |k: &str| match c.get(&k.into()) {
+        Some(Tag::Int(v)) => *v,
+        _ => 0,
+    };
+    let text = |k: &str| match c.get(&k.into()) {
+        Some(Tag::String(v)) => Some(v.to_string_lossy()),
+        _ => None,
+    };
+    let ints = |k: &str| match c.get(&k.into()) {
+        Some(Tag::IntArray(v)) => v.clone(),
+        _ => Vec::new(),
+    };
+    with_world(|w| {
+        let d = &mut w.dims[dim].displays;
+        match block {
+            create_engine::Block::DisplayLink => {
+                let offset = ints("TargetOffset");
+                let link = Link {
+                    target_offset: [0, 1, 2].map(|i| offset.get(i).copied().unwrap_or(0)),
+                    target_line: int("TargetLine"),
+                    source: text("Source").and_then(|s| Source::from_id(&s)),
+                    config: Config {
+                        label: text("Label").unwrap_or_default(),
+                        directional: int("Directional"),
+                        mode: int("Mode"),
+                        cycle: int("Cycle"),
+                        start_time: match c.get(&"StartTime".into()) {
+                            Some(Tag::Long(t)) => Some(*t),
+                            _ => None,
+                        },
+                        format: int("Format"),
+                        collected: int("Collected"),
+                        interval: int("Interval"),
+                        filter: text("Filter"),
+                        name_column: c.get(&"NameColumn".into()).map(|_| int("NameColumn")),
+                        platform_column: c
+                            .get(&"PlatformColumn".into())
+                            .map(|_| int("PlatformColumn")),
+                        ..Config::default()
+                    },
+                    due: None,
+                    last: None,
+                    panels: ints("LinkedGauges")
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|v| ([v[0], v[1], v[2]], v[3].clamp(0, 3) as u8))
+                        .collect(),
+                };
+                d.links.insert(pos, link);
+                d.reserved.retain(|_, link| *link != pos);
+                for r in ints("Reserved").as_chunks::<4>().0 {
+                    d.reserved.insert(([r[0], r[1], r[2]], r[3]), pos);
+                }
+            }
+            create_engine::Block::DisplayBoard => {
+                let mut nums = ints("nums").into_iter();
+                let mut texts = match c.get(&"texts".into()) {
+                    Some(Tag::List(l)) => l
+                        .iter()
+                        .map(|t| match t {
+                            Tag::String(s) => s.to_string_lossy(),
+                            _ => String::new(),
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                }
+                .into_iter();
+                if let Some(b) = board_from_nums(&mut || nums.next(), &mut || texts.next()) {
+                    d.boards.insert(pos, b);
+                }
+            }
+            _ => {
+                let n = d.nixies.entry(pos).or_default();
+                n.custom = text("Text");
+                n.index = int("Index");
+            }
+        }
+    });
+}
+
+fn saved_key(block: create_engine::Block) -> &'static &'static str {
+    match block {
+        create_engine::Block::DisplayLink => &LINK,
+        create_engine::Block::DisplayBoard => &BOARD,
+        _ => &NIXIE,
     }
 }
 
-/// A controlling board as a column saves it: size, line count, then per line its dye (-1 none),
+/// A controlling board as its block entity saves it: size, line count, then per line its dye (-1 none),
 /// glow, manual and section count, per section its width's bits, cycle and flags; the texts:
 /// each line's key and each section's text.
 pub(super) fn board_to_nums(b: &mut Board, nums: &mut Vec<i32>, texts: &mut Vec<Tag>) {
@@ -2737,7 +2781,7 @@ pub(super) fn board_from_nums(
     Some(b)
 }
 
-/// Reads what `displays_chunk_save` wrote, before the column's blocks are found.
+/// The `create_display` an older version saved with the column, before its blocks are found.
 fn displays_from_nbt(dim: usize, data: &Compound) {
     let part = |key: &str| -> Option<(Vec<i32>, Vec<String>)> {
         let Some(Tag::Compound(c)) = data.get(&key.into()) else {

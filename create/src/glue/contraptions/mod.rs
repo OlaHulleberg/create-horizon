@@ -67,8 +67,8 @@
 //!
 //! A sequenced gearshift's or valve handle's limit on a bearing, piston, pulley or gantry
 //! (`sequencedAngleLimit`, `sequencedOffsetLimit`) is saved with the structure, a turning
-//! bearing's turn as it follows from its last change; a moving gantry is saved with the column
-//! its carriage started from. A structure loaded moving waits for its network's first solve
+//! bearing's turn as it follows from its last change; a moving gantry is saved with the gantry
+//! shaft its carriage started from. A structure loaded moving waits for its network's first solve
 //! rather than stopping at the speed 0 it loads with.
 //!
 //! Deployers work while moving (`DeployerMovementBehaviour`), redstone contacts power the
@@ -133,9 +133,30 @@ pub(crate) use lifts::{contact_floor, contact_wrenched};
 
 pub struct Contraptions;
 
-/// What a moving structure carries for a contraption block on it (`Subsystem::carry_out`).
+/// What a moving structure carries for a contraption block on it (`Subsystem::carry_out`), and
+/// the block entity keeps: the value box's option and the chassis range.
 const CARRIED_OPTION: &str = "ScrollOption";
 const CARRIED_RANGE: &str = "ChassisRange";
+
+/// The column lists an older version kept and the block entity keys their entries are now.
+const STRUCTURES: [(&str, &str); 4] = [
+    ("windmills", "Bearing"),
+    ("pistons", "Piston"),
+    ("gantries", "Gantry"),
+    ("create_lifts", "Lift"),
+];
+const CONTACTS: [(&str, &str); 1] = [("create_contacts", "ElevatorContact")];
+/// The packed column arrays (x, y, z, value) an older version kept, and their block entity keys.
+const PACKED: [(&str, &str); 2] = [("modes", CARRIED_OPTION), ("chassis", CARRIED_RANGE)];
+const SAVED_KEYS: [&str; 7] = [
+    STRUCTURES[0].1,
+    STRUCTURES[1].1,
+    STRUCTURES[2].1,
+    STRUCTURES[3].1,
+    CONTACTS[0].1,
+    CARRIED_OPTION,
+    CARRIED_RANGE,
+];
 
 impl Subsystem for Contraptions {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
@@ -160,11 +181,58 @@ impl Subsystem for Contraptions {
         actors::glue_chunk_load(&*lv.host, lv.dim, data);
     }
 
+    /// Superglue is no block entity's: it stays with the column.
     fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
-        bearings::chunk_save(lv, chunk, data);
-        lifts::chunk_save(lv, chunk, data);
-        lifts::contacts_save(lv, chunk, data);
         actors::glue_chunk_save(&*lv.host, lv.dim, chunk, data);
+    }
+
+    /// The bearings', pistons', gantries', clocks', pulleys' and elevators' `write` (with the
+    /// structures they hold), elevator contacts', and the value boxes' options and chassis
+    /// ranges, of column `chunk`.
+    fn save_entities(
+        &self,
+        lv: &ServerLevel<'_>,
+        chunk: [i32; 2],
+        out: &mut super::entity_data::Entities,
+    ) {
+        let mut data = Compound::new();
+        bearings::chunk_save(lv, chunk, &mut data);
+        lifts::chunk_save(lv, chunk, &mut data);
+        lifts::contacts_save(lv, chunk, &mut data);
+        super::entity_data::split(&data, "pos", &STRUCTURES, out);
+        super::entity_data::split(&data, "Pos", &CONTACTS, out);
+        for (list, key) in PACKED {
+            let Some(mod_api::Tag::IntArray(v)) = data.get(&list.into()) else {
+                continue;
+            };
+            for c in v.as_chunks::<4>().0 {
+                out.entry([c[0], c[1], c[2]])
+                    .or_default()
+                    .insert(key.into(), mod_api::Tag::Int(c[3]));
+            }
+        }
+    }
+
+    fn load_entity(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], _block: Block, tag: &Compound) {
+        let mut data = super::entity_data::join(tag, pos, "pos", &STRUCTURES);
+        for (list, key) in PACKED {
+            if let Some(mod_api::Tag::Int(v)) = tag.get(&key.into()) {
+                let packed = mod_api::Tag::IntArray(vec![pos[0], pos[1], pos[2], *v]);
+                data.insert(list.into(), packed);
+            }
+        }
+        if !data.is_empty() {
+            bearings::chunk_load(lv, &data);
+            lifts::chunk_load(lv, &data);
+        }
+        let contacts = super::entity_data::join(tag, pos, "Pos", &CONTACTS);
+        if !contacts.is_empty() {
+            lifts::contacts_load(lv, &contacts);
+        }
+    }
+
+    fn saved_keys(&self, _block: Block) -> &'static [&'static str] {
+        &SAVED_KEYS
     }
 
     fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {

@@ -20,8 +20,8 @@ pub struct Whistle {
 pub struct Plumbing {
     /// FluidValveBlockEntity pointers: every valve ticks, including stationary ones.
     pub valves: HashMap<[i32; 3], Pointer>,
-    /// Smart fluid pipes' filters (`FilteringBehaviour.forFluids`), saved with their column;
-    /// those saved for pipes not loaded yet are kept as they are.
+    /// Smart fluid pipes' filters (`FilteringBehaviour.forFluids`); those loaded for pipes not
+    /// found yet are kept as they are.
     pub filters: HashMap<[i32; 3], crate::fluids::SmartFilter>,
     /// Smart pipes whose filter clients must draw again.
     pub filter_changes: Vec<[i32; 3]>,

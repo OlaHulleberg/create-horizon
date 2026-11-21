@@ -121,12 +121,55 @@ impl Subsystem for Arms {
         with_world(|w| w.dims[dim].ejector_saved.insert(pos, e));
     }
 
+    /// The `arms` and `ejectors` an older version kept in the column.
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
         arms_from_nbt(lv.dim, data);
     }
 
-    fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
-        arms_to_nbt(lv.dim, chunk, data);
+    fn save_entities(
+        &self,
+        lv: &ServerLevel<'_>,
+        chunk: [i32; 2],
+        out: &mut crate::glue::entity_data::Entities,
+    ) {
+        arms_to_nbt(lv.dim, chunk, out);
+    }
+
+    /// `ArmBlockEntity.read` and `EjectorBlockEntity.read`.
+    fn load_entity(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        tag: &Compound,
+    ) {
+        let dim = lv.dim;
+        match block {
+            Block::MechanicalArm => {
+                let saved = match tag.get(&ARM_STATE.into()) {
+                    Some(Tag::Compound(c)) => arm_from_tag(c).map(|(_, a)| a),
+                    _ => None,
+                };
+                let a = saved.unwrap_or_else(|| arm::Arm::new(false));
+                with_world(|w| w.dims[dim].arms.read(pos, a));
+            }
+            Block::WeightedEjector => {
+                let saved = match tag.get(&EJECTOR_STATE.into()) {
+                    Some(Tag::Compound(c)) => ejector_from_tag(c).map(|(_, e)| e),
+                    _ => None,
+                };
+                with_world(|w| w.read_ejector(dim, pos, saved.unwrap_or_default()));
+            }
+            _ => {}
+        }
+    }
+
+    fn saved_keys(&self, block: create_engine::Block) -> &'static [&'static str] {
+        match block {
+            Block::MechanicalArm => &[ARM_STATE],
+            Block::WeightedEjector => &[EJECTOR_STATE],
+            _ => &[],
+        }
     }
 
     fn speed_changed(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], _speed: f32) {
@@ -1595,7 +1638,7 @@ fn sync_arms(lv: &mut ServerLevel<'_>, player: PlayerRef) {
     send_ejectors(lv, &[player], &ejectors);
 }
 
-/// An arm as `arms_to_nbt` saves it: x, y, z, its phase, index, progress, power, selection,
+/// An arm as its block entity saves it (`ArmState`): x, y, z, its phase, index, progress, power, selection,
 /// held count, input count, then each point's offset from it, kind and facing; its held item
 /// and goggles.
 fn arm_to_tag(p: [i32; 3], a: &arm::Arm) -> Compound {
@@ -1630,36 +1673,32 @@ fn arm_to_tag(p: [i32; 3], a: &arm::Arm) -> Compound {
     c
 }
 
-/// Arms and ejectors saved with their column (`ArmBlockEntity.write`: `InteractionPoints`,
-/// `Phase`, `Powered`, `HeldItem`, `TargetPointIndex`, `MovementProgress`, the selection mode;
-/// `EjectorBlockEntity.write`: `HorizontalDistance`, `VerticalDistance`, `Powered`, `State`,
-/// `Lid`, `LaunchedItems`, the stack size): `arms` and `ejectors`, absent when the column has
-/// none.
-fn arms_to_nbt(dim: usize, chunk: [i32; 2], own: &mut Compound) {
-    let arms = with_world(|w| w.dims[dim].arms.column(chunk[0], chunk[1])).unwrap_or_default();
-    let mut ejectors: Vec<([i32; 3], ejector::Ejector)> = with_world(|w| {
-        w.dims[dim]
+/// `ArmBlockEntity.write` (`InteractionPoints`, `Phase`, `Powered`, `HeldItem`,
+/// `TargetPointIndex`, `MovementProgress`, the selection mode) and `EjectorBlockEntity.write`
+/// (`HorizontalDistance`, `VerticalDistance`, `Powered`, `State`, `Lid`, `LaunchedItems`, the
+/// stack size) of column `chunk`'s arms and ejectors.
+fn arms_to_nbt(dim: usize, chunk: [i32; 2], out: &mut crate::glue::entity_data::Entities) {
+    let Some((arms, ejectors)) = with_world(|w| {
+        let d = &w.dims[dim];
+        let ejectors: Vec<([i32; 3], ejector::Ejector)> = d
             .ejectors
             .iter()
             .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]))
             .map(|(p, e)| (*p, e.clone()))
-            .collect()
-    })
-    .unwrap_or_default();
-    ejectors.sort_by_key(|e| e.0);
-    if !arms.is_empty() {
-        let list = arms
-            .iter()
-            .map(|(p, a)| Tag::Compound(arm_to_tag(*p, a)))
             .collect();
-        own.insert("arms".into(), Tag::List(list));
+        (d.arms.column(chunk[0], chunk[1]), ejectors)
+    }) else {
+        return;
+    };
+    for (p, a) in arms {
+        out.entry(p)
+            .or_default()
+            .insert(ARM_STATE.into(), Tag::Compound(arm_to_tag(p, &a)));
     }
-    if !ejectors.is_empty() {
-        let list = ejectors
-            .iter()
-            .map(|(p, e)| Tag::Compound(ejector_to_tag(*p, e)))
-            .collect();
-        own.insert("ejectors".into(), Tag::List(list));
+    for (p, e) in ejectors {
+        out.entry(p)
+            .or_default()
+            .insert(EJECTOR_STATE.into(), Tag::Compound(ejector_to_tag(p, &e)));
     }
 }
 
@@ -1819,7 +1858,7 @@ pub(super) fn arm_from_tag(c: &Compound) -> Option<([i32; 3], arm::Arm)> {
     Some((pos, a))
 }
 
-/// What `arms_to_nbt` wrote: arms and ejectors waiting for their blocks.
+/// The `arms` and `ejectors` an older version saved with the column, waiting for their blocks.
 fn arms_from_nbt(dim: usize, data: &Compound) {
     let mut arms = Vec::new();
     if let Some(Tag::List(list)) = data.get(&"arms".into()) {
@@ -1844,6 +1883,9 @@ fn arms_from_nbt(dim: usize, data: &Compound) {
         d.ejector_saved.extend(ejectors);
     });
 }
+
+const ARM_STATE: &str = "ArmState";
+const EJECTOR_STATE: &str = "EjectorState";
 
 /// `ArmBlockEntity.getRange()`: Create's default `mechanicalArmRange`.
 const ARM_RANGE: i32 = 5;

@@ -742,6 +742,33 @@ impl Detectors {
         self.saved_switches.extend(switches);
     }
 
+    /// `SmartObserverBlockEntity.read`: a placed observer takes `o` at once, one not found yet
+    /// when it is.
+    pub fn read_observer(&mut self, pos: [i32; 3], o: Observer) {
+        let Some(live) = self.observers.get_mut(&pos) else {
+            self.saved_observers.insert(pos, o);
+            return;
+        };
+        if let Some(t) = live.off_at {
+            self.offs.remove(&(t, pos));
+        }
+        if let Some(t) = o.off_at {
+            self.offs.insert((t, pos));
+        }
+        *live = o;
+        self.checks.push(pos);
+    }
+
+    /// `ThresholdSwitchBlockEntity.read`, as [`read_observer`](Self::read_observer).
+    pub fn read_switch(&mut self, pos: [i32; 3], s: Switch) {
+        let Some(live) = self.switches.get_mut(&pos) else {
+            self.saved_switches.insert(pos, s);
+            return;
+        };
+        *live = s;
+        self.checks.push(pos);
+    }
+
     /// A column's observers with a filter or a pending turn-off, and its switches, to save.
     #[allow(clippy::type_complexity)]
     pub fn column(&self, cx: i32, cz: i32) -> (Vec<([i32; 3], Observer)>, Vec<([i32; 3], Switch)>) {
@@ -782,6 +809,31 @@ impl Detectors {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_observer_moves_a_placed_observers_turn_off() {
+        let mut d = Detectors::default();
+        let p = [0, 64, 0];
+        d.read_observer(
+            p,
+            Observer {
+                off_at: Some(5),
+                ..Default::default()
+            },
+        );
+        assert!(d.observers.is_empty());
+        d.placed(p, false, [0, 64, 1]);
+        assert!(d.offs.contains(&(5, p)));
+        d.read_observer(
+            p,
+            Observer {
+                off_at: Some(9),
+                ..Default::default()
+            },
+        );
+        assert_eq!(d.offs.iter().copied().collect::<Vec<_>>(), vec![(9, p)]);
+        assert_eq!(d.observers[&p].off_at, Some(9));
+    }
 
     fn slot(item: &str, count: u32) -> Slot {
         Slot {

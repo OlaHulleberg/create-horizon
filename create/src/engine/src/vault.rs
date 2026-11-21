@@ -62,7 +62,7 @@ type Cache = HashMap<[i32; 3], Option<[i32; 3]>>;
 #[derive(Default)]
 pub struct Vaults {
     pub parts: HashMap<[i32; 3], Part>,
-    /// What was saved with a column, waiting for its block.
+    /// What was loaded, waiting for its block.
     saved: HashMap<[i32; 3], Part>,
     /// Blocks whose `updateConnectivity` was set, in that order.
     queue: Vec<[i32; 3]>,
@@ -98,6 +98,24 @@ impl Vaults {
         self.parts.insert(pos, part);
     }
 
+    /// `ItemVaultBlockEntity.read`: a placed block takes the saved `Controller`, `Size`, `Length`
+    /// and `Uninitialized` at once (its axis and `large` stay its state's); one not found yet
+    /// when it is.
+    pub fn read(&mut self, pos: [i32; 3], saved: Part) {
+        let Some(live) = self.parts.get_mut(&pos) else {
+            self.saved.insert(pos, saved);
+            return;
+        };
+        live.controller = saved.controller;
+        live.width = saved.width;
+        live.length = saved.length;
+        live.dirty = saved.dirty;
+        if saved.dirty && !self.queue.contains(&pos) {
+            self.queue.push(pos);
+        }
+        self.changed.push(pos);
+    }
+
     /// `ItemVaultBlock.onRemove`: the block is gone, its vault splits; the others look for a
     /// vault again at their next tick.
     pub fn removed(&mut self, pos: [i32; 3]) {
@@ -122,7 +140,7 @@ impl Vaults {
         self.queue.retain(|p| !out(p));
     }
 
-    /// Parts saved with a column, for when their blocks are found.
+    /// Parts loaded, for when their blocks are found.
     pub fn load(&mut self, saved: impl Iterator<Item = ([i32; 3], Part)>) {
         self.saved.extend(saved);
     }
@@ -461,6 +479,32 @@ pub fn insert_stacked(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_replaces_a_placed_part_and_waits_for_an_unplaced_one() {
+        let mut v = Vaults::default();
+        let p = [0, 64, 0];
+        v.placed(p, Axis::X, false);
+        let saved = Part {
+            controller: Some([1, 64, 0]),
+            width: 2,
+            length: 3,
+            dirty: false,
+            ..Part::new(Axis::Z, true)
+        };
+        v.read(p, saved);
+        let live = v.parts[&p];
+        assert_eq!(
+            (live.controller, live.width, live.length),
+            (Some([1, 64, 0]), 2, 3)
+        );
+        assert_eq!((live.axis, live.large), (Axis::X, false));
+        let q = [5, 64, 0];
+        v.read(q, saved);
+        assert!(!v.parts.contains_key(&q));
+        v.placed(q, Axis::X, false);
+        assert_eq!(v.parts[&q].controller, Some([1, 64, 0]));
+    }
 
     fn vaults(blocks: &[[i32; 3]], axis: Axis) -> Vaults {
         let mut v = Vaults::default();

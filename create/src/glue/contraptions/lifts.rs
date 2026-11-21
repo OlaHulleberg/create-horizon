@@ -1716,10 +1716,10 @@ impl BlockPart for ContactPart {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Saved with the column
+// Saved with the block entities, in the column format an older version kept
 
-/// Running clocks, pulleys and elevators of a column, saved under `create_lifts` (their block
-/// states as text): `kind` 0 a clock, 1 a pulley, 2 an elevator, its numbers in `nums` (floats
+/// Running clocks, pulleys and elevators of a column, as an older version saved them under
+/// `create_lifts` and their block entities keep them now (their block states as text): `kind` 0 a clock, 1 a pulley, 2 an elevator, its numbers in `nums` (floats
 /// as their bits), and its blocks.
 pub(super) fn chunk_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
     let dim = lv.dim;
@@ -1995,7 +1995,7 @@ pub(super) fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
 
 /// Elevator contacts' names, door setting and floor shown (`ElevatorContactBlockEntity.write`:
 /// `ShortName`, `LongName`, `LastReportedCurrentFloor`, and the door behaviour's `DoorControl`),
-/// saved with their column under `create_contacts`.
+/// as an older version saved them under `create_contacts`.
 pub(super) fn contacts_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
     let dim = lv.dim;
     let list: Vec<Tag> = with_world(|w| {

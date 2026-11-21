@@ -1,14 +1,15 @@
-//! The machines' state saved with each column, under these keys: `deployers`
-//! (`DeployerBlockEntity.write`), `crushers` (the controllers' contents), `burners` (fuel and
-//! burn time), `basins` (their tanks), `crafter_inputs` (crafters joined with the wrench) and
-//! `crafter_covers` (slot covers).
+//! The machines' state, saved in their block entities: deployers, crushing wheel controllers,
+//! blaze burners, basins' tanks and mechanical crafters' connections and covers. An older
+//! version kept them with the column under `deployers`, `crushers`, `burners`, `basins`,
+//! `crafter_inputs` and `crafter_covers`, read once by [`load`].
 
+use crate::glue::entity_data::Entities;
 use crate::glue::world::with_world;
-use create_engine::{basin, burner, crafter_input, crusher, deployer, tank};
+use create_engine::{Block, basin, burner, crafter_input, crusher, deployer, tank};
 use mod_api::{Compound, Tag};
 
-/// What column data `data` saved for the machines, handed to the engine before the column's
-/// blocks are found.
+/// What an older version saved with the column, handed to the engine before the column's blocks
+/// are found.
 pub fn load(dim: usize, data: &Compound) {
     let deployers = deployers_from_nbt(data);
     let crushers = crushers_from_nbt(data);
@@ -27,100 +28,251 @@ pub fn load(dim: usize, data: &Compound) {
     });
 }
 
-/// The machines' part of column `chunk`'s data.
-pub fn save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
-    let Some(saved) = with_world(|w| {
+const DEPLOYER: &str = "DeployerState";
+const CRUSHER: &str = "CrusherState";
+const BURNER: &str = "BurnerState";
+const BASIN: &str = "BasinTanks";
+const INPUT: &str = "ConnectedInput";
+const COVER: &str = "Cover";
+
+pub(super) fn saved_keys(block: Block) -> &'static [&'static str] {
+    match block {
+        Block::Deployer => &[DEPLOYER],
+        Block::CrushingWheelController => &[CRUSHER],
+        Block::BlazeBurner => &[BURNER],
+        Block::Basin => &[BASIN],
+        Block::MechanicalCrafter => &[INPUT, COVER],
+        _ => &[],
+    }
+}
+
+fn int(c: &Compound, k: &str) -> i32 {
+    match c.get(&k.into()) {
+        Some(Tag::Int(v)) => *v,
+        _ => 0,
+    }
+}
+
+fn fluid_tag(f: Option<(tank::Fluid, u32)>) -> Tag {
+    let mut c = Compound::new();
+    if let Some((fluid, n)) = f {
+        c.insert("FluidName".into(), Tag::String(fluid.key().as_str().into()));
+        c.insert("Amount".into(), Tag::Int(n as i32));
+    }
+    Tag::Compound(c)
+}
+
+fn fluid_of(t: &Tag) -> Option<(tank::Fluid, u32)> {
+    let Tag::Compound(c) = t else { return None };
+    let Some(Tag::String(name)) = c.get(&"FluidName".into()) else {
+        return None;
+    };
+    let fluid = tank::Fluid::of_key(&name.to_string_lossy())?;
+    Some((fluid, int(c, "Amount").clamp(0, 1000) as u32))
+}
+
+/// `DeployerBlockEntity.write`, `CrushingWheelControllerBlockEntity.write`,
+/// `BlazeBurnerBlockEntity.write`, `BasinBlockEntity.write`'s tanks and
+/// `MechanicalCrafterBlockEntity.write`'s `ConnectedInput` and `Cover` of column `chunk`.
+pub fn save_entities(dim: usize, chunk: [i32; 2], out: &mut Entities) {
+    with_world(|w| {
         let (cx, cz) = (chunk[0], chunk[1]);
         let mine = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) == (cx, cz);
+        for (p, d) in w.column_deployers(dim, cx, cz) {
+            out.entry(p)
+                .or_default()
+                .insert(DEPLOYER.into(), Tag::Compound(deployer_to_tag(&d)));
+        }
+        for (p, c) in w.column_crushers(dim, cx, cz) {
+            let items = c
+                .slots
+                .iter()
+                .map(|(id, n)| {
+                    Tag::Compound(Compound::from([
+                        ("id".into(), Tag::String(id.as_str().into())),
+                        ("count".into(), Tag::Int(i32::from(*n))),
+                    ]))
+                })
+                .collect();
+            let tag = Compound::from([
+                ("Remaining".into(), Tag::Float(c.remaining.to_bits())),
+                ("Applied".into(), Tag::Byte(i8::from(c.applied))),
+                ("Items".into(), Tag::List(items)),
+            ]);
+            out.entry(p)
+                .or_default()
+                .insert(CRUSHER.into(), Tag::Compound(tag));
+        }
+        for (p, b) in w.column_burners(dim, cx, cz) {
+            let (fuel, remaining) = match b.creative {
+                Some(h) => (CREATIVE_BURNER, h as i32),
+                None => (b.fuel.index(), b.remaining),
+            };
+            let tag = Compound::from([
+                ("Fuel".into(), Tag::Int(fuel)),
+                ("Remaining".into(), Tag::Int(remaining)),
+            ]);
+            out.entry(p)
+                .or_default()
+                .insert(BURNER.into(), Tag::Compound(tag));
+        }
         let d = &w.dims[dim];
-        let mut basins: Vec<([i32; 3], basin::Tanks)> = d
-            .basin_fluids
-            .iter()
-            .filter(|(p, _)| mine(p))
-            .map(|(p, t)| (*p, *t))
-            .collect();
-        basins.sort_by_key(|e| e.0);
-        let mut covers: Vec<[i32; 3]> = d
-            .crafter_covers
-            .iter()
-            .filter(|p| mine(p))
-            .copied()
-            .collect();
-        covers.sort();
-        let mut inputs: Vec<(&[i32; 3], &crafter_input::Input)> =
-            d.crafter_inputs.iter().filter(|(p, _)| mine(p)).collect();
-        inputs.sort_by_key(|e| *e.0);
-        let inputs: Vec<i32> = inputs
-            .into_iter()
-            .flat_map(|(p, i)| {
-                [
-                    p[0],
-                    p[1],
-                    p[2],
-                    i32::from(i.controller),
-                    i.data.len() as i32,
-                ]
-                .into_iter()
-                .chain(i.data.iter().flatten().copied())
-            })
-            .collect();
-        (
-            w.column_deployers(dim, cx, cz),
-            w.column_crushers(dim, cx, cz),
-            w.column_burners(dim, cx, cz),
-            basins,
-            covers,
-            inputs,
-        )
-    }) else {
-        return;
+        for (p, t) in d.basin_fluids.iter().filter(|(p, _)| mine(p)) {
+            let tag = Compound::from([
+                ("Input".into(), Tag::List(t.input.map(fluid_tag).to_vec())),
+                ("Output".into(), Tag::List(t.output.map(fluid_tag).to_vec())),
+            ]);
+            out.entry(*p)
+                .or_default()
+                .insert(BASIN.into(), Tag::Compound(tag));
+        }
+        for (p, i) in d.crafter_inputs.iter().filter(|(p, _)| mine(p)) {
+            let tag = Compound::from([
+                ("Controller".into(), Tag::Byte(i8::from(i.controller))),
+                (
+                    "Data".into(),
+                    Tag::IntArray(i.data.iter().flatten().copied().collect()),
+                ),
+            ]);
+            out.entry(*p)
+                .or_default()
+                .insert(INPUT.into(), Tag::Compound(tag));
+        }
+        for p in d.crafter_covers.iter().filter(|p| mine(p)) {
+            out.entry(*p)
+                .or_default()
+                .insert(COVER.into(), Tag::Byte(1));
+        }
+    });
+}
+
+/// The `read`s of the fields [`save_entities`] writes.
+pub fn load_entity(dim: usize, pos: [i32; 3], block: Block, tag: &Compound) {
+    let compound = |k: &str| match tag.get(&k.into()) {
+        Some(Tag::Compound(c)) => Some(c),
+        _ => None,
     };
-    let (deployers, crushers, burners, basins, covers, inputs) = saved;
-    if !deployers.is_empty() {
-        data.insert("deployers".into(), deployers_to_nbt(&deployers));
-    }
-    if !crushers.is_empty() {
-        data.insert("crushers".into(), crushers_to_nbt(&crushers));
-    }
-    if !burners.is_empty() {
-        // x, y, z, fuel type, burn time left for each burner (`fuelLevel`, `burnTimeRemaining`);
-        // a creative one (`isCreative`) as fuel type 3 and its heat.
-        let v = burners
-            .iter()
-            .flat_map(|(p, b)| match b.creative {
-                Some(h) => [p[0], p[1], p[2], CREATIVE_BURNER, h as i32],
-                None => [p[0], p[1], p[2], b.fuel.index(), b.remaining],
-            })
-            .collect();
-        data.insert("burners".into(), Tag::IntArray(v));
-    }
-    if !basins.is_empty() {
-        // x, y, z, then fluid (255: none; a potion by its key beside) and amount for each of
-        // the four tanks.
-        let mut codes = tank::Codes::default();
-        let v = basins
-            .into_iter()
-            .flat_map(|(p, t)| {
-                let mut out = p.to_vec();
-                for f in t.input.iter().chain(&t.output) {
-                    out.push(codes.code(f.map(|f| f.0)));
-                    out.push(f.map_or(0, |f| f.1 as i32));
+    with_world(|w| match block {
+        Block::Deployer => {
+            if let Some(d) = compound(DEPLOYER).and_then(deployer_of) {
+                w.read_deployer(dim, pos, d);
+            }
+        }
+        Block::CrushingWheelController => {
+            let Some(c) = compound(CRUSHER) else { return };
+            let slots = match c.get(&"Items".into()) {
+                Some(Tag::List(l)) => l
+                    .iter()
+                    .filter_map(|t| {
+                        let Tag::Compound(s) = t else { return None };
+                        let Some(Tag::String(id)) = s.get(&"id".into()) else {
+                            return None;
+                        };
+                        Some((id.to_string_lossy(), int(s, "count").clamp(1, 255) as u8))
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let remaining = match c.get(&"Remaining".into()) {
+                Some(Tag::Float(b)) => f32::from_bits(*b),
+                _ => 0.0,
+            };
+            let crusher = crusher::Crusher {
+                entity: None,
+                slots,
+                remaining,
+                applied: matches!(c.get(&"Applied".into()), Some(Tag::Byte(b)) if *b != 0),
+            };
+            w.read_crusher(dim, pos, crusher);
+        }
+        Block::BlazeBurner => {
+            let Some(c) = compound(BURNER) else { return };
+            let (fuel, remaining) = (int(c, "Fuel"), int(c, "Remaining"));
+            let b = if fuel == CREATIVE_BURNER {
+                burner::Burner {
+                    creative: Some(heat_of(remaining)),
+                    ..burner::Burner::default()
                 }
-                out
-            })
-            .collect();
-        data.insert("basins".into(), Tag::IntArray(v));
-        crate::glue::fluids::put_fluid_keys(data, "basins", codes);
+            } else {
+                burner::Burner {
+                    fuel: burner::Fuel::from_index(fuel),
+                    remaining,
+                    creative: None,
+                }
+            };
+            w.read_burner(dim, pos, b);
+        }
+        Block::Basin => {
+            let tanks = compound(BASIN).map(|c| {
+                let pair = |k: &str| match c.get(&k.into()) {
+                    Some(Tag::List(l)) => [0, 1].map(|i| l.get(i).and_then(fluid_of)),
+                    _ => [None; 2],
+                };
+                basin::Tanks {
+                    input: pair("Input"),
+                    output: pair("Output"),
+                }
+            });
+            match tanks {
+                Some(t) => w.dims[dim].basin_fluids.insert(pos, t),
+                None => w.dims[dim].basin_fluids.remove(&pos),
+            };
+        }
+        Block::MechanicalCrafter => {
+            let d = &mut w.dims[dim];
+            match compound(INPUT) {
+                Some(c) => {
+                    let data = match c.get(&"Data".into()) {
+                        Some(Tag::IntArray(v)) => v
+                            .as_chunks::<3>()
+                            .0
+                            .iter()
+                            .map(|o| [o[0], o[1], o[2]])
+                            .collect(),
+                        _ => Vec::new(),
+                    };
+                    let controller =
+                        matches!(c.get(&"Controller".into()), Some(Tag::Byte(b)) if *b != 0);
+                    d.crafter_inputs
+                        .insert(pos, crafter_input::Input { controller, data });
+                }
+                None => {
+                    d.crafter_inputs.remove(&pos);
+                }
+            }
+            if matches!(tag.get(&COVER.into()), Some(Tag::Byte(b)) if *b != 0) {
+                d.crafter_covers.insert(pos);
+            } else {
+                d.crafter_covers.remove(&pos);
+            }
+        }
+        _ => {}
+    });
+}
+
+/// One deployer as [`deployers_to_nbt`] writes it, without its position.
+fn deployer_to_tag(d: &deployer::Deployer) -> Compound {
+    let Tag::List(mut list) = deployers_to_nbt(&[([0; 3], d.clone())]) else {
+        return Compound::new();
+    };
+    let Some(Tag::Compound(mut c)) = list.pop() else {
+        return Compound::new();
+    };
+    if let Some(Tag::IntArray(mut v)) = c.remove(&"pos".into()) {
+        v.drain(..3);
+        c.insert("Values".into(), Tag::IntArray(v));
     }
-    if !inputs.is_empty() {
-        data.insert("crafter_inputs".into(), Tag::IntArray(inputs));
+    c
+}
+
+fn deployer_of(c: &Compound) -> Option<deployer::Deployer> {
+    let mut c = c.clone();
+    if let Some(Tag::IntArray(mut v)) = c.remove(&"Values".into()) {
+        v.splice(..0, [0; 3]);
+        c.insert("pos".into(), Tag::IntArray(v));
     }
-    if !covers.is_empty() {
-        data.insert(
-            "crafter_covers".into(),
-            Tag::IntArray(covers.into_iter().flatten().collect()),
-        );
-    }
+    let data = Compound::from([("deployers".into(), Tag::List(vec![Tag::Compound(c)]))]);
+    deployers_from_nbt(&data).pop().map(|(_, d)| d)
 }
 
 /// `DeployerBlockEntity.write`: `State`, `Timer`, `Reach`, the held stack and `Mode`, per deployer.
@@ -195,41 +347,8 @@ pub(crate) fn deployers_from_nbt(data: &Compound) -> Vec<([i32; 3], deployer::De
         .collect()
 }
 
-fn crushers_to_nbt(crushers: &[([i32; 3], crusher::Crusher)]) -> Tag {
-    Tag::List(
-        crushers
-            .iter()
-            .map(|(p, c)| {
-                let mut b = Compound::new();
-                b.insert(
-                    "pos".into(),
-                    Tag::IntArray(vec![
-                        p[0],
-                        p[1],
-                        p[2],
-                        c.remaining.to_bits() as i32,
-                        i32::from(c.applied),
-                    ]),
-                );
-                b.insert(
-                    "ids".into(),
-                    Tag::List(
-                        c.slots
-                            .iter()
-                            .map(|s| Tag::String(s.0.as_str().into()))
-                            .collect(),
-                    ),
-                );
-                b.insert(
-                    "counts".into(),
-                    Tag::IntArray(c.slots.iter().map(|s| i32::from(s.1)).collect()),
-                );
-                Tag::Compound(b)
-            })
-            .collect(),
-    )
-}
-
+/// The `crushers` an older version saved with the column: each controller's position, time
+/// left and whether its result was applied, and its slots' ids and counts.
 fn crushers_from_nbt(data: &Compound) -> Vec<([i32; 3], crusher::Crusher)> {
     let Some(Tag::List(list)) = data.get(&"crushers".into()) else {
         return Vec::new();

@@ -70,6 +70,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::OnceLock;
 
 const KEY: &str = "create_schematics";
+/// The column list an older version kept and the block entity key its entries are now.
+const SAVED: [(&str, &str); 1] = [("cannons", "Schematicannon")];
 const SCHEMATIC: &str = "create:schematic";
 const EMPTY_SCHEMATIC: &str = "create:empty_schematic";
 const QUILL: &str = "create:schematic_and_quill";
@@ -354,6 +356,8 @@ impl Subsystem for Schematics {
             .block_entity_type("create:schematic_table")
             .blocks(&["create:schematic_table"])
             .build();
+        super::entity_data::attach(r, &cannon);
+        super::entity_data::attach(r, &table);
         let _ = KINDS.set((cannon, table));
         // Their slots: Create gives them no item handler, so no face reaches them; their menus
         // are a hopper's five slots (the table's screen shows its two).
@@ -428,8 +432,36 @@ impl Subsystem for Schematics {
         }
     }
 
-    fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
-        chunk_data_save(lv, chunk, data);
+    /// `SchematicannonBlockEntity.write` of column `chunk`.
+    fn save_entities(
+        &self,
+        lv: &ServerLevel<'_>,
+        chunk: [i32; 2],
+        out: &mut super::entity_data::Entities,
+    ) {
+        let mut data = Compound::new();
+        column_data(lv, chunk, &mut data);
+        if let Some(Tag::Compound(own)) = data.get(&KEY.into()) {
+            super::entity_data::split(own, "Pos", &SAVED, out);
+        }
+    }
+
+    fn load_entity(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, tag: &Compound) {
+        if block != Block::Schematicannon {
+            return;
+        }
+        let own = super::entity_data::join(tag, pos, "Pos", &SAVED);
+        if !own.is_empty() {
+            chunk_load(lv, &own);
+        }
+    }
+
+    fn saved_keys(&self, block: Block) -> &'static [&'static str] {
+        if block == Block::Schematicannon {
+            &[SAVED[0].1]
+        } else {
+            &[]
+        }
     }
 
     /// A column left a level: its cannons are forgotten (kept in its save).
@@ -2314,10 +2346,10 @@ fn describe(c: &Cannon) -> String {
     )
 }
 
-/// A column's cannons saved under `create_schematics` (`write`: state, status, fuel, options,
-/// progress, the barrel's rest and the blocks in flight; the printer itself starts over when
-/// loaded, as Create's server does).
-fn chunk_data_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
+/// A column's cannons (`write`: state, status, fuel, options, progress, the barrel's rest and the
+/// blocks in flight; the printer itself starts over when loaded, as Create's server does), as an
+/// older version saved them under `create_schematics`: what their block entities keep.
+fn column_data(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
     if !present() {
         return;
     }
@@ -2435,8 +2467,8 @@ fn chunk_data_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
     }
 }
 
-/// A column joined a level: its cannons, ticked at once (`read`; the schematic in slot 0 loads
-/// again, the cannon paused and ready).
+/// Cannons back, ticked at once (`read`; the schematic in slot 0 loads again, the cannon paused
+/// and ready): from an older version's column data, or one block entity's.
 fn chunk_load(lv: &ServerLevel<'_>, data: &Compound) {
     let Some(Tag::List(list)) = data.get(&"cannons".into()) else {
         return;

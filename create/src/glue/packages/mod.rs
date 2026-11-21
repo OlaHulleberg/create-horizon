@@ -1,7 +1,6 @@
 //! Create's package logistics: packagers, frogports, postboxes' packages and chain conveyors.
 //! The rules are `create_engine`'s `package`, `packager`, `port` and `chain_conveyor`; their
-//! state is typed, per level, on the server thread, saved with its column as
-//! `create_packages`; only packagers and frogports with something to do and conveyors
+//! state is typed, per level, on the server thread, saved with their block entities; only packagers and frogports with something to do and conveyors
 //! carrying packages tick. A package's address, contents and order data are kept in its
 //! stack's `minecraft:custom_data` (`body`). Clients draw the conveyors' packages from the
 //! `create:chain` messages, round the wheel and gliding along each chain, every frame.
@@ -64,6 +63,12 @@ type Change = (usize, [i32; 3], Option<Block>, Option<Block>);
 
 /// The key the column's data keeps this under.
 const KEY: &str = "create_packages";
+/// The column lists an older version kept and the block entity keys their entries are now.
+const SAVED: [(&str, &str); 3] = [
+    ("packagers", "Packager"),
+    ("ports", "PackagePort"),
+    ("conveyors", "ChainConveyor"),
+];
 
 /// What the client draws of one conveyor: when it got them (on the animation clock, set at the
 /// first frame) and the packages.
@@ -448,8 +453,35 @@ impl Subsystem for Packages {
         }
     }
 
-    fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
-        chunk_data_save(lv, chunk, data);
+    /// `PackagerBlockEntity.write`, `FrogportBlockEntity.write`/`PostboxBlockEntity.write` and
+    /// `ChainConveyorBlockEntity.write` of column `chunk`.
+    fn save_entities(
+        &self,
+        lv: &ServerLevel<'_>,
+        chunk: [i32; 2],
+        out: &mut super::entity_data::Entities,
+    ) {
+        let mut data = Compound::new();
+        column_data(lv, chunk, &mut data);
+        if let Some(Tag::Compound(own)) = data.get(&KEY.into()) {
+            super::entity_data::split(own, "Pos", &SAVED, out);
+        }
+    }
+
+    fn load_entity(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], _block: Block, tag: &Compound) {
+        let own = super::entity_data::join(tag, pos, "Pos", &SAVED);
+        if !own.is_empty() {
+            chunk_load(lv, &own);
+        }
+    }
+
+    fn saved_keys(&self, block: Block) -> &'static [&'static str] {
+        match block {
+            Block::Packager | Block::Repackager => &[SAVED[0].1],
+            Block::ChainConveyor => &[SAVED[2].1],
+            b if b == Block::PackageFrogport || create_engine::dye::is_postbox(b) => &[SAVED[1].1],
+            _ => &[],
+        }
     }
 
     fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {
@@ -2578,8 +2610,9 @@ impl BlockEntityPart for ConveyorDraw {
     }
 }
 
-/// Packagers, ports and conveyors of a column saved (`write`) under `create_packages`.
-fn chunk_data_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
+/// Packagers, ports and conveyors of a column (`write`), as an older version saved them under
+/// `create_packages`: what [`SAVED`]'s block entities keep.
+fn column_data(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
     if !present() {
         return;
     }
@@ -2802,7 +2835,8 @@ fn parcel_from(host: &dyn mod_api::Host, t: Option<&Tag>) -> Option<Parcel<ItemS
     })
 }
 
-/// A column joined a level: its packagers, ports and conveyors back (`read`).
+/// Packagers, ports and conveyors back (`read`): from an older version's column data, or one
+/// block entity's (`entity_data::join`).
 fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
     let dim = lv.dim;
     let host: &dyn mod_api::Host = &*lv.host;

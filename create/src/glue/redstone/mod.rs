@@ -228,8 +228,27 @@ impl Subsystem for Redstone {
         saved::load(lv, data);
     }
 
-    fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
-        saved::save(lv, chunk, data);
+    fn save_entities(
+        &self,
+        lv: &ServerLevel<'_>,
+        chunk: [i32; 2],
+        out: &mut crate::glue::entity_data::Entities,
+    ) {
+        saved::save(lv, chunk, out);
+    }
+
+    fn load_entity(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        tag: &Compound,
+    ) {
+        saved::load_entity(lv, pos, block, tag);
+    }
+
+    fn saved_keys(&self, block: create_engine::Block) -> &'static [&'static str] {
+        saved::saved_keys(block)
     }
 
     fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {

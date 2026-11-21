@@ -705,53 +705,6 @@ mod belt_membership_tests {
     }
 }
 
-/// glue/logistics/mod.rs `chutes_to_nbt`: chutes' stack positions (`ItemPosition`): x, y, z
-/// and the position's float bits of each.
-pub fn chutes_to_nbt(chutes: &[([i32; 3], f32)]) -> Tag {
-    Tag::IntArray(
-        chutes
-            .iter()
-            .flat_map(|(p, at)| [p[0], p[1], p[2], at.to_bits() as i32])
-            .collect(),
-    )
-}
-
-/// What `chutes_to_nbt` wrote (glue `chutes_from_nbt`).
-pub fn chutes_from_nbt(data: &Compound) -> Vec<([i32; 3], f32)> {
-    match data.get("chutes") {
-        Some(Tag::IntArray(v)) => v
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|c| ([c[0], c[1], c[2]], f32::from_bits(c[3] as u32)))
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-/// glue/logistics/mod.rs `funnels_to_nbt`.
-pub fn funnels_to_nbt(funnels: &[([i32; 3], u32)]) -> Tag {
-    Tag::IntArray(
-        funnels
-            .iter()
-            .flat_map(|(p, c)| [p[0], p[1], p[2], *c as i32])
-            .collect(),
-    )
-}
-
-/// glue/logistics/mod.rs `funnels_from_nbt`.
-pub fn funnels_from_nbt(data: &Compound) -> Vec<([i32; 3], u32)> {
-    match data.get("funnels") {
-        Some(Tag::IntArray(v)) => v
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|f| ([f[0], f[1], f[2]], f[3].max(0) as u32))
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
 /// glue/logistics/mod.rs `brass_to_nbt`: brass tunnels' saved state (`SavedBrass`).
 pub fn brass_to_nbt(brass: &[([i32; 3], create_engine::tunnel::SavedBrass)]) -> Tag {
     Tag::List(

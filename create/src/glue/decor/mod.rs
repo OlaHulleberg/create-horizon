@@ -8,7 +8,7 @@
 //! writes them back onto it and its `written` state; sneaking or a left click picks it up.
 //!
 //! What blocks hold (brackets, placards' items, crates' supplies, hatches' filters, clipboards)
-//! is kept per level and saved with its column as `create_decor`. Only
+//! is kept per level and saved with their block entities. Only
 //! placards, bells and hatches with a timer running, and blocks that changed, are looked at each
 //! tick. Clients see a bracket through its shaft's, cog's or pipe's block entity (`Bracket` in
 //! the kinetic block entity's data), a placard's item through the placard's own block entity
@@ -357,6 +357,11 @@ impl Subsystem for Decor {
         brackets::register(r);
         placard::register(r);
         hatch::register(r);
+        // `ClipboardBlockEntity` and `CreativeCrateBlockEntity`: only their saved fields.
+        for id in ["create:clipboard", "create:creative_crate"] {
+            let kind = r.block_entity_type(id).blocks(&[id]).build();
+            super::entity_data::attach(r, &kind);
+        }
         doors::register(r);
         crates::register(r);
         copper::register(r);
@@ -472,8 +477,21 @@ impl Subsystem for Decor {
         saved::load(lv, data);
     }
 
-    fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
-        saved::save(lv, chunk, data);
+    fn save_entities(
+        &self,
+        lv: &ServerLevel<'_>,
+        chunk: [i32; 2],
+        out: &mut super::entity_data::Entities,
+    ) {
+        saved::save(lv, chunk, out);
+    }
+
+    fn load_entity(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, tag: &Compound) {
+        saved::load_entity(lv, pos, block, tag);
+    }
+
+    fn saved_keys(&self, block: Block) -> &'static [&'static str] {
+        saved::saved_keys(block)
     }
 
     fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {
