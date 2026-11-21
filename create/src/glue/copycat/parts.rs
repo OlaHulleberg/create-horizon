@@ -4,6 +4,7 @@
 use super::super::persist;
 use super::super::server::ServerLevel;
 use super::super::states;
+use super::super::world::level_index;
 use super::{
     MATERIAL, SPECIAL, body, center, copycat_block, set_material, shape_of, shown, with, with_prop,
 };
@@ -12,9 +13,9 @@ use create_engine::copycat::{self as cc, Drawn, Shape, Special, Use};
 use create_engine::kinetics::Dir;
 use mod_api::{
     BlockEntityPart, BlockEntitySubmitEvent, BlockEntityUpdateTagEvent, BlockPart, BlockState,
-    ClientHost, Compound, Direction, FrictionEvent, Hand, HostBlockStates, InteractionResult,
-    ItemPart, ItemStack, LightEmissionEvent, OnBlockPlacedByEvent, PlayerRef, ServerHost,
-    SoundSource, StateForPlacementEvent, Tag, UseItemOnEvent,
+    CanHarvestBlockEvent, ClientHost, Compound, Direction, FrictionEvent, Hand, HostBlockStates,
+    HostSide, InteractionResult, ItemPart, ItemStack, LightEmissionEvent, OnBlockPlacedByEvent,
+    PlayerRef, ServerHost, SoundSource, StateForPlacementEvent, Tag, UseItemOnEvent,
 };
 
 fn dir(d: Direction) -> Dir {
@@ -303,6 +304,56 @@ impl BlockPart for CopycatBlock {
         let material = host.block_state_id(&shown_material(&nbt))?;
         host.block_states().light_emission(material)
     }
+
+    /// `CopycatBlock.canHarvestBlock`: the material's rule for the player's held tool
+    /// (`Player.hasCorrectToolForDrops`). The server reads the material from its own copycats:
+    /// the break's drops are asked after the block entity is gone.
+    fn can_harvest_block(&self, host: HostSide<'_>, event: &mut CanHarvestBlockEvent) {
+        let (host, material): (&dyn mod_api::Host, _) = match host {
+            HostSide::Server(h) => {
+                let material = server_material(&mut *h, event.player, event.pos);
+                (&*h, material)
+            }
+            HostSide::Client(h) => {
+                let h: &dyn mod_api::Host = &*h;
+                let material = h.entity(event.player).map(|e| {
+                    e.level(h)
+                        .and_then(|level| h.block_entity(level, event.pos))
+                        .and_then(|be| be.data(h))
+                        .map_or_else(|| AIR.to_owned(), |nbt| shown_material(&nbt))
+                });
+                (h, material)
+            }
+        };
+        let Some(material) = material.and_then(|m| host.block_state_id(&m)) else {
+            return;
+        };
+        let facts = host.block_states();
+        let Some(requires) = facts.requires_correct_tool(material) else {
+            return;
+        };
+        let held = host
+            .entity(event.player)
+            .and_then(|e| host.living(e))
+            .and_then(|l| l.hand_item(host, Hand::Main));
+        event.can_harvest = !requires
+            || held.is_some_and(|s| facts.is_correct_tool_for_drops(&s, material) == Some(true));
+    }
+}
+
+/// The material of the server's copycat at `pos` in `player`'s level (`CopycatBlock.getMaterial`).
+fn server_material(host: &mut dyn ServerHost, player: u32, pos: [i32; 3]) -> Option<String> {
+    let uuid = host.entity(player)?.uuid(host)?;
+    let dimension = host.player(uuid)?.dimension(&*host)?;
+    let dim = level_index(&dimension.to_string())?;
+    let copycat = with(dim, |d| d.copycats.get(&pos).cloned());
+    Some(match copycat {
+        Some(c) => c
+            .material
+            .and_then(|m| host.block_state_string(m))
+            .unwrap_or_else(|| cc::BASE.to_owned()),
+        None => AIR.to_owned(),
+    })
 }
 
 const AIR: &str = "minecraft:air";
