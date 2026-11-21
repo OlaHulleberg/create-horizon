@@ -1,5 +1,6 @@
 package dev.createfuzz;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.simibubi.create.content.kinetics.TorquePropagator;
 import net.minecraft.core.BlockPos;
@@ -51,12 +52,31 @@ final class CaseIsolation {
     }
 
     static long unobservedDrops;
+    private static final Map<BlockPos,JsonArray> drops=new java.util.HashMap<>();
+    static JsonArray drops(BlockPos origin) {return drops.getOrDefault(origin,new JsonArray()).deepCopy();}
     /** Item flight after the controlled landing boundary is outside the driver contract. */
     static void disposeUnobservedDrops(ServerLevel level, BlockPos origin) {
+        disposeUnobservedDrops(level,origin,null);
+    }
+    /** Discarded before they tick: each is observed where and how it was put into the world. */
+    static void disposeUnobservedDrops(ServerLevel level, BlockPos origin, Integer tick) {
         assertEntityBounds(level,origin);
-        var drops=new ArrayList<Entity>();
-        for(var entity:level.getAllEntities()) if(entity instanceof net.minecraft.world.entity.item.ItemEntity) drops.add(entity);
-        for(var entity:drops) {unobservedDrops++;entity.discard();}
+        var found=new ArrayList<net.minecraft.world.entity.item.ItemEntity>();
+        for(var entity:level.getAllEntities()) if(entity instanceof net.minecraft.world.entity.item.ItemEntity item) found.add(item);
+        for(var entity:found) {
+            if(tick!=null) {
+                var d=new JsonObject();
+                d.addProperty("tick",tick);
+                d.add("stack",ItemInputs.stack(entity.getItem()));
+                var pos=new JsonArray();pos.add(entity.getX()-origin.getX());pos.add(entity.getY()-origin.getY());pos.add(entity.getZ()-origin.getZ());
+                d.add("pos",pos);
+                var v=entity.getDeltaMovement();
+                var motion=new JsonArray();motion.add(v.x);motion.add(v.y);motion.add(v.z);
+                d.add("motion",motion);
+                drops.computeIfAbsent(origin.immutable(),k->new JsonArray()).add(d);
+            }
+            unobservedDrops++;entity.discard();
+        }
     }
     static void assertEntityBounds(ServerLevel level, BlockPos origin) {
         for (var entity : level.getAllEntities())
@@ -81,6 +101,7 @@ final class CaseIsolation {
 
     private static void clear(ServerLevel level, BlockPos origin, int radius) {
         cleared.add(origin.immutable());
+        drops.remove(origin);
         for (var pos : BlockPos.betweenClosed(origin.offset(-radius, 0, -radius), origin.offset(radius, 24, radius)))
             if (!level.getBlockState(pos).isAir()) level.setBlock(pos, Blocks.AIR.defaultBlockState(), 3);
         // The old AABB missed drops which fell below zero or escaped a slot.
