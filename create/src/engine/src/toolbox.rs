@@ -45,6 +45,21 @@ pub const VALIDATION: u64 = 20;
 pub const UNEQUIP: i32 = -5;
 pub const DEPOSIT: i32 = -7;
 
+/// `Item.canFitInsideContainerItems`: false for shulker boxes, toolboxes
+/// (`UncontainableBlockItem`), packages and minecart contraptions
+/// (`minecartContraptionInContainers`, off by default).
+pub fn fits_inside_container_items(item: &str) -> bool {
+    !(item.ends_with("shulker_box")
+        || item.starts_with("create:") && item.ends_with("_toolbox")
+        || crate::package::is_package(item)
+        || matches!(
+            item,
+            "create:minecart_contraption"
+                | "create:furnace_minecart_contraption"
+                | "create:chest_minecart_contraption"
+        ))
+}
+
 /// `ToolboxHandler.distance`: the squared distance from a player at `at` to the toolbox at
 /// `pos` (its middle, at its bottom).
 pub fn distance(at: [f64; 3], pos: [i32; 3]) -> f64 {
@@ -89,6 +104,22 @@ pub fn ring_offset(slot: usize, out: f32) -> [f32; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shulker_boxes_toolboxes_packages_and_carts_do_not_fit_in_a_toolbox() {
+        for item in [
+            "minecraft:shulker_box",
+            "minecraft:red_shulker_box",
+            "create:brown_toolbox",
+            "create:cardboard_package_10x8",
+            "create:minecart_contraption",
+        ] {
+            assert!(!fits_inside_container_items(item), "{item}");
+        }
+        for item in ["minecraft:stone", "create:wrench", "create:belt_connector"] {
+            assert!(fits_inside_container_items(item), "{item}");
+        }
+    }
 
     #[test]
     fn the_ring_counts_clockwise_from_the_top_left() {

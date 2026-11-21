@@ -1,8 +1,8 @@
 //! The item slots of the processing machines' inventories and the toolboxes', as hoppers,
 //! comparators and breaking the block see them (`ModContainer`): the millstone, basin,
 //! mechanical crafter and toolboxes; and what a change of their contents sets off
-//! (`contents_changed`). The depot's, weighted ejector's, item vault's and chutes' are logistics',
-//! with their `ITEMS` handlers.
+//! (`contents_changed`). A toolbox's `ITEMS` handler is `toolbelt`'s; the depot's, weighted
+//! ejector's, item vault's and chutes' are logistics', with their `ITEMS` handlers.
 //!
 //! The slots are on the blocks' block entities: the `create:kinetic` type for all but the
 //! toolboxes, whose own `create:toolbox` payload also keeps the compartment kinds and UUID.
@@ -35,6 +35,7 @@ pub fn register(r: &mut dyn Registrar) {
         .collect();
     let names: Vec<&str> = names.iter().map(String::as_str).collect();
     let kind = r.block_entity_type(TOOLBOX_TYPE).blocks(&names).build();
+    r.block_entity_capability_before_game(&mod_api::ITEMS, &kind, super::toolbelt::provide_items);
     if let Err(e) = r.block_entity_part(&kind, ToolboxDraw) {
         crate::create_log!("[create] the toolboxes' drawing part was refused: {e:?}");
     }
