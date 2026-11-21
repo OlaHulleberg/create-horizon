@@ -403,7 +403,7 @@ fn rise(
                 f64::from(pos[2]) + 0.5,
             ];
             set_chute_stack(lv, pos, None);
-            items::drop_stack(lv, at, [0.0, f64::from(motion) * 2.0, 0.0], stack, 0);
+            items::drop_stack(lv, at, [0.0, f64::from(motion) * 2.0, 0.0], stack, 10);
             None
         }
     }
@@ -556,7 +556,7 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
                     f64::from(pos[2]) + 0.5,
                 ];
                 set_chute_stack(lv, pos, None);
-                items::drop_stack(lv, at, [0.0, -0.25, 0.0], stack, 0);
+                items::drop_stack(lv, at, [0.0, -0.25, 0.0], stack, 10);
                 None
             }
         };

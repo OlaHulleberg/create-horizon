@@ -32,6 +32,7 @@ mod guided;
 mod handles;
 mod java;
 mod logistics;
+mod loot;
 mod mutate;
 mod network_inputs;
 mod observation;

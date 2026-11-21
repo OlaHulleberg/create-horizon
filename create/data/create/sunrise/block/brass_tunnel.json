@@ -2,7 +2,8 @@
   "template": "minecraft:gold_block",
   "properties": {
     "hardness": 1.5,
-    "explosion_resistance": 6.0
+    "explosion_resistance": 6.0,
+    "requires_tool": true
   },
   "item": true,
   "shapes": {

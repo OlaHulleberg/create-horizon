@@ -20,6 +20,8 @@ pub struct JavaFacts {
     pub requires_tool: bool,
     /// A `BuilderTransformers` helper in the chain, which may set base properties of its own.
     pub transformed: bool,
+    /// The base properties a `BuilderTransformers` helper in the chain starts from.
+    pub transformer_base: Option<String>,
     /// An item chain that sets `.food(...)`.
     pub food: bool,
     /// `CStress.setImpact(x)` (`setNoImpact` is 0), directly or through a `BuilderTransformers`
@@ -34,6 +36,28 @@ const TRANSFORMER_IMPACTS: [(&str, f64); 3] = [
     ("BuilderTransformers.cuckooClock(", 1.0),
     ("BuilderTransformers.mechanicalPiston(", 4.0),
     ("BuilderTransformers.backtank(", 4.0),
+];
+
+/// `BuilderTransformers` helpers that start the chain from base properties
+/// (`initialProperties(SharedProperties::..)`, BuilderTransformers.java).
+const TRANSFORMER_BASES: [(&str, &str); 17] = [
+    ("BuilderTransformers.encasedShaft(", "stone"),
+    ("BuilderTransformers.encasedCogwheel(", "stone"),
+    ("BuilderTransformers.encasedLargeCogwheel(", "stone"),
+    ("BuilderTransformers.casing(", "stone"),
+    ("BuilderTransformers.layeredCasing(", "stone"),
+    ("BuilderTransformers.beltTunnel(", "stone"),
+    ("BuilderTransformers.mechanicalPiston(", "stone"),
+    ("BuilderTransformers.bearing(", "stone"),
+    ("BuilderTransformers.crate(", "stone"),
+    ("BuilderTransformers.valveHandle(", "copperMetal"),
+    ("BuilderTransformers.bogey(", "softMetal"),
+    ("BuilderTransformers.copycat(", "softMetal"),
+    ("BuilderTransformers.bell(", "softMetal"),
+    ("BuilderTransformers.packager(", "softMetal"),
+    ("BuilderTransformers.palettesIronBlock(", "softMetal"),
+    ("BuilderTransformers.cuckooClock(", "wooden"),
+    ("BuilderTransformers.slidingDoor(", "iron_door"),
 ];
 
 fn number_after(s: &str, prefix: &str) -> Option<f64> {
@@ -254,10 +278,15 @@ fn facts(body: &str) -> JavaFacts {
         .or_else(|| {
             ident_after(body, "initialProperties(() -> Blocks.").map(|s| s.to_ascii_lowercase())
         });
+    let transformer_base = TRANSFORMER_BASES
+        .iter()
+        .find(|(t, _)| body.contains(t))
+        .map(|(_, b)| (*b).to_string());
     let sound = ident_after(body, "SoundType.").map(|s| s.to_ascii_lowercase());
     JavaFacts {
         class,
         base,
+        transformer_base,
         sound,
         // `BuilderTransformers.encasedBase` (under the encased shafts and cogwheels), `bearing`
         // and `mechanicalPiston` set it in their own chains.

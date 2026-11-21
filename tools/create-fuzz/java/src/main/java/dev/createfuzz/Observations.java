@@ -141,6 +141,7 @@ final class Observations {
         out.add("origin", CreateFuzz.GSON.toJsonTree(new int[]{origin.getX(), origin.getY(), origin.getZ()}));
         out.add("save_phase",c.get("_save_phase"));
         out.add("item_outcomes",ItemInputs.outcomes(actor));
+        out.add("drops",CaseIsolation.drops(origin));
         out.add("blocks", blocks);
         var partitions = new ArrayList<java.util.List<String>>(networks.values());
         for (var group : partitions) java.util.Collections.sort(group);

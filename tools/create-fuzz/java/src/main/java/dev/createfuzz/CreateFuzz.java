@@ -310,7 +310,7 @@ public class CreateFuzz {
             if(tick==0) cases.get(activeCase).addProperty("_save_phase",Math.floorMod(level.getGameTime(),10));
             for (int i = activeCase; i == activeCase; i++) {
                 JsonObject c = cases.get(i);
-                CaseIsolation.disposeUnobservedDrops(level,origins.get(i));
+                CaseIsolation.disposeUnobservedDrops(level,origins.get(i),tick);
                 FluidBounds.check(level,origins.get(i),fluidRegions.get(i));
                 if (c.has("checkpoints"))
                     for (JsonElement t : c.getAsJsonArray("checkpoints"))

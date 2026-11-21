@@ -1,0 +1,92 @@
+{
+  "blocks": [
+    {
+      "motor": -16,
+      "pos": [
+        0,
+        8,
+        -1
+      ],
+      "state": "create:creative_motor[facing=south]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:weighted_ejector[facing=east,waterlogged=false]"
+    },
+    {
+      "motor": -16,
+      "pos": [
+        1,
+        8,
+        -1
+      ],
+      "state": "create:creative_motor[facing=south]"
+    },
+    {
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "state": "create:weighted_ejector[facing=east,waterlogged=false]"
+    }
+  ],
+  "checkpoints": [
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    66
+  ],
+  "events": [
+    {
+      "action": {
+        "extract": null,
+        "insert": {
+          "count": 5,
+          "item": "minecraft:iron_ingot"
+        },
+        "kind": "capability",
+        "side": null,
+        "simulate": false,
+        "slot": 0
+      },
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "tick": 39
+    },
+    {
+      "action": {
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "count": 1,
+            "item": "minecraft:iron_ingot"
+          }
+        },
+        "kind": "item"
+      },
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "tick": 51
+    }
+  ],
+  "ticks": 70,
+  "version": 3
+}

@@ -75,9 +75,9 @@ handoff. Mutation changes offered counts within the audited limits and retains
 the existing interaction mutations. Manual cases isolate depot landings and
 same-item swaps. Loaded-belt slicing, pulleys/casing, processing machines,
 funnels/tunnels, fluids, item components/packages, depot output buffers and
-native ejected-entity flight require further adapters. They are not claimed as
+the flight of dropped items require further adapters. They are not claimed as
 item transport coverage. Unsupported machine worlds/structural use actions are
-rejected explicitly; generated ends do not eject into unmodelled native flight.
+rejected explicitly.
 
 ## Tunnels, covers, dyes and item access
 
@@ -163,13 +163,40 @@ subsystem): its redstone (`tick_arm_signals`), the engine's `Ejector::tick` with
 at the target (an ejector merges, a depot takes while empty, a belt from above), stacks landing
 on it and belts ending into it merging onto what it holds (`depot_insert`), its item handler
 (`DepotItems`), and its stack size (`scroll_setting`). Ejectors wake when their depot changes
-(`wake_ejectors`). A stack the throw drops (native item flight) and a belt funnel on top are
-adapter gaps with a note; entities on the plate are not generated.
+(`wake_ejectors`). What it throws or holds in flight when it goes drops as an item entity
+(dropped items, below). A belt funnel on top is an adapter gap with a note; entities on the
+plate are not generated.
 
 `ejector` observes its state, power, plate (`lidProgress`), launcher distances, stack size,
 the stacks in flight (ticks flown, stack) and `earlyTargetTime`; the plate and the time compare
 within the transport tolerance. The depot observation covers ejectors too and lists an ejector's
 merging stacks (`DepotBehaviour.incoming`) as pending items.
+
+## Dropped items
+
+The harness discards every item entity at the end of each server tick
+(`CaseIsolation.disposeUnobservedDrops`), and both sides observe them there as cumulative
+`drops`: the tick, the stack, the position from the case origin and the motion. The driver
+keeps them as item entities until that disposal, spawned where the glue spawns them:
+
+- placed by Create's own arithmetic: an ejector's throw (`placeItemAtTarget`) and its stacks in
+  flight when it goes (`dropFlyingItems`), items off a belt's end or a broken belt
+  (`BeltInventory.eject`), a chute's stack out of its bottom or top (`handleDownwardOutput`,
+  `handleUpwardOutput`) and a brass tunnel's throw off the belt (`insertIntoTunnel`);
+- spread at random inside a block: broken blocks' loot (`destroyBlock(pos, true)`, rolled from
+  Create's generated loot tables, a pulley's shaft with a belt's, nothing by hand from a block
+  that needs a tool or in creative mode), brackets of removed shafts and pipes, and the stacks
+  of removed depots, ejectors, chutes and brass tunnels (`Block.popResource`,
+  `Containers.dropItemStack`, which splits stacks at random).
+
+The comparison follows how a drop was placed. An exactly placed drop that joined after the
+level's entity pass is compared at its position and motion within the transport tolerance. A
+spread one is compared by its block, with counts summed per item, tick and block. One an input
+placed before the level tick flew a tick before the harness saw it, which the driver does not
+follow: only its tick and stack are compared. Java reports no placement, so Java against Java
+compares tick, stack and block. Comparison needs both sides to report `drops`; a server running
+an older harness reports none. Vanilla blocks other than stone and redstone blocks have no loot
+in the driver: breaking one is an adapter gap with a note.
 
 ## Funnels pushing from a depot
 

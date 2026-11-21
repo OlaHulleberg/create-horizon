@@ -3,6 +3,7 @@
   "properties": {
     "hardness": 1.5,
     "explosion_resistance": 6.0,
+    "requires_tool": true,
     "sounds": "minecraft:copper_block"
   },
   "item": true

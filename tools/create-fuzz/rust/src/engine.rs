@@ -17,6 +17,7 @@ mod fluids;
 mod funnel_filters;
 mod funnels;
 mod interaction;
+mod items;
 mod kinetics;
 mod observation;
 mod outputs;
@@ -200,6 +201,10 @@ pub struct Run {
     depot_stacks: HashMap<Pos, crate::transport::Stack>,
     depot_outputs: HashMap<Pos, outputs::Outputs>,
     item_outcomes: Vec<crate::transport::Outcome>,
+    item_entities: Vec<items::ItemEntity>,
+    drops: Vec<crate::transport::DroppedItem>,
+    /// The level's entity pass has run this tick: what joins now waits until the next.
+    entity_pass_done: bool,
     chains: create_engine::chain_conveyor::Chains<()>,
     connector: Option<Pos>,
     /// The tick from which the belt connector's `useOn` runs again: Create starts the item's
@@ -280,6 +285,9 @@ impl Run {
             depot_stacks: HashMap::new(),
             depot_outputs: HashMap::new(),
             item_outcomes: Vec::new(),
+            item_entities: Vec::new(),
+            drops: Vec::new(),
+            entity_pass_done: false,
             chains: Default::default(),
             connector: None,
             connector_ready: 0,
@@ -428,21 +436,25 @@ impl Run {
         } else {
             self.world.insert(p, new);
         }
-        if self
-            .w
-            .table
-            .get(old)
-            .is_some_and(|(b, _)| b == create_engine::Block::Depot)
-            && !self
-                .w
-                .table
-                .get(new)
-                .is_some_and(|(b, _)| b == create_engine::Block::Depot)
-        {
-            self.depot_stacks.remove(&p);
-            self.depot_outputs.remove(&p);
+        let depot = |b: Option<create_engine::Block>| {
+            matches!(
+                b,
+                Some(create_engine::Block::Depot | create_engine::Block::WeightedEjector)
+            )
+        };
+        if depot(old_block) && old_block != new_block {
+            // `DepotBehaviour.destroy`: the outputs (`ItemHelper.dropContents`), then the held
+            // stack; the merging stacks are the engine's.
+            for s in self.depot_outputs.remove(&p).unwrap_or_default() {
+                self.pop_resource(p, &s.item, s.count);
+            }
+            if let Some(s) = self.depot_stacks.remove(&p) {
+                self.pop_resource(p, &s.item, s.count);
+            }
         }
-        if self.brackets.remove(&p).is_some() {
+        if let Some(b) = self.brackets.remove(&p) {
+            // `AbstractSimpleShaftBlock.onRemove`, `FluidPipeBlock.onRemove`.
+            self.pop_resource(p, b.block(), 1);
             self.mark_column(p);
         }
         if self.w.table.get(old).map(|(b, _)| b) != self.w.table.get(new).map(|(b, _)| b) {
@@ -474,8 +486,10 @@ impl Run {
                 create_engine::Block::Chute | create_engine::Block::SmartChute
             )
         }) {
-            // The chute's block entity, and its stack, go with it.
-            self.chute_stacks.remove(&p);
+            // `ChuteBlockEntity.destroy`: its stack drops (`Containers.dropItemStack`).
+            if let Some(s) = self.chute_stacks.remove(&p) {
+                self.pop_resource(p, &s.item, s.count);
+            }
             self.w.dims[0].chutes.remove(&p);
         }
         // `BeltBlock.updateShape` from above: the belt's cover is looked at after the tick.
@@ -488,8 +502,16 @@ impl Run {
         {
             self.cover_checks.push(below);
         }
+        if old_block == Some(create_engine::Block::BrassTunnel) && new_block != old_block {
+            // `BrassTunnelBlockEntity.destroy`: the stack it shares out.
+            let held = self.w.dims[0].brass.get(&p).and_then(|b| b.stack.clone());
+            if let Some((item, count)) = held {
+                self.pop_resource(p, &item, count);
+            }
+        }
         self.w
             .apply_block_change(0, p, old, new, skip_shape_updates);
+        self.flush_block_drops();
         self.break_wheels();
         if self.w.table.get(new).map(|(b, _)| b)
             == Some(create_engine::Block::AdjustableChainGearshift)
@@ -519,7 +541,7 @@ impl Run {
             }
         }
         for q in fallen {
-            self.set(q, AIR);
+            self.break_block(q, false);
         }
     }
 

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 /// The checkout the engine comes from (`run.sh` sets `CREATE_HORIZON_DIR`).
-fn checkout() -> PathBuf {
+pub(crate) fn checkout() -> PathBuf {
     std::env::var_os("CREATE_HORIZON_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."))

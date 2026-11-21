@@ -603,3 +603,50 @@ fn sneak_wrench_removes_a_connected_sloped_belt() {
         assert_eq!(snap.checkpoints[&31].blocks[&p].state, expected);
     }
 }
+
+#[test]
+fn ejected_stack_a_target_refuses_drops_as_an_item_entity() {
+    let sc: crate::scenario::Scenario =
+        serde_json::from_str(include_str!("../../../cases/items-ejector-drop.json")).unwrap();
+    let r = super::run(&sc);
+    assert!(r.notes.is_empty(), "{:?}", r.notes);
+    let drops = r.drops.unwrap();
+    assert_eq!(drops.len(), 1);
+    let d = &drops[0];
+    assert_eq!((d.tick, d.stack.count), (63, 1));
+    assert_eq!(d.pos[1], 9.0625);
+    assert!(r.checkpoints[&62].drops.as_ref().unwrap().is_empty());
+}
+
+#[test]
+fn a_removed_belt_drops_its_connector_and_pulley_shaft_but_a_motor_needs_a_tool() {
+    use crate::transport::Placed;
+    let sc: crate::scenario::Scenario =
+        serde_json::from_str(include_str!("../../../cases/belts-connector.json")).unwrap();
+    let r = super::run(&sc);
+    let mut drops: Vec<_> = r
+        .drops
+        .unwrap()
+        .into_iter()
+        .map(|d| {
+            (
+                d.tick,
+                d.stack.item,
+                d.pos.map(|v| v.floor() as i32),
+                d.placed,
+            )
+        })
+        .collect();
+    drops.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+    let spread = |item: &str| (101, item.to_owned(), [0, 8, 0], Some(Placed::Spread));
+    assert_eq!(
+        drops,
+        [spread("create:belt_connector"), spread("create:shaft")]
+    );
+    let sc: crate::scenario::Scenario =
+        serde_json::from_value(serde_json::json!({"version":3,"ticks":4,
+        "blocks":[{"pos":[0,8,0],"state":"create:creative_motor[facing=east]"}],
+        "events":[{"tick":2,"pos":[0,8,0],"action":{"kind":"remove"}}]}))
+        .unwrap();
+    assert!(super::run(&sc).drops.unwrap().is_empty());
+}

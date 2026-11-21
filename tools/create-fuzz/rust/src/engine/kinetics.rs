@@ -1,8 +1,17 @@
 use super::*;
 
 impl Run {
-    /// One level tick: inputs, then the solve and what it breaks.
+    /// One server tick: the level's, then the harness's disposal of item entities. What the
+    /// driver ticks follows the level's entity pass.
     pub(super) fn tick(&mut self) {
+        self.entity_pass_done = true;
+        self.level_tick();
+        self.flush_block_drops();
+        self.dispose_item_entities();
+    }
+
+    /// One level tick: inputs, then the solve and what it breaks.
+    fn level_tick(&mut self) {
         self.now += 1;
         self.persisted.clock += 1;
         // Shape notifications from committed inputs precede the level tick.

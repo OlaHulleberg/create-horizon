@@ -674,16 +674,9 @@ pub(super) fn eject_item(
     rpm: f32,
     item: &belt::Item,
 ) {
-    let at = belt::vector_for_offset(controller, seg, length, item.position);
-    let speed = belt::movement_speed(rpm).abs().max(1.0 / 8.0);
-    let d = belt::movement_facing(rpm, seg.facing).offset();
-    let motion = [
-        f64::from(d[0]) * f64::from(speed),
-        1.0 / 8.0,
-        f64::from(d[2]) * f64::from(speed),
-    ];
+    let (at, motion) = belt::eject(controller, seg, length, rpm, item.position);
     if let Some(stack) = belt_stack(lv, item) {
-        items::drop_stack(lv, [at[0], at[1] + 6.0 / 16.0, at[2]], motion, stack, 10);
+        items::drop_stack(lv, at, motion, stack, 10);
     }
 }
 

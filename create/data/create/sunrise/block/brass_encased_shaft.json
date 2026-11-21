@@ -3,6 +3,7 @@
   "properties": {
     "hardness": 1.5,
     "explosion_resistance": 6.0,
+    "requires_tool": true,
     "occludes": false
   },
   "item": true

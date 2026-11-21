@@ -478,8 +478,10 @@ impl Run {
             if ticked.changed {
                 self.w.dims[0].belt_changes.push(c);
             }
-            // Native dropped-entity flight after an open end is outside this adapter.
-            let _ = ticked;
+            for item in &ticked.ejected {
+                let (at, motion) = belt::eject(c, &seg, length, rpm, item.position);
+                self.spawn_item(at, motion, &item.item, item.count);
+            }
         }
         let mut changed = std::mem::take(&mut self.w.dims[0].belt_changes);
         changed.sort_unstable();

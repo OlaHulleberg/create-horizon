@@ -169,7 +169,7 @@ impl Run {
             return None;
         }
         let below = [t[0], t[1] - 1, t[2]];
-        let (c, _, seg) = self.belt_location(below)?;
+        let (c, index, seg) = self.belt_location(below)?;
         let p = add(below, d.offset());
         if self.direct_input_at(p) {
             if !self.direct_input_accepts(p, d) {
@@ -185,10 +185,27 @@ impl Run {
             return None;
         }
         if !simulate {
-            // Thrown off ahead of the segment: native item flight.
-            self.notes.push(format!(
-                "adapter gap: brass tunnel at {t:?} throws a stack off the belt"
-            ));
+            // Thrown off ahead of the segment, forward and a little up; Java drops the
+            // normalised offset it computes (`outPos.add(..)` is discarded).
+            let length = self.w.dims[0]
+                .belts
+                .get(&c)
+                .map_or(1, |b| b.chain.len() as i32);
+            let extra = if belt::direction_aware_speed(speed, seg.facing) > 0. {
+                1
+            } else {
+                0
+            };
+            let at = belt::vector_for_offset(c, &seg, length, (index + extra) as f32);
+            let v = f64::from(belt::movement_speed(speed).abs().max(1. / 8.));
+            let o = d.offset().map(f64::from);
+            let motion = [o[0] * v, 1. / 8., o[2] * v];
+            self.spawn_item(
+                [at[0], at[1] + 6. / 16., at[2]],
+                motion,
+                &item.item,
+                item.count,
+            );
         }
         Some(0)
     }
