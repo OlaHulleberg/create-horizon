@@ -32,8 +32,8 @@ use super::super::server::ServerLevel;
 use create_engine::toolbox::{self as tb, STACKS_PER_COMPARTMENT};
 use create_engine::{Block, dye};
 use mod_api::{
-    BlockEntityRef, ClientHost, Compound, DrawContext, Flow, Host, HostTransaction, ItemStack,
-    PlayerRef, ServerHost, Tag, Text,
+    BlockEntityRef, BlockSide, ClientHost, Compound, DrawContext, Flow, Host, HostTransaction,
+    ItemResource, ItemStack, PlayerRef, ResourceHandler, ServerHost, Tag, Text, Transaction,
 };
 use std::cell::RefCell;
 
@@ -211,25 +211,32 @@ fn max_stack(lv: &ServerLevel<'_>, s: &ItemStack) -> u32 {
     lv.host.max_stack_size(s.item()).unwrap_or(64).max(1)
 }
 
+/// `settle`'s packing: a compartment's stacks to the front, full ones first.
+fn packed(lv: &ServerLevel<'_>, mut stacks: Vec<Option<ItemStack>>) -> Vec<Option<ItemStack>> {
+    let Some(sample) = stacks.iter().flatten().next().cloned() else {
+        return stacks;
+    };
+    let max = max_stack(lv, &sample);
+    if max == 1 {
+        stacks.sort_by_key(Option::is_none);
+    } else {
+        let mut total: u32 = stacks.iter().flatten().map(ItemStack::count).sum();
+        for s in &mut stacks {
+            let n = total.min(max);
+            total -= n;
+            *s = super::super::packages::body::with_count(&sample, n);
+        }
+    }
+    stacks
+}
+
 /// `settle`: a compartment's stacks packed to the front, full ones first.
-fn settle(lv: &mut ServerLevel<'_>, pos: [i32; 3], c: usize, mut stacks: Vec<Option<ItemStack>>) {
+fn settle(lv: &mut ServerLevel<'_>, pos: [i32; 3], c: usize, stacks: Vec<Option<ItemStack>>) {
     let Some(entity) = lv.host.block_entity(lv.level, pos) else {
         return;
     };
+    let stacks = packed(lv, stacks);
     let sample = stacks.iter().flatten().next().cloned();
-    if let Some(sample) = &sample {
-        let max = max_stack(lv, sample);
-        if max == 1 {
-            stacks.sort_by_key(Option::is_none);
-        } else {
-            let mut total: u32 = stacks.iter().flatten().map(ItemStack::count).sum();
-            for s in &mut stacks {
-                let n = total.min(max);
-                total -= n;
-                *s = super::super::packages::body::with_count(sample, n);
-            }
-        }
-    }
     let first = c * STACKS_PER_COMPARTMENT;
     let mut kinds = saved_kinds(&*lv.host, entity);
     let seed = kinds[c].is_none()
@@ -257,6 +264,180 @@ fn settle(lv: &mut ServerLevel<'_>, pos: [i32; 3], c: usize, mut stacks: Vec<Opt
         }
         Ok::<(), ()>(())
     });
+}
+
+/// `ToolboxBlockEntity.registerCapabilities`: the toolbox's `ToolboxInventory`, for hoppers,
+/// pipes and other mods, ahead of the game's plain slots.
+pub(crate) fn provide_items(
+    host: &mut dyn ServerHost,
+    side: BlockSide,
+) -> Option<Box<dyn ResourceHandler<ItemResource>>> {
+    let dimension = side.level.dimension().id(&*host)?;
+    let lv = ServerLevel::new(host, &dimension)?;
+    if !is_toolbox(&lv, side.pos) {
+        return None;
+    }
+    Some(Box::new(ToolboxItems {
+        dimension,
+        pos: side.pos,
+    }))
+}
+
+struct ToolboxItems {
+    dimension: String,
+    pos: [i32; 3],
+}
+
+impl ToolboxItems {
+    fn level<'a>(&'a self, host: &'a mut dyn ServerHost) -> Option<ServerLevel<'a>> {
+        ServerLevel::new(host, &self.dimension)
+    }
+
+    /// `ToolboxInventory.isItemValid`.
+    fn accepts(&self, lv: &ServerLevel<'_>, index: usize, stack: &ItemStack) -> bool {
+        if index >= tb::STORED || !tb::fits_inside_container_items(&stack.item().id(&*lv.host)) {
+            return false;
+        }
+        let kinds = filters(lv, self.pos);
+        filter_stack(lv, &kinds[index / STACKS_PER_COMPARTMENT])
+            .is_none_or(|kind| same_kind(&*lv.host, &kind, stack))
+    }
+
+    /// Compartment `c` written as `stacks`, packed (`onContentsChanged` → `settle`); a
+    /// compartment with no kind yet takes `moved`'s (`insertItem`, `setStackInSlot`). These
+    /// writes fire no `contents_changed`, so the kind is kept here.
+    fn write(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        c: usize,
+        stacks: Vec<Option<ItemStack>>,
+        moved: &ItemStack,
+    ) -> bool {
+        let Some(entity) = lv.host.block_entity(lv.level, self.pos) else {
+            return false;
+        };
+        let stacks = packed(lv, stacks);
+        let first = c * STACKS_PER_COMPARTMENT;
+        let mut kinds = saved_kinds(&*lv.host, entity);
+        let seed = kinds[c].is_none()
+            && kind_of(&*lv.host, moved).is_some_and(|kind| {
+                kinds[c] = Some(kind);
+                true
+            });
+        lv.host
+            .transaction(|host, tx| {
+                for (i, stack) in stacks.into_iter().enumerate() {
+                    entity
+                        .set_item_slot(host, tx, (first + i) as u32, stack)
+                        .map_err(|_| ())?;
+                }
+                if seed {
+                    entity
+                        .merge_data(
+                            host,
+                            Compound::from([("Compartments".into(), write_kinds(&kinds))]),
+                        )
+                        .map_err(|_| ())?;
+                }
+                Ok::<(), ()>(())
+            })
+            .is_ok()
+    }
+}
+
+impl ResourceHandler<ItemResource> for ToolboxItems {
+    fn size(&self, _host: &mut dyn ServerHost) -> usize {
+        tb::STORED
+    }
+    fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<ItemResource> {
+        let lv = self.level(host)?;
+        lv.slot(self.pos, index).map(|s| ItemResource::of(&s))
+    }
+    fn amount(&self, host: &mut dyn ServerHost, index: usize) -> u32 {
+        self.level(host)
+            .and_then(|lv| lv.slot(self.pos, index))
+            .map_or(0, |s| s.count())
+    }
+    /// `ItemStackHandler.getStackLimit`: the slot's 64, or the item's own stack size if less.
+    fn capacity(&self, host: &mut dyn ServerHost, index: usize, resource: &ItemResource) -> u32 {
+        match self.level(host) {
+            Some(lv) if index < tb::STORED => max_stack(&lv, resource.as_stack()).min(64),
+            _ => 0,
+        }
+    }
+    fn is_valid(&self, host: &mut dyn ServerHost, index: usize, resource: &ItemResource) -> bool {
+        self.level(host)
+            .is_some_and(|lv| self.accepts(&lv, index, resource.as_stack()))
+    }
+    /// `ToolboxInventory.insertItem` (`ItemStackHandler.insertItem`).
+    fn insert(
+        &self,
+        host: &mut dyn ServerHost,
+        _tx: &Transaction,
+        index: usize,
+        resource: &ItemResource,
+        amount: u32,
+    ) -> u32 {
+        let Some(mut lv) = self.level(host) else {
+            return 0;
+        };
+        if amount == 0 || !self.accepts(&lv, index, resource.as_stack()) {
+            return 0;
+        }
+        let c = index / STACKS_PER_COMPARTMENT;
+        let mut stacks = compartment(&lv, self.pos, c);
+        let held = &mut stacks[index % STACKS_PER_COMPARTMENT];
+        if held.as_ref().is_some_and(|h| !resource.matches(h)) {
+            return 0;
+        }
+        let have = held.as_ref().map_or(0, ItemStack::count);
+        let limit = max_stack(&lv, resource.as_stack()).min(64);
+        let n = amount.min(limit.saturating_sub(have));
+        if n == 0 {
+            return 0;
+        }
+        *held = resource.to_stack(have + n);
+        if self.write(&mut lv, c, stacks, resource.as_stack()) {
+            n
+        } else {
+            0
+        }
+    }
+    /// `ItemStackHandler.extractItem`.
+    fn extract(
+        &self,
+        host: &mut dyn ServerHost,
+        _tx: &Transaction,
+        index: usize,
+        resource: &ItemResource,
+        amount: u32,
+    ) -> u32 {
+        let Some(mut lv) = self.level(host) else {
+            return 0;
+        };
+        if index >= tb::STORED {
+            return 0;
+        }
+        let c = index / STACKS_PER_COMPARTMENT;
+        let mut stacks = compartment(&lv, self.pos, c);
+        let slot = &mut stacks[index % STACKS_PER_COMPARTMENT];
+        let Some(held) = slot.take() else {
+            return 0;
+        };
+        if !resource.matches(&held) {
+            return 0;
+        }
+        let n = amount.min(held.count());
+        if n == 0 {
+            return 0;
+        }
+        *slot = held.clone().shrink(n);
+        if self.write(&mut lv, c, stacks, &held) {
+            n
+        } else {
+            0
+        }
+    }
 }
 
 fn compartment(lv: &ServerLevel<'_>, pos: [i32; 3], c: usize) -> Vec<Option<ItemStack>> {
@@ -1742,8 +1923,7 @@ impl mod_api::MenuPart for CompartmentRules {
         if !toolbox {
             return;
         }
-        let id = event.stack.item().id(host);
-        if id.ends_with("shulker_box") {
+        if !tb::fits_inside_container_items(&event.stack.item().id(host)) {
             event.may_place = false;
             return;
         }

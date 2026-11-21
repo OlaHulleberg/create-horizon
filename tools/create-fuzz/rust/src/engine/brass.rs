@@ -8,6 +8,7 @@
 use super::*;
 use create_engine::{
     Block, belt,
+    board::{self, FilterClick},
     kinetics::{Axis, Dir},
     tunnel,
 };
@@ -385,10 +386,10 @@ impl Run {
             return false;
         }
         let held = (item != "minecraft:air").then_some(item);
-        match tunnel::filter_click(axis, shape, face, hit, held) {
-            tunnel::FilterClick::Miss => return false,
-            tunnel::FilterClick::Keep => return true,
-            tunnel::FilterClick::Set => {}
+        match board::filter_click(tunnel::filter_slot(axis, shape, face), hit, held) {
+            FilterClick::Miss => return false,
+            FilterClick::Keep => return true,
+            FilterClick::Set => {}
         }
         match held {
             Some(item) => self.tunnel_filters.insert((p, face), item.to_string()),

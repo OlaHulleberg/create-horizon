@@ -362,14 +362,6 @@ pub fn insert_item(
             Ok::<u32, ()>(insert_stacked(host, tx, &to, &resource, count, limit))
         })
         .unwrap_or(0);
-    // The pinned SDK's default ITEMS writes into mod containers omit contents_changed.
-    if went != 0
-        && lv
-            .info(pos)
-            .is_some_and(|(block, _)| create_engine::dye::is_toolbox(block))
-    {
-        crate::glue::processing::toolbelt::contents_changed(lv, pos);
-    }
     with_count(&stack, count - went.min(count))
 }
 

@@ -1,0 +1,91 @@
+{
+  "version": 3,
+  "seed": 0,
+  "blocks": [],
+  "checkpoints": [
+    19,
+    20,
+    21,
+    29,
+    30,
+    31,
+    39,
+    40,
+    41
+  ],
+  "events": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:smart_chute[powered=false]",
+      "tick": 8
+    },
+    {
+      "action": {
+        "face": "south",
+        "hit": [
+          0.5,
+          0.6875,
+          0.96875
+        ],
+        "item": "create:wrench",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "tick": 20
+    },
+    {
+      "action": {
+        "face": "south",
+        "hit": [
+          0.5,
+          0.6875,
+          0.96875
+        ],
+        "item": "minecraft:diamond",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "tick": 30
+    },
+    {
+      "action": {
+        "face": "south",
+        "hit": [
+          0.5,
+          0.6875,
+          0.96875
+        ],
+        "item": "create:wrench",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "tick": 40
+    }
+  ],
+  "ticks": 60
+}

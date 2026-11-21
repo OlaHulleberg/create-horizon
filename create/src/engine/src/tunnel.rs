@@ -553,36 +553,6 @@ pub fn filter_slot(axis: Axis, shape: Shape, side: Dir) -> Option<[f64; 3]> {
         .then(|| crate::board::sided_offset([0.5, 13.0 / 16.0, 15.5 / 16.0], side))
 }
 
-/// `ValueSettingsInputHandler.onBlockActivated` on a `SidedFilteringBehaviour`, then
-/// `FilteringBehaviour.onShortInteract`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FilterClick {
-    Miss,
-    /// Java cancels the click before `canShortInteract` refuses a wrench or an arm.
-    Keep,
-    Set,
-}
-
-pub fn filter_click(
-    axis: Axis,
-    shape: Shape,
-    side: Dir,
-    local: [f64; 3],
-    held: Option<&str>,
-) -> FilterClick {
-    let Some(slot) = filter_slot(axis, shape, side) else {
-        return FilterClick::Miss;
-    };
-    if !crate::board::hits_box(slot, local) {
-        return FilterClick::Miss;
-    }
-    if matches!(held, Some("create:wrench" | "create:mechanical_arm")) {
-        FilterClick::Keep
-    } else {
-        FilterClick::Set
-    }
-}
-
 /// `brassTunnelTimer`: ticks between distributions.
 pub const BRASS_TIMER: i32 = 10;
 
@@ -707,6 +677,7 @@ mod tests {
 
     #[test]
     fn filter_clicks_take_only_their_open_sides_slots() {
+        use crate::board::{FilterClick, filter_click};
         // Create's run: a `t_left` tunnel along z saved `Sides:[3,4,2]`.
         let (axis, shape) = (Axis::Z, Shape::TLeft);
         let east = [0.96875, 0.8125, 0.5];
@@ -714,7 +685,7 @@ mod tests {
         assert_eq!(filter_slot(axis, shape, Dir::East), None);
         let slot = filter_slot(axis, shape, Dir::West).unwrap();
         assert!((0..3).all(|i| (slot[i] - west[i]).abs() < 1e-9));
-        let click = |side, at, held| filter_click(axis, shape, side, at, held);
+        let click = |side, at, held| filter_click(filter_slot(axis, shape, side), at, held);
         assert_eq!(
             click(Dir::East, east, Some("minecraft:diamond")),
             FilterClick::Miss

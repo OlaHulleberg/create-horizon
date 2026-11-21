@@ -500,6 +500,28 @@ pub fn hits_box(slot: [f64; 3], local: [f64; 3]) -> bool {
     d2.sqrt() < 0.5 / 2.0
 }
 
+/// `ValueSettingsInputHandler.onBlockActivated` on a filter slot, then
+/// `FilteringBehaviour.onShortInteract`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FilterClick {
+    Miss,
+    /// Java cancels the click before `canShortInteract` refuses a wrench or an arm.
+    Keep,
+    Set,
+}
+
+/// A click at `local` in the block, holding `held`, on a side whose filter slot is `slot`.
+pub fn filter_click(slot: Option<[f64; 3]>, local: [f64; 3], held: Option<&str>) -> FilterClick {
+    if !slot.is_some_and(|slot| hits_box(slot, local)) {
+        return FilterClick::Miss;
+    }
+    if matches!(held, Some("create:wrench" | "create:mechanical_arm")) {
+        FilterClick::Keep
+    } else {
+        FilterClick::Set
+    }
+}
+
 /// `CreativeMotorBlockEntity.MotorValueBox` on `side` of a motor facing `facing`: 12.5 px out on
 /// a side off the motor's axis (not the bottom of a sideways motor), a pixel back from its
 /// facing; None on a side without one (`isSideActive`).
@@ -806,6 +828,32 @@ pub fn filter_text(s: Settings, max: i32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wrench_or_an_arm_on_a_funnel_or_smart_chute_filter_slot_is_kept() {
+        let funnel = crate::funnel::filter_slot(Dir::Up, None, Dir::South);
+        let chute = crate::chute::filter_slot(Dir::South);
+        for (slot, hit) in [
+            (funnel, [0.5, 0.125, 0.96875]),
+            (chute, [0.5, 0.6875, 0.96875]),
+        ] {
+            for held in ["create:wrench", "create:mechanical_arm"] {
+                assert_eq!(filter_click(slot, hit, Some(held)), FilterClick::Keep);
+            }
+            assert_eq!(
+                filter_click(slot, hit, Some("minecraft:diamond")),
+                FilterClick::Set
+            );
+            assert_eq!(
+                filter_click(slot, [0.5, 0.5, 0.5], Some("create:wrench")),
+                FilterClick::Miss
+            );
+        }
+        assert_eq!(
+            filter_click(None, [0.5, 0.125, 0.96875], None),
+            FilterClick::Miss
+        );
+    }
 
     #[test]
     fn filter_amounts_round_trip_through_the_board() {

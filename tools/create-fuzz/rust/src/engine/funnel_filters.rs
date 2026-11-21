@@ -5,7 +5,12 @@
 //! (`funnel_passes`); the board's count and mode say how much a funnel moves at once
 //! (`funnel_extraction`). Filters are plain item ids.
 use super::*;
-use create_engine::{Block, board::FilterAmount, funnel::BeltShape, kinetics::Dir};
+use create_engine::{
+    Block,
+    board::{self, FilterAmount, FilterClick},
+    funnel::BeltShape,
+    kinetics::Dir,
+};
 
 impl Run {
     /// The brass funnel at `p`: its facing and belt funnel shape (None for a plain funnel).
@@ -104,9 +109,7 @@ impl Run {
             *due = 0;
         }
     }
-    /// `use_funnel_filter`: a click on a brass funnel's filter slot, not sneaking, with neither
-    /// a wrench nor an arm; it sets the filter unless the amount board shows (the client then
-    /// waits for the release). True when the click was the slot's.
+    /// The glue's `use_funnel_filter`.
     pub(super) fn funnel_filter_use(
         &mut self,
         p: Pos,
@@ -118,14 +121,15 @@ impl Run {
         let Some((facing, belt, _)) = self.brass_funnel(p) else {
             return false;
         };
-        if sneaking || matches!(item, "create:wrench" | "create:mechanical_arm") {
+        if sneaking {
             return false;
         }
-        let Some(slot) = create_engine::funnel::filter_slot(facing, belt, face) else {
-            return false;
-        };
-        if !create_engine::board::hits_box(slot, hit) {
-            return false;
+        let held = (item != "minecraft:air").then_some(item);
+        let slot = create_engine::funnel::filter_slot(facing, belt, face);
+        match board::filter_click(slot, hit, held) {
+            FilterClick::Miss => return false,
+            FilterClick::Keep => return true,
+            FilterClick::Set => {}
         }
         if self.funnel_amount_shown(p).is_none() {
             self.set_funnel_filter(p, item);
