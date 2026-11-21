@@ -356,6 +356,23 @@ impl Mounted {
     }
 }
 
+/// Where a cart's structure stands (`OrientedContraptionEntity`): its anchor's centre half a
+/// block over the cart at `cart`, turned `Y(angle - base) Z(pitch) Y(base)`.
+pub fn pose(cart: [f64; 3], initial: Dir, turn: &Orientation) -> crate::collider::Pose {
+    use crate::kinetics::Axis;
+    let base = f64::from(y_rot(initial));
+    let angle = base - f64::from(turn.yaw);
+    let yaw = -(angle - base - 90.0);
+    crate::collider::Pose {
+        centre: [cart[0], cart[1] + 0.5, cart[2]],
+        turns: [
+            (Axis::Y, base + 90.0),
+            (Axis::X, f64::from(turn.pitch)),
+            (Axis::Y, -yaw),
+        ],
+    }
+}
+
 /// `AllDataComponents.MINECRAFT_CONTRAPTION_DATA`, kept in `minecraft:custom_data`.
 pub const DATA_KEY: &str = "create:minecart_contraption_data";
 

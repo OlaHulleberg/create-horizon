@@ -18,10 +18,12 @@
 //! vaults and toolboxes ride every contraption as mounted storage (saved with it), bearings,
 //! windmills and clocks included.
 //!
+//! Entities stand on moving structures, walk into their sides and ride along as they move and
+//! turn (`colliders`, `ContraptionCollider.collideEntities`).
+//!
 //! What the API cannot do, left out (for API_GAPS.md's gaps):
-//! - Entities can't stand on, be pushed by or ride moving structures: there is no level
-//!   collider an entity's motion reads (`API_GAPS.md`, moving colliders), and no mod entity
-//!   type to be one.
+//! - A structure moving into an entity doesn't push it, and its blocks' contact effects are
+//!   missing (`colliders`).
 //! - A moving block cannot be clicked, and riders cannot sit on a moving structure's seats
 //!   (`Contraption.seats`): there is no moving entity to pick or ride. Contraption controls on a
 //!   structure an anchor draws (piston, gantry, pulley, bearing, windmill, elevator) are clicked
@@ -93,6 +95,7 @@
 pub mod actor_draw;
 pub mod actors;
 mod bearings;
+pub mod colliders;
 pub(crate) use bearings::LAST_EXCEPTION;
 use bearings::set_exception;
 

@@ -116,6 +116,7 @@ pub static SUBSYSTEMS: &[&dyn Subsystem] = &[
     &trains::Carts,
     &trains::Trains,
     &trains::TrainControls,
+    &contraptions::colliders::Colliders,
     &interaction::Interaction,
     &logistics::Logistics,
     &logistics::Entities,

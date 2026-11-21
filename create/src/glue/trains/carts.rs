@@ -31,6 +31,7 @@ use super::super::world::{level_id, level_index, with_world};
 use super::coupling_draw;
 use super::structure::turned_state;
 use crate::glue::contraptions::actors::{restore_storage, take_storage_at};
+use crate::glue::contraptions::colliders;
 use crate::glue::contraptions::found;
 use create_engine::Block;
 use create_engine::cart::{self, Assembler, RailType};
@@ -268,14 +269,8 @@ fn tick_cart_actors(lv: &mut ServerLevel<'_>, nc: &Cart, on: &mut OnCart) {
     if !on.carried.actors.is_empty() {
         let dim = lv.dim;
         let uuid = nc.uuid;
-        let pivot = [nc.pos[0], nc.pos[1] + 0.5, nc.pos[2]];
-        let base = f64::from(mounted::y_rot(on.m.initial));
-        let yaw = -(f64::from(on.m.angle()) - base - 90.0);
-        let turns = [
-            (Axis::Y, base + 90.0),
-            (Axis::X, f64::from(on.m.turn.pitch)),
-            (Axis::Y, -yaw),
-        ];
+        let pose = mounted::pose(nc.pos, on.m.initial, &on.m.turn);
+        let (pivot, turns) = (pose.centre, pose.turns);
         // The cart's own items (a chest minecart's), lent after the storage blocks.
         let items = nc
             .entity
@@ -1542,6 +1537,7 @@ impl EntityPart for ContraptionRider {
         event: &mut GeneralEntityTickEvent<'_>,
     ) {
         let rider = event.entity;
+        colliders::apply_to(host, rider);
         let Some(dimension) = rider
             .level(host)
             .and_then(|level| level.dimension().id(host))
@@ -2449,6 +2445,15 @@ fn tick_mounted(lv: &mut ServerLevel<'_>, carts: &HashMap<u128, Cart>) -> Vec<Ar
         } else {
             [None, None]
         };
+        let pose = mounted::pose(nc.pos, before.m.initial, &turn);
+        colliders::place(
+            lv,
+            colliders::Owner::Cart(nc.entity.id()),
+            colliders::Carrier::Entity(rider),
+            pose,
+            colliders::blocks_hash(&before.m.blocks),
+            || before.m.blocks.clone(),
+        );
         let furnaces = fuel
             .into_iter()
             .flatten()
