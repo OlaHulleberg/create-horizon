@@ -8,6 +8,13 @@ game log.
 Read [docs/architecture.md](docs/architecture.md). Rules go in the engine, the glue only uses `mod_api`, and
 missing API goes in [API_GAPS.md](API_GAPS.md) instead of a workaround.
 
+## Comments
+
+Don't write comments unless they are necessary. A doc comment may name the Create class and method a function ports
+(`/// DepotBehaviour.setCenteredHeldItem`). Otherwise, comment only what the code can't say: why it does something
+non-obvious, such as a Java quirk kept on purpose or a constraint from Sunrise. Don't restate what the code does,
+narrate a change, or explain a test step by step; use clear names instead.
+
 ## Never commit Create's assets
 
 Create's `src/main/resources/assets` is All Rights Reserved. Don't commit it or anything copied or adapted from it
