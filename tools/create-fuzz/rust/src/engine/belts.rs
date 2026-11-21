@@ -327,12 +327,12 @@ impl Run {
                     .items
                     .items
                     .retain(|i| i.position <= (length - 1) as f32);
-                self.w.reform_belt(0, chain[0], &chain, taken.items);
+                self.w.reform_belt(0, chain[0], taken.items);
             } else {
                 // `BeltSlicer.java:116-132`: the next segment is the controller now, with a
                 // fresh `BeltInventory` (`beltMovementPositive` false).
                 self.w
-                    .reform_belt(0, chain[0], &chain, belt::Inventory::fresh(Vec::new()));
+                    .reform_belt(0, chain[0], belt::Inventory::fresh(Vec::new()));
             }
             return;
         }
@@ -373,8 +373,6 @@ impl Run {
         );
         let new_controller = if toward_positive { next } else { p };
         let shift = index as f32 + if toward_positive { 1. } else { 0. };
-        let cut = ((index + i32::from(toward_positive)).max(0) as usize).min(taken.chain.len());
-        let (first, second) = taken.chain.split_at(cut);
         // `BeltSlicer.java:222-236`: the first half keeps the old inventory and its flag; the
         // new controller gets a fresh `BeltInventory` (`beltMovementPositive` false) that the
         // items past the cut are added to.
@@ -392,8 +390,8 @@ impl Run {
         });
         let mut fresh = belt::Inventory::fresh(Vec::new());
         fresh.add_all(moved);
-        self.w.reform_belt(0, controller, first, taken.items);
-        self.w.reform_belt(0, new_controller, second, fresh);
+        self.w.reform_belt(0, controller, taken.items);
+        self.w.reform_belt(0, new_controller, fresh);
     }
     /// `use_connector` at a hovered end: join the belt there, or lengthen this one. False when
     /// the glue passes the click on to the connector item (a block there that is no belt).
@@ -491,11 +489,9 @@ impl Run {
         );
         self.set_segment_direct(next, seg, false);
         self.set_segment_color(next, color.as_deref());
-        let mut chain = taken.chain;
         if seg.part == belt::Part::Start {
             // `BeltSlicer.java:352-361`: the placed segment is the controller now, with a
             // fresh `BeltInventory`; the items move on by one segment.
-            chain.insert(0, next);
             let mut fresh = belt::Inventory::fresh(Vec::new());
             fresh.add_all(
                 std::mem::take(&mut taken.items.items)
@@ -505,10 +501,9 @@ impl Run {
                         i
                     }),
             );
-            self.w.reform_belt(0, next, &chain, fresh);
+            self.w.reform_belt(0, next, fresh);
         } else {
-            chain.push(next);
-            self.w.reform_belt(0, chain[0], &chain, taken.items);
+            self.w.reform_belt(0, taken.chain[0], taken.items);
         }
         true
     }

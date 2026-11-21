@@ -118,8 +118,8 @@ must not refresh an earlier entity record or serialize an unmarked column.
 | Host slots, belt casing and valve selection/use metadata | Their existing immediate host writes; reload round-trips those host records without refreshing engine state |
 
 Belt inventory motion and direction changes enqueue belt_changes during the
-logistics phase, then mark their controller columns. A chain formed later by
-settle_belts is not spuriously captured before its later change notification.
+logistics phase, then mark their controller columns. A chain formed at a segment's
+turn in that walk is not spuriously captured before its later change notification.
 Kinetic callbacks occurring after take_unsaved remain pending until the next
 solve, matching the glue. Reload consumes the saved records as they stand.
 

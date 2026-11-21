@@ -1,7 +1,7 @@
 //! `BeltSlicer`: a wrench shortens a belt from an end or splits it in two, a belt connector
 //! lengthens it at an end or joins it to another belt there. The belt is taken apart first
 //! (`World::take_belt`), its segments' states are changed, and its items go to the belts its
-//! segments form again after the tick (`World::reform_belt`).
+//! segments form again at their own ticks (`World::reform_belt`).
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::states;
@@ -215,13 +215,13 @@ pub fn use_wrench(
                 // `BeltInventory.eject` reads the zeroed `beltLength` at this point.
                 eject_item(lv, controller, &taken.segment, 0, 0.0, &i);
             }
-            with_world(|w| w.reform_belt(dim, controller, &chain, taken.items));
+            with_world(|w| w.reform_belt(dim, controller, taken.items));
         } else {
             // `BeltSlicer.java:116-132`: `controllerBE.inventory = null; segmentBE.inventory =
             // null; segmentBE.setController(next)`. The next segment is the controller now and
             // gets a fresh `BeltInventory` (`beltMovementPositive` false); the emptied one has
             // no item left to move.
-            with_world(|w| w.reform_belt(dim, controller, &chain, Inventory::fresh(Vec::new())));
+            with_world(|w| w.reform_belt(dim, controller, Inventory::fresh(Vec::new())));
         }
         return Some(true);
     }
@@ -273,9 +273,6 @@ pub fn use_wrench(
     );
     sound(lv, pos, "minecraft:block.wool.hit", 0.5, 2.3);
     let new_controller = if toward_positive { next } else { pos };
-    let cut = index + i32::from(toward_positive);
-    let cut = (cut.max(0) as usize).min(taken.chain.len());
-    let (first, second) = taken.chain.split_at(cut);
     // `BeltSlicer.java:222-236`: the items past the cut leave the old controller's inventory
     // for `newController`, whose inventory the slicer nulls — a fresh `BeltInventory`
     // (`beltMovementPositive` false) that the items are added to. The first half keeps the old
@@ -297,8 +294,8 @@ pub fn use_wrench(
     let mut fresh = Inventory::fresh(Vec::new());
     fresh.add_all(moved);
     with_world(|w| {
-        w.reform_belt(dim, controller, first, kept);
-        w.reform_belt(dim, new_controller, second, fresh);
+        w.reform_belt(dim, controller, kept);
+        w.reform_belt(dim, new_controller, fresh);
     });
     Some(true)
 }
@@ -458,12 +455,10 @@ pub fn use_connector(
     set_segment_new(lv, next, seg);
     set_color(lv, next, color.as_deref());
     sound(lv, pos, "minecraft:block.wool.place", 0.5, 1.0);
-    let mut chain = taken.chain.clone();
     if seg.part == Part::Start {
         // `BeltSlicer.java:352-361`: the placed segment is the controller now; its `getInventory`
         // is a fresh `BeltInventory` (`beltMovementPositive` false) and the items move on by one
         // segment.
-        chain.insert(0, next);
         let mut fresh = Inventory::fresh(Vec::new());
         fresh.add_all(
             std::mem::take(&mut taken.items.items)
@@ -473,12 +468,11 @@ pub fn use_connector(
                     i
                 }),
         );
-        with_world(|w| w.reform_belt(dim, next, &chain, fresh));
+        with_world(|w| w.reform_belt(dim, next, fresh));
     } else {
         // The controller stays, and so does its inventory and direction flag.
-        chain.push(next);
-        let controller = chain[0];
-        with_world(|w| w.reform_belt(dim, controller, &chain, taken.items));
+        let controller = taken.chain[0];
+        with_world(|w| w.reform_belt(dim, controller, taken.items));
     }
     Some(true)
 }

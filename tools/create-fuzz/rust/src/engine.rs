@@ -1,6 +1,6 @@
 //! Runs a scenario through the port's engine the way its game glue does each tick
-//! (`create/src/glue/kinetics.rs`): inputs (split shafts following redstone), then
-//! `settle_belts`, the solve, and the blocks the solve breaks.
+//! (`create/src/glue/kinetics.rs`): inputs (split shafts following redstone), then the solve
+//! and the blocks the solve breaks.
 //!
 //! The world outside the engine is a map of positions to state strings. Redstone is only what
 //! the scenarios use: adjacent redstone blocks or controlled 0..15 signal sources.

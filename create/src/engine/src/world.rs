@@ -242,8 +242,6 @@ pub struct Dimension {
     /// Belts by controller, and each segment's controller.
     pub belts: HashMap<[i32; 3], Belt>,
     pub belt_of: HashMap<[i32; 3], [i32; 3]>,
-    /// Belt segments placed or loaded whose chain is looked for after the tick.
-    belt_dirty: Vec<[i32; 3]>,
     /// Belts whose items or shape clients must see again.
     pub belt_changes: Vec<[i32; 3]>,
     /// Controllers whose persisted inventory changed since publication.
@@ -1422,12 +1420,6 @@ impl CreateWorld {
             if let Some(s) = d.settings.get_mut(&pos) {
                 s.belt = Some(pos);
             }
-            if !d.belt_dirty.contains(&pos) {
-                d.belt_dirty.push(pos);
-            }
-        }
-        if block == Block::Belt && !d.belt_of.contains_key(&pos) && !d.belt_dirty.contains(&pos) {
-            d.belt_dirty.push(pos);
         }
         let settings = d.settings.get(&pos).copied().unwrap_or_default();
         let [a, b] = parts(block, info, &settings);
@@ -2348,13 +2340,9 @@ impl CreateWorld {
                 if let Some(b) = d.belts.remove(&c) {
                     for p in &b.chain {
                         d.belt_of.remove(p);
-                        if (p[0] >> 4, p[2] >> 4) != (cx, cz) {
-                            d.belt_dirty.push(*p);
-                        }
                     }
                 }
             }
-            d.belt_dirty.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.depot_work.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.sliding.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
         }
@@ -3594,21 +3582,9 @@ impl CreateWorld {
         }
     }
 
-    /// Belts whose segments were placed or loaded: their chains, once whole (Create's
-    /// `initBelt`), become belts whose segments turn together. Nothing to do when no belt
-    /// changed.
-    pub fn settle_belts(&mut self, dim: usize) {
-        if self.dims[dim].belt_dirty.is_empty() {
-            return;
-        }
-        let dirty = std::mem::take(&mut self.dims[dim].belt_dirty);
-        for pos in dirty {
-            self.initialize_belt(dim, pos);
-        }
-    }
-
-    /// `BeltBlockEntity.tick` initializes its own chain before the base kinetic tick:
-    /// `BeltBlock.initBelt` (`beltLength == 0`).
+    /// `BeltBlockEntity.tick` of a segment with `beltLength == 0`: `BeltBlock.initBelt` on its
+    /// own turn, after the base ticks of every entity registered before it, then its own
+    /// `super.tick()`.
     fn initialize_belt(&mut self, dim: usize, pos: [i32; 3]) {
         if self.dims[dim].belt_of.contains_key(&pos) {
             return;
@@ -3636,6 +3612,7 @@ impl CreateWorld {
         let Some(segment) = segment_at(controller) else {
             return;
         };
+        self.kinetic_base_ticks_before(dim, pos);
         let d = &mut self.dims[dim];
         for p in &chain {
             d.belt_of.insert(*p, controller);
@@ -3678,6 +3655,7 @@ impl CreateWorld {
             // BeltBlock.initBelt attaches each member before inventory.tick.
             self.dims[dim].kinetics.attach_belt(p);
         }
+        self.dims[dim].kinetics.tick_registered_base(pos);
     }
 
     /// `BeltBlock.getBeltChain` of the belt segment `pos` belongs to.
@@ -3693,9 +3671,6 @@ impl CreateWorld {
     pub fn detach_belt_segment(&mut self, dim: usize, pos: [i32; 3]) {
         let d = &mut self.dims[dim];
         d.belt_of.remove(&pos);
-        if !d.belt_dirty.contains(&pos) {
-            d.belt_dirty.push(pos);
-        }
         d.kinetics.detach_kinetics(pos);
     }
 
@@ -3709,7 +3684,6 @@ impl CreateWorld {
         let b = d.belts.remove(&c)?;
         for p in &b.chain {
             d.belt_of.remove(p);
-            d.belt_dirty.push(*p);
             d.kinetics.detach_kinetics(*p);
         }
         d.belt_changes.push(c);
@@ -3784,20 +3758,11 @@ impl CreateWorld {
         items.items
     }
 
-    /// The belt whose controller will be `controller` takes `items` once its chain forms; its
-    /// segments `chain` look for their chain after the tick. An empty inventory is kept: its
-    /// direction flag is part of what `BeltBlockEntity.write` saves (`BeltSlicer` lengthening a
-    /// belt at its END keeps the controller's `BeltInventory`).
-    pub fn reform_belt(
-        &mut self,
-        dim: usize,
-        controller: [i32; 3],
-        chain: &[[i32; 3]],
-        items: crate::belt::Inventory,
-    ) {
-        let d = &mut self.dims[dim];
-        d.belt_saved.insert(controller, items);
-        d.belt_dirty.extend_from_slice(chain);
+    /// The belt whose controller will be `controller` takes `items` once its chain forms. An
+    /// empty inventory is kept: its direction flag is part of what `BeltBlockEntity.write` saves
+    /// (`BeltSlicer` lengthening a belt at its END keeps the controller's `BeltInventory`).
+    pub fn reform_belt(&mut self, dim: usize, controller: [i32; 3], items: crate::belt::Inventory) {
+        self.dims[dim].belt_saved.insert(controller, items);
     }
 
     /// `BeltBlockEntity.write`: save membership even for empty inventories.
@@ -5510,10 +5475,18 @@ impl CreateWorld {
     /// `attachKinetics` finds its source's network already restored by `initialize`
     /// (`KineticNetwork.initFromTE`, `addSilently`), and the sync its `add` causes reaches them.
     pub fn kinetic_base_ticks_through(&mut self, dim: usize, pos: [i32; 3]) {
+        self.kinetic_base_ticks_before(dim, pos);
+        self.dims[dim].kinetics.tick_registered_base(pos);
+    }
+
+    /// The base ticks of the entities registered before `pos`, which tick before it.
+    fn kinetic_base_ticks_before(&mut self, dim: usize, pos: [i32; 3]) {
         let d = &mut self.dims[dim];
         let mut prefix = d.block_entities.walk_through(View::All, pos);
         while let Some(p) = prefix.next(&d.block_entities) {
-            d.kinetics.tick_registered_base(p);
+            if p != pos {
+                d.kinetics.tick_registered_base(p);
+            }
         }
     }
 
@@ -5673,6 +5646,11 @@ impl CreateWorld {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn transport_walk(w: &mut CreateWorld) {
+        let mut turns = w.transport_ticks(0, 0);
+        while turns.next(w).is_some() {}
+    }
 
     /// A tiny registry: two vanilla states, then Create's shaft (x, y, z) and creative motor
     /// facing east and west.
@@ -5849,19 +5827,14 @@ mod tests {
             w.block_changed(0, [-1, 8, start], 0, 10);
             w.set_motor(0, [-1, 8, start], rpm);
         }
-        w.settle_belts(0);
+        transport_walk(&mut w);
         w.tick(0, &mut Vec::new());
         w
     }
 
-    /// The parts of `long_belt_world`'s belt states.
-    const BELT_START: u32 = 11;
-    const BELT_MIDDLE: u32 = 12;
-    const BELT_END: u32 = 13;
-
-    /// One belt of `length` segments along +z from `[0, 8, 0]` (facing south), its creative
-    /// motor at `[-1, 8, 0]` turning the START.
-    fn long_belt_world(length: i32, rpm: f32) -> CreateWorld {
+    /// An empty world whose states are a creative motor facing east (10) and belt segments
+    /// facing south (`BELT_START`, `BELT_MIDDLE`, `BELT_END`).
+    fn belt_states_world() -> CreateWorld {
         let belt = |part| {
             (
                 "create:belt",
@@ -5875,10 +5848,21 @@ mod tests {
             belt("end"),
         ];
         states::set_range(10, 4);
-        let mut w = CreateWorld::new(StateTable::new(
+        CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
-        ));
+        ))
+    }
+
+    /// The parts of `long_belt_world`'s belt states.
+    const BELT_START: u32 = 11;
+    const BELT_MIDDLE: u32 = 12;
+    const BELT_END: u32 = 13;
+
+    /// One belt of `length` segments along +z from `[0, 8, 0]` (facing south), its creative
+    /// motor at `[-1, 8, 0]` turning the START.
+    fn long_belt_world(length: i32, rpm: f32) -> CreateWorld {
+        let mut w = belt_states_world();
         for i in 0..length {
             let state = if i == 0 {
                 BELT_START
@@ -5891,7 +5875,7 @@ mod tests {
         }
         w.block_changed(0, [-1, 8, 0], 0, 10);
         w.set_motor(0, [-1, 8, 0], rpm);
-        w.settle_belts(0);
+        transport_walk(&mut w);
         w.tick(0, &mut Vec::new());
         w
     }
@@ -5972,6 +5956,53 @@ mod tests {
     /// joins neither the old belt to the new half nor the two halves. f2: the second half of a
     /// split at segment 3 of an 8-long belt has speed 0 and no source while the first half
     /// keeps turning at 32.
+    /// Java #131 f2b: a connector on the START of a belt driven from both ends. The END motor's
+    /// base tick re-attaches it and syncs its network, then the first old segment's `initBelt`
+    /// adds the new controller: only the new segment saves the full size.
+    #[test]
+    fn lengthening_at_the_start_saves_the_size_before_the_new_segment_joins() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = belt_states_world();
+        let end = [0, 8, 8];
+        w.block_changed(0, [-1, 8, 0], 0, 10);
+        w.block_changed(0, [-1, 8, 8], 0, 10);
+        w.set_motor(0, [-1, 8, 0], -32.0);
+        w.set_motor(0, [-1, 8, 8], -32.0);
+        w.tick(0, &mut Vec::new());
+        for z in 0..=8 {
+            let state = match z {
+                0 => BELT_START,
+                8 => BELT_END,
+                _ => BELT_MIDDLE,
+            };
+            w.block_changed(0, [0, 8, z], 0, state);
+        }
+        for _ in 0..20 {
+            transport_walk(&mut w);
+            w.tick(0, &mut Vec::new());
+        }
+        let start = [0, 8, 0];
+        let next = [0, 8, -1];
+        let (_, taken) = w.take_belt(0, start).unwrap();
+        w.switching_block_state(0, start, BELT_MIDDLE);
+        w.block_changed(0, start, BELT_START, BELT_MIDDLE);
+        w.block_changed(0, next, 0, BELT_START);
+        w.reform_belt(0, next, taken.items);
+        transport_walk(&mut w);
+        w.tick(0, &mut Vec::new());
+        let size = |w: &CreateWorld, p| {
+            let saved = w.dims[0].kinetics.saved_state(p, 0).unwrap();
+            saved.network.unwrap().size
+        };
+        assert_eq!(w.belt_chain(0, end).unwrap().len(), 10);
+        assert_eq!(size(&w, [-1, 8, 8]), 10);
+        for z in 0..=8 {
+            assert_eq!(size(&w, [0, 8, z]), 10, "{z}");
+        }
+        assert_eq!(size(&w, next), 11);
+        states::clear_range();
+    }
+
     #[test]
     fn slicer_split_leaves_the_cut_off_half_stopped() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -5985,15 +6016,13 @@ mod tests {
         w.switching_block_state(0, start_of_second, BELT_START);
         w.block_changed(0, start_of_second, BELT_MIDDLE, BELT_START);
         assert!(!w.dims[0].belt_of.contains_key(&start_of_second));
-        let (first, second) = taken.chain.split_at(4);
-        w.reform_belt(0, controller, first, taken.items);
+        w.reform_belt(0, controller, taken.items);
         w.reform_belt(
             0,
             start_of_second,
-            second,
             crate::belt::Inventory::fresh(Vec::new()),
         );
-        w.settle_belts(0);
+        transport_walk(&mut w);
         assert_eq!(w.speed(0, [0, 8, 0]), Some(32.0));
         assert_eq!(w.speed(0, start_of_second), Some(0.0));
         let saved = w.dims[0].kinetics.saved_state(start_of_second, 0).unwrap();
@@ -6017,9 +6046,8 @@ mod tests {
             w.belt_chain(0, [0, 8, 1]).is_none(),
             "the belt is taken apart"
         );
-        let chain = taken.chain.clone();
-        w.reform_belt(0, c, &chain, std::mem::take(&mut taken.items));
-        w.settle_belts(0);
+        w.reform_belt(0, c, std::mem::take(&mut taken.items));
+        transport_walk(&mut w);
         let saved = w.column_belts(0, 0, 0);
         assert!(saved.iter().find(|(p, _)| *p == c).unwrap().1.positive);
         // A controller made anew: `Inventory::fresh` is `new BeltInventory`, flag false.
@@ -6061,7 +6089,6 @@ mod tests {
             w.dims[0].kinetics.remove([0, 8, i]);
         }
         w.take_belt(0, c);
-        w.settle_belts(0);
         assert_eq!(w.transport_ticks(0, 0).next(&mut w), None);
         assert!(
             w.column_belts(0, 0, 0)
@@ -6357,7 +6384,7 @@ mod tests {
             if !depot_first {
                 w.block_loaded(0, p, 12);
             }
-            w.settle_belts(0);
+            transport_walk(&mut w);
             // A queued belt item makes the controller require a full tick.
             w.dims[0]
                 .belts
@@ -6629,6 +6656,9 @@ mod tests {
     fn empty_belt_direction_is_journaled_once() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = item_belt_world(32.0);
+        for c in [[0, 8, 0], [0, 8, -4]] {
+            w.dims[0].belts.get_mut(&c).unwrap().items.positive = false;
+        }
         w.take_belt_saved_changes(0);
         assert_eq!(w.transport_ticks(0, 0).next(&mut w), None);
         assert_eq!(w.take_belt_saved_changes(0), [[0, 8, 0], [0, 8, -4]].into());
@@ -6838,7 +6868,7 @@ mod tests {
         ] {
             w.block_changed(0, p, 0, id);
         }
-        w.settle_belts(0);
+        transport_walk(&mut w);
         w.tick(0, &mut events);
         w.set_motor(0, [-1, 8, 0], 32.0);
         for _ in 0..40 {
@@ -6847,8 +6877,8 @@ mod tests {
         w.switching_block_state(0, middle, 14);
         w.block_changed(0, middle, 12, 14);
         // `BeltBlockEntity.clearKineticInformation` drops the segment's controller, so its next
-        // tick runs `initBelt` again (the glue settles belts before each solve).
-        w.settle_belts(0);
+        // tick runs `initBelt` again.
+        transport_walk(&mut w);
         for _ in 0..100 {
             w.tick(0, &mut events);
             assert_eq!(w.speed(0, middle), Some(32.0));
@@ -7595,7 +7625,7 @@ mod tests {
         assert!(w.has_shaft_towards(0, [0, 0, 0], crate::kinetics::Dir::North));
         assert!(!w.has_shaft_towards(0, [0, 0, 0], crate::kinetics::Dir::East));
         assert!(!w.has_shaft_towards(0, [1, 0, 0], crate::kinetics::Dir::North));
-        w.settle_belts(0);
+        transport_walk(&mut w);
         assert_eq!(w.dims[0].belts[&[0, 0, 0]].chain.len(), 3);
         assert_eq!(w.dims[0].belt_of[&[2, 0, 0]], [0, 0, 0]);
         w.tick(0, &mut Vec::new());
@@ -7646,7 +7676,7 @@ mod tests {
         for z in 0..3 {
             w.block_changed(0, [0, 8, z], 0, 10 + z as u32);
         }
-        w.settle_belts(0);
+        transport_walk(&mut w);
         w.block_changed(0, [0, 8, 0], 10, 0);
         struct Ground<'a>(&'a mut CreateWorld);
         impl crate::belt::BreakWorld for Ground<'_> {
@@ -7702,7 +7732,7 @@ mod tests {
             w.block_changed(0, [0, 8, z], 0, if z == 1 { 12 } else { 10 + z as u32 });
         }
         w.block_changed(0, [-1, 8, 0], 0, 15);
-        w.settle_belts(0);
+        transport_walk(&mut w);
         w.tick(0, &mut Vec::new());
         // Putting a shaft into the middle changes its part, without removing the belt.
         w.switching_block_state(0, [0, 8, 1], 11);
@@ -7765,7 +7795,7 @@ mod tests {
         w.block_changed(0, [1, 1, 0], 0, 11);
         w.block_changed(0, [2, 2, 0], 0, 12);
         w.block_changed(0, [0, 0, -1], 0, 13);
-        w.settle_belts(0);
+        transport_walk(&mut w);
         assert_eq!(w.dims[0].belts[&[0, 0, 0]].chain.len(), 3);
         w.tick(0, &mut Vec::new());
         let start = w.speed(0, [0, 0, 0]).unwrap();

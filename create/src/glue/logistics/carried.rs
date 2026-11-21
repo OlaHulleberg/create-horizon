@@ -90,7 +90,7 @@ pub(super) fn carry_in(
         let saved = Compound::from([("belts".into(), Tag::List(list.clone()))]);
         for (offset, items) in super::belts_from_nbt(&saved) {
             let controller = add(pos, turn.vec(offset));
-            with_world(|w| w.reform_belt(dim, controller, &[pos], items));
+            with_world(|w| w.reform_belt(dim, controller, items));
         }
     }
     let filter = data
