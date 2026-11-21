@@ -18,7 +18,7 @@ use super::world::with_world;
 use create_engine::Block;
 use mod_api::{
     BlockEntityLoadAdditionalEvent, BlockEntityPart, BlockEntitySaveAdditionalEvent,
-    BlockEntityTypeKey, BlockPart, Compound, LevelHost, LevelRef, Registrar,
+    BlockEntityTypeKey, BlockPart, Compound, LevelHost, LevelRef, Registrar, Tag,
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -162,7 +162,7 @@ pub fn save(lv: &mut ServerLevel<'_>, chunk: [i32; 2]) {
     let fresh: Vec<([i32; 3], Record)> = fresh
         .into_iter()
         .filter_map(|(pos, mut fields)| {
-            fields.insert(MARKER.into(), mod_api::Tag::Byte(1));
+            fields.insert(MARKER.into(), Tag::Byte(1));
             let id = lv.block(pos);
             let block = with_world(|w| w.table.get(id).map(|(b, _)| b)).flatten()?;
             Some((pos, Record { block, fields }))
@@ -206,6 +206,59 @@ fn changed(level: LevelRef, chunk: [i32; 2], fresh: Vec<([i32; 3], Record)>) -> 
         changed.sort_unstable();
         changed
     })
+}
+
+/// Splits column data whose lists hold compounds of block entities, each with its `Pos`, into
+/// the entities' fields: for each `(list, key)` of `names`, the entries of `list` at a position,
+/// without `Pos`, are the list under `key` of the entity there.
+pub fn split(lists: &Compound, names: &[(&str, &str)], out: &mut Entities) {
+    for (list, key) in names {
+        let Some(Tag::List(entries)) = lists.get(&(*list).into()) else {
+            continue;
+        };
+        for entry in entries {
+            let Tag::Compound(c) = entry else {
+                continue;
+            };
+            let mut c = c.clone();
+            let Some(Tag::IntArray(p)) = c.remove(&"Pos".into()) else {
+                continue;
+            };
+            let Ok(pos) = <[i32; 3]>::try_from(p.as_slice()) else {
+                continue;
+            };
+            let fields = out.entry(pos).or_default();
+            if let Tag::List(l) = fields
+                .entry((*key).into())
+                .or_insert_with(|| Tag::List(Vec::new()))
+            {
+                l.push(Tag::Compound(c));
+            }
+        }
+    }
+}
+
+/// What [`split`] took from column data for the block entity at `pos`, as column data again
+/// (its entries at `pos`), for the column's reader.
+pub fn join(tag: &Compound, pos: [i32; 3], names: &[(&str, &str)]) -> Compound {
+    names
+        .iter()
+        .filter_map(|(list, key)| {
+            let Tag::List(entries) = tag.get(&(*key).into())? else {
+                return None;
+            };
+            let entries = entries
+                .iter()
+                .filter_map(|e| {
+                    let Tag::Compound(c) = e else { return None };
+                    let mut c = c.clone();
+                    c.insert("Pos".into(), Tag::IntArray(pos.to_vec()));
+                    Some(Tag::Compound(c))
+                })
+                .collect();
+            Some(((*list).into(), Tag::List(entries)))
+        })
+        .collect()
 }
 
 /// Column `chunk` of `level` left: its block entities were saved with it.
